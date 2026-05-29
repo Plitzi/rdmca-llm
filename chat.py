@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 # Auto-bootstrap: re-run with .venv/bin/python if mlx is not available.
 import sys, os

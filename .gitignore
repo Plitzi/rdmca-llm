@@ -10,7 +10,7 @@ venv/
 env/
 
 # ── Generated artifacts (dist/) ───────────────────────────────────────────────
-# Checkpoints and tokenizer are generated — keep the directory structure, not the files
+# Keep directory structure (.gitkeep), ignore the generated files
 dist/checkpoints/**/*.npz
 dist/checkpoints/**/*.json
 dist/tokenizer/*.model
@@ -27,21 +27,22 @@ data/stage5_ethics/*.jsonl
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log
 logs/*.json
-snapshots/
+dist/snapshots/*.npz
+dist/snapshots/*.json
 
 # ── macOS ──────────────────────────────────────────────────────────────────────
 .DS_Store
 .AppleDouble
 
-# ── Editor ────────────────────────────────────────────────────────────────────
+# ── Editor ─────────────────────────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# ── pytest ─────────────────────────────────────────────────────────────────────
+# ── Test ───────────────────────────────────────────────────────────────────────
 .pytest_cache/
 
 # ── Misc ───────────────────────────────────────────────────────────────────────
 *.log
-train_stage1.log
+nohup.out

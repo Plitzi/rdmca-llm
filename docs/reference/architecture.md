@@ -90,7 +90,7 @@ rdmca-llm/
 ├── data/stage{1-5}_*/          Corpus generado por prepare_data.py
 ├── dist/tokenizer/                  rdmca_spm.model (generado)
 ├── dist/checkpoints/                Pesos por etapa
-├── snapshots/                  Backups de sectores LoRA (Phase 2+)
+├── dist/snapshots/                  Backups de sectores LoRA (Phase 2+)
 ├── logs/                       Audit logs de consolidación
 ├── train_stage.py              Entrenamiento por etapas
 ├── chat.py                     Chat interactivo
