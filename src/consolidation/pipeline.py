@@ -1,0 +1,217 @@
+"""
+Daily Consolidation Pipeline — RDMCA §11 / Implementation Guide §1.7
+Runs during system idle time (CPU < 20% for 5+ min).
+Executes the full 9-step consolidation cycle on the current buffer.
+
+Pipeline steps (§1.7.1):
+  1. Load episodic buffer from SQLite
+  2. BCF filter: discard B(a,s)=0 → adversarial buffer
+  3. R+ filter: discard R+(e,s) < 0 → adversarial buffer
+  4. LTSS consistency filter: flag KL > ε → review queue
+  5. MRF: promote / retain / expire each T1/T2 experience
+  6. Ambiguity scoring: clear / defer / human queue
+  7. Group by sector assignment s*(e)
+  8. Masked gradient update per sector (≥ min_batch)
+  9. PGQ evaluation + audit log
+"""
+from __future__ import annotations
+import json
+import logging
+import time
+import uuid
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import numpy as np
+
+from src.memory.episodic_buffer import EpisodicBuffer, Experience
+from src.memory.ltss import LTSS
+from src.memory.mrf import mrf
+from src.relevance.engine import RelevanceEngine
+from src.model.bcf import BCFHead
+from src.consolidation.snapshot import SectorSnapshotManager
+from src.consolidation.ambiguity import AmbiguityHandler
+from src.consolidation.pgq import PGQ
+
+
+MIN_BATCH_PER_SECTOR = 8
+
+
+@dataclass
+class AuditEntry:
+    cycle_id: str
+    buffer_size_raw: int
+    bcf_rejected: int
+    r_neg_rejected: int
+    ltss_flagged: int
+    deferred_1: int
+    human_queue_added: int
+    sectors_updated: List[int]
+    param_delta_norms: Dict[str, float]
+    rollback_triggered: bool
+    gns: float
+    health_score: float
+    modality_balance: Dict[str, int]
+    clean_cycle: bool
+    timestamp: float = 0.0
+
+    def __post_init__(self):
+        self.timestamp = self.timestamp or time.time()
+
+
+class ConsolidationPipeline:
+
+    def __init__(self,
+                 buffer: EpisodicBuffer,
+                 ltss: LTSS,
+                 re: RelevanceEngine,
+                 bcf: BCFHead,
+                 sectors: dict,
+                 snapshot_mgr: SectorSnapshotManager,
+                 ambiguity: AmbiguityHandler,
+                 pgq: PGQ,
+                 log_dir: str = "logs",
+                 adversarial_buffer: Optional[list] = None):
+        self.buffer       = buffer
+        self.ltss         = ltss
+        self.re           = re
+        self.bcf          = bcf
+        self.sectors      = sectors
+        self.snapshots    = snapshot_mgr
+        self.ambiguity    = ambiguity
+        self.pgq          = pgq
+        self.log_dir      = Path(log_dir)
+        self.adv_buffer   = adversarial_buffer if adversarial_buffer is not None else []
+        self._cycle_history: List[AuditEntry] = []
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> AuditEntry:
+        """Execute one full consolidation cycle. Returns the audit log entry."""
+        cycle_id = str(uuid.uuid4())[:8]
+        logging.info(f"[consolidation] cycle {cycle_id} started")
+        t0 = time.time()
+
+        experiences = self.buffer.all()
+        raw_count   = len(experiences)
+
+        bcf_rejected = r_neg_rejected = ltss_flagged = 0
+        deferred = human_queued = 0
+        sectors_updated: List[int] = []
+        delta_norms: Dict[str, float] = {}
+        rollback = False
+
+        # --- Step 2: BCF filter ---
+        clean: List[Experience] = []
+        for exp in experiences:
+            # TODO: compute hidden state h from base model, then call bcf.is_permissible(h)
+            # Placeholder: pass all through BCF for now
+            clean.append(exp)
+
+        # --- Step 3: R+ filter ---
+        scored: List[tuple] = []
+        for exp in clean:
+            score = self.re.score(exp)
+            exp.relevance_score = score
+            if score < 0:
+                self.adv_buffer.append(exp)
+                r_neg_rejected += 1
+            else:
+                scored.append((exp, score))
+
+        # --- Step 4: LTSS consistency filter ---
+        consistent: List[tuple] = []
+        for exp, score in scored:
+            # TODO: compute KL divergence against LTSS representations
+            consistent.append((exp, score))
+
+        # --- Step 5: MRF ---
+        to_consolidate: List[Experience] = []
+        for exp, score in consistent:
+            fate = mrf(exp, score, self.ltss)
+            if fate == "promote":
+                from src.memory.ltss import LTSSNode
+                self.ltss.add(LTSSNode(
+                    id=exp.uid, embedding=exp.embedding,
+                    content=exp.text, modality=exp.modality,
+                ))
+            if fate in ("promote", "retain"):
+                to_consolidate.append(exp)
+
+        # --- Step 6: Ambiguity scoring ---
+        final: List[Experience] = []
+        for exp in to_consolidate:
+            # TODO: get affinities from STR
+            affinities = [(exp.sector_assignment or 1, 0.8)]
+            verdict = self.ambiguity.handle(exp, affinities, cycle_id)
+            if verdict == "clear":
+                final.append(exp)
+            elif verdict == "defer":
+                deferred += 1
+            else:
+                human_queued += 1
+
+        # --- Steps 7-8: Group by sector and masked update ---
+        sector_groups: Dict[int, List[Experience]] = {}
+        for exp in final:
+            sid = exp.sector_assignment or 1
+            sector_groups.setdefault(sid, []).append(exp)
+
+        for sid, group in sector_groups.items():
+            if len(group) < MIN_BATCH_PER_SECTOR:
+                continue
+            if self.snapshots.is_frozen(sid):
+                continue
+            adapter = self.sectors.get(sid)
+            if adapter is None:
+                continue
+            # TODO: run masked gradient update with MLX
+            sectors_updated.append(sid)
+            delta_norms[f"S{sid}"] = 0.0   # placeholder
+
+        # --- Step 9: PGQ ---
+        pgq_result = self.pgq.evaluate(
+            cycle_id, saturation=0.0, exc_rate=0.0,
+            pred_error=0.0, cluster_novel=0.0,
+            busiest_sector_id=1, sectors=self.sectors,
+        )
+
+        # --- Audit log ---
+        modality_counts: Dict[str, int] = {}
+        for exp in experiences:
+            modality_counts[exp.modality] = modality_counts.get(exp.modality, 0) + 1
+
+        health = self._rolling_health(not rollback and human_queued == 0)
+        entry = AuditEntry(
+            cycle_id=cycle_id,
+            buffer_size_raw=raw_count,
+            bcf_rejected=bcf_rejected,
+            r_neg_rejected=r_neg_rejected,
+            ltss_flagged=ltss_flagged,
+            deferred_1=deferred,
+            human_queue_added=human_queued,
+            sectors_updated=sectors_updated,
+            param_delta_norms=delta_norms,
+            rollback_triggered=rollback,
+            gns=pgq_result.gns,
+            health_score=health,
+            modality_balance=modality_counts,
+            clean_cycle=(not rollback and human_queued == 0),
+        )
+        self._write_log(entry)
+        self.buffer.clear()
+        logging.info(f"[consolidation] cycle {cycle_id} done in "
+                     f"{time.time()-t0:.1f}s | health={health:.2f}")
+        return entry
+
+    def _rolling_health(self, clean: bool, window: int = 30) -> float:
+        self._cycle_history.append(clean)   # type: ignore
+        if len(self._cycle_history) > window:
+            self._cycle_history.pop(0)
+        clean_list = [c for c in self._cycle_history if isinstance(c, bool)]
+        return sum(clean_list) / max(len(clean_list), 1)
+
+    def _write_log(self, entry: AuditEntry) -> None:
+        path = self.log_dir / f"cycle_{entry.cycle_id}.json"
+        with open(path, "w") as f:
+            json.dump(asdict(entry), f, indent=2)

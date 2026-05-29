@@ -1,0 +1,47 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# ── Virtual environment ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Generated artifacts (dist/) ───────────────────────────────────────────────
+# Checkpoints and tokenizer are generated — keep the directory structure, not the files
+dist/checkpoints/**/*.npz
+dist/checkpoints/**/*.json
+dist/tokenizer/*.model
+dist/tokenizer/*.vocab
+dist/tokenizer/tokenizer_info.json
+
+# ── Training data (large downloads) ───────────────────────────────────────────
+data/stage1_language/*.jsonl
+data/stage2_patterns/*.jsonl
+data/stage3_abstraction/*.jsonl
+data/stage4_causal/*.jsonl
+data/stage5_ethics/*.jsonl
+
+# ── Runtime outputs ────────────────────────────────────────────────────────────
+logs/*.log
+logs/*.json
+snapshots/
+
+# ── macOS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── pytest ─────────────────────────────────────────────────────────────────────
+.pytest_cache/
+
+# ── Misc ───────────────────────────────────────────────────────────────────────
+*.log
+train_stage1.log

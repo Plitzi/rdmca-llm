@@ -1,0 +1,50 @@
+# RDMCA T2 Edge — Config de prueba rápida (toy)
+# Objetivo: verificar que el pipeline completo funciona en ~10 minutos.
+# NO usar para entrenamiento real — los pesos resultantes no sirven para nada.
+
+skip_gate: true   # toy run: no requiere pasar el graduation gate
+
+model:
+  d_model: 256
+  n_layers: 8
+  n_heads: 4
+  ffn_dim: 1024
+  context_len: 128        # reducido de 2048 → mucho más rápido
+  vocab_size: 65536
+  mrl_dims: [64, 128, 256]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en", "es"]
+
+training:
+  lr: 3.0e-4
+  lr_min: 3.0e-5
+  weight_decay: 0.1
+  batch_size: 4           # reducido de 8
+  grad_accumulation: 2    # reducido de 4
+  warmup_steps: 50
+  save_every: 200
+  eval_every: 500
+  clip_grad_norm: 1.0
+
+curriculum:
+  stage1:
+    name: "Language and communication"
+    n_tokens: 500_000     # 500K en vez de 1.5B — termina en ~10 min
+    data_dir: "data/stage1_language"
+  stage2:
+    name: "Perception and pattern recognition"
+    n_tokens: 200_000
+    data_dir: "data/stage2_patterns"
+  stage3:
+    name: "Abstraction and symbolic composition"
+    n_tokens: 200_000
+    data_dir: "data/stage3_abstraction"
+  stage4:
+    name: "Causal and procedural reasoning"
+    n_tokens: 200_000
+    data_dir: "data/stage4_causal"
+  stage5:
+    name: "Cognitive ethics and BCF"
+    n_tokens: 200_000
+    data_dir: "data/stage5_ethics"
