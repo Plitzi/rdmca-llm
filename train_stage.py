@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.model.transformer import RDMCAFoundational, ModelConfig
 from src.modalities.text import TextTokenizer
 from src.data.loader import DataLoader, TextDataset
-from src.training.dashboard import TrainingDashboard
+from src.training.dashboard import TrainingDashboard, CompileSpinner
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +171,12 @@ def evaluate_gate(model: RDMCAFoundational, stage: int) -> tuple:
 
 def freeze_model(model: RDMCAFoundational, ckpt_dir: Path):
     """Permanently freeze all foundational parameters after Stage 5."""
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
     print("\n" + "=" * 60)
     print("  FREEZING FOUNDATIONAL CORE — Theta_F locked forever")
     n = model.count_params()
     print(f"  {n/1e6:.1f}M parameters frozen")
+    model.freeze_all()
     mx.savez(str(ckpt_dir / "theta_f_frozen.npz"), **dict(tree_flatten(model.parameters())))
     with open(ckpt_dir / "frozen.json", "w") as f:
         json.dump({"frozen": True, "params": n,
@@ -260,10 +262,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     step = start_step
     running_loss = 0.0
-    log_interval  = 100   # interval for tps calculation
-    dash_interval = 10    # update dashboard every N steps (smooth)
-    t0 = time.time()
-    t_dash = time.time()
+    dash_period = 1.0     # refresh dashboard at most once per second (wall-clock)
     last_tps = 0.0
 
     def loss_fn(mdl, toks):
@@ -271,56 +270,78 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
 
+    def _next_batch():
+        if data_loader is not None:
+            return data_loader.next_batch()
+        return dummy_batch(model_cfg.vocab_size, seq_len, bs)
+
+    def _train_step(lr: float) -> float:
+        """One optimizer step (with grad accumulation). Returns avg loss."""
+        optimizer.learning_rate = lr
+        acc_loss = 0.0
+        grads = None
+        for _ in range(grad_acc):
+            loss, grads = loss_and_grad_fn(model, _next_batch())
+            mx.eval(loss)
+            acc_loss += loss.item()
+        optimizer.update(model, grads)
+        mx.eval(model.parameters(), optimizer.state)
+        return acc_loss / grad_acc
+
+    print(f"  Stage {stage} | {model.count_params()/1e6:.1f}M params | "
+          f"{'real data' if data_loader else 'dummy batches'}")
+
+    # First step triggers MLX JIT compilation (1-3 min). Run it BEFORE the
+    # Live dashboard so the plain stdout spinner isn't fighting rich for the
+    # terminal (that conflict made it look frozen).
+    last_loss = 0.0
+    if tokens_seen < n_tokens_target:
+        lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
+                       warmup, total_steps)
+        with CompileSpinner("Compiling computation graph (first step)…"):
+            last_loss = _train_step(lr)
+        step        += 1
+        tokens_seen += toks_step
+        running_loss += last_loss
+
     dash = TrainingDashboard(stage, n_tokens_target,
-                             resume_step=start_step,
+                             resume_step=step,
                              resume_tokens=tokens_seen)
 
     with dash:
-        dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | "
-                   f"{'real data' if data_loader else 'dummy batches'}")
+        acc_loss = last_loss   # valid even if the loop body never runs
+
+        # Rolling-window throughput: track (time, tokens) at the last refresh.
+        # Reset here so the compile step doesn't pollute the first reading.
+        t_window     = time.time()
+        tokens_window = tokens_seen
+        dash.update(step, tokens_seen, last_loss, tcfg["lr"], 0.0)
 
         while tokens_seen < n_tokens_target:
             # Update learning rate
             lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
                            warmup, total_steps)
-            optimizer.learning_rate = lr
 
-            # Gradient accumulation
-            acc_loss = 0.0
-            grads = None
-            for _ in range(grad_acc):
-                if data_loader is not None:
-                    batch = data_loader.next_batch()
-                else:
-                    batch = dummy_batch(model_cfg.vocab_size, seq_len, bs)
-                loss, g = loss_and_grad_fn(model, batch)
-                mx.eval(loss)
-                acc_loss += loss.item()
-                grads = g
-
-            optimizer.update(model, grads)
-            mx.eval(model.parameters(), optimizer.state)
+            acc_loss = _train_step(lr)
 
             step         += 1
             tokens_seen  += toks_step
-            running_loss += acc_loss / grad_acc
+            running_loss += acc_loss
 
-            # Recalculate tps every log_interval steps
-            if step % log_interval == 0:
-                elapsed  = time.time() - t0
-                last_tps = (log_interval * toks_step) / elapsed
-                running_loss = 0.0
-                t0 = time.time()
-
-            # Dashboard refresh every dash_interval steps (smooth)
-            if step % dash_interval == 0:
-                avg_loss = running_loss / max(step % log_interval or log_interval, 1)
-                dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
+            # Refresh dashboard at most once per second (wall-clock), so it's
+            # smooth whether a step takes 5ms (toy) or 2s (ctx=1024 real).
+            now = time.time()
+            if now - t_window >= dash_period:
+                dt = now - t_window
+                last_tps = (tokens_seen - tokens_window) / dt if dt > 0 else 0.0
+                t_window      = now
+                tokens_window = tokens_seen
+                dash.update(step, tokens_seen, acc_loss, lr, last_tps)
 
             # Checkpoint
             if step % save_every == 0:
                 save_checkpoint(model, step, stage, tokens_seen,
-                               acc_loss / grad_acc, ckpt_dir)
+                               acc_loss, ckpt_dir)
                 dash.set_checkpoint(step)
                 dash.print(f"[ckpt] step {step:,}")
 
@@ -330,7 +351,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 dash.set_gate_result(score, passed)
                 if passed:
                     save_checkpoint(model, step, stage, tokens_seen,
-                                   acc_loss / grad_acc, ckpt_dir)
+                                   acc_loss, ckpt_dir)
                     mx.savez(str(ckpt_dir / "final.npz"),
                              **dict(tree_flatten(model.parameters())))
                     with open(ckpt_dir / "stage_complete.json", "w") as f:
@@ -346,11 +367,11 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                     return True
 
         # Final dashboard update so it shows 100%
-        dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
+        dash.update(step, tokens_seen, acc_loss, lr, last_tps)
 
         # Budget exhausted
         save_checkpoint(model, step, stage, tokens_seen,
-                       acc_loss / grad_acc, ckpt_dir)
+                       acc_loss, ckpt_dir)
 
         if skip_gate:
             # Toy / smoke-test run — gate not required

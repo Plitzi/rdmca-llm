@@ -7,11 +7,12 @@ model:
   n_layers: 8
   n_heads: 4
   ffn_dim: 1024
-  context_len: 2048
+  context_len: 1024 # 2048
   vocab_size: 65536
   mrl_dims: [64, 128, 256]
   dropout: 0.1
   rope_theta: 10000.0
+  dtype: bfloat16        # bf16 compute: ~20x faster, ~4x less memory vs fp32
   languages: ["en", "es"]
 
 training:
