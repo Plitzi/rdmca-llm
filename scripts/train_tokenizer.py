@@ -47,7 +47,7 @@ progress = Progress(
 )
 
 # Last N lines captured from the SentencePiece subprocess output
-spm_lines: deque = deque(maxlen=5)
+spm_lines: deque = deque(maxlen=10)
 
 live = Live(console=console, refresh_per_second=10)
 
