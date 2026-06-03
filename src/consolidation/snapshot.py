@@ -28,7 +28,7 @@ GRAD_SPIKE_SIGMA = 3.0
 class SectorSnapshotManager:
     """Manages per-sector snapshots and rollback."""
 
-    def __init__(self, snapshot_dir: str = "dist/snapshots"):
+    def __init__(self, snapshot_dir: str = "snapshots"):
         self.snapshot_dir = Path(snapshot_dir)
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._cat_counts:   Dict[int, int]            = {}

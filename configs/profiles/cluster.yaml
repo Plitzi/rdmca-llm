@@ -1,0 +1,42 @@
+# ── RDMCA profile: CLUSTER ───────────────────────────────────────────────────
+# Goal: the largest reference model (T4) for multi-GPU / H100 clusters.
+# Note: multi-GPU + CUDA backend is NOT implemented here (MLX, single device).
+# This profile is the architectural target + capacity plan for big hardware.
+#
+# Target hardware: multi-GPU A100/H100 cluster
+profile: cluster
+tier: T4                       # full system + sector expansion (PGQ)
+notes: "~450M params at d_model=1024. Needs a distributed CUDA train loop."
+
+model:
+  d_model: 1024
+  n_layers: 16
+  n_heads: 16                  # head_dim = 64
+  ffn_dim: 4096
+  context_len: 4096
+  vocab_size: 65536
+  mrl_dims: [256, 512, 1024]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en", "es"]
+
+training:
+  lr: 2.0e-4
+  lr_min: 2.0e-5
+  weight_decay: 0.1
+  batch_size: 64
+  grad_accumulation: 8
+  warmup_steps: 8000
+  save_every: 5000
+  eval_every: 10000
+  clip_grad_norm: 1.0
+
+gate:
+  max_perplexity: {1: 30.0, 2: 27.0, 3: 24.0, 4: 22.0, 5: 20.0}
+
+curriculum:
+  stage1: {name: "Language and communication",          n_tokens: 6_000_000_000,  data_dir: "data/stage1_language"}
+  stage2: {name: "Perception and pattern recognition",  n_tokens: 2_000_000_000,  data_dir: "data/stage2_patterns"}
+  stage3: {name: "Abstraction and symbolic composition", n_tokens: 4_000_000_000,  data_dir: "data/stage3_abstraction"}
+  stage4: {name: "Causal and procedural reasoning",      n_tokens: 4_000_000_000,  data_dir: "data/stage4_causal"}
+  stage5: {name: "Cognitive ethics and BCF",             n_tokens: 2_000_000_000,  data_dir: "data/stage5_ethics"}

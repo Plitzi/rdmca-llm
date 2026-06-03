@@ -3,8 +3,6 @@ Training Dashboard — rich terminal UI for RDMCA stage training.
 Displays a live-updating panel with loss, speed, ETA, memory and gate status.
 """
 from __future__ import annotations
-import sys
-import threading
 import time
 from collections import deque
 from typing import Optional
@@ -66,49 +64,6 @@ def _arrow(current: float, previous: float) -> str:
     if previous is None or abs(current - previous) < 0.001:
         return "─"
     return "[green]↓[/green]" if current < previous else "[red]↑[/red]"
-
-
-_SPIN_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-
-class CompileSpinner:
-    """
-    Simple stdout spinner that runs in its own thread.
-    Use before the Live dashboard so it works even when mx.eval()
-    holds the GIL during Metal JIT compilation.
-
-    Usage:
-        with CompileSpinner("Compiling…"):
-            mx.eval(...)   # blocks for 1-3 min on first step
-    """
-
-    def __init__(self, msg: str = "Compiling computation graph…"):
-        self._msg   = msg
-        self._stop  = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def _spin(self) -> None:
-        t0 = time.time()
-        i  = 0
-        while not self._stop.is_set():
-            elapsed = _fmt_time(time.time() - t0)
-            c = _SPIN_CHARS[i % len(_SPIN_CHARS)]
-            sys.stdout.write(f"\r  {c}  {self._msg}  {elapsed}  ")
-            sys.stdout.flush()
-            i += 1
-            self._stop.wait(timeout=0.1)
-        sys.stdout.write("\r" + " " * 70 + "\r")
-        sys.stdout.flush()
-
-    def __enter__(self) -> "CompileSpinner":
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
-        return self
-
-    def __exit__(self, *_) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join()
 
 
 class TrainingDashboard:
@@ -196,9 +151,9 @@ class TrainingDashboard:
         self.last_ckpt_step = step
 
     def print(self, msg: str) -> None:
-        """Print a message above the live panel without triggering a re-render."""
+        """Print a message above the live panel."""
         if self._live:
-            self._live.console.print(msg)
+            self._live.console.log(msg)
 
     # ── Context manager ───────────────────────────────────────────────────────
 
@@ -241,13 +196,6 @@ class TrainingDashboard:
             if n >= 1_000_000:     return f"{n/1e6:.1f}M"
             return f"{n/1e3:.0f}K"
 
-        # ETA from current throughput
-        remaining = max(self.n_tokens_target - self._tokens, 0)
-        if self._tps > 0:
-            eta_str = _fmt_time(remaining / self._tps)
-        else:
-            eta_str = "—"
-
         stats.add_row("Step",   f"{self._step:,}")
         stats.add_row("Tokens", f"{_fmt_tok(self._tokens)}  /  {_fmt_tok(self.n_tokens_target)}")
         stats.add_row("Loss",       f"{self._loss:.4f}  {arr}  "
@@ -257,7 +205,6 @@ class TrainingDashboard:
         stats.add_row("Speed",      f"{self._tps/1000:.1f} K tok/s  "
                                     f"[dim](avg {avg_tps/1000:.1f} K)[/dim]")
         stats.add_row("Elapsed",    _fmt_time(elapsed))
-        stats.add_row("ETA",        f"[bold]{eta_str}[/bold]  [dim]remaining[/dim]")
         stats.add_row("GPU memory", _mem_str())
 
         if self.last_ckpt_step is not None:

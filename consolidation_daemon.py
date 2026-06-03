@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import sys, os
 try:
     import mlx.core  # noqa: F401

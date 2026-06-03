@@ -86,14 +86,58 @@ def build_all_sectors(d_model: int, n_layers: int) -> Dict[int, SectorAdapter]:
     return sectors
 
 
-def apply_masked_update(sectors: Dict[int, SectorAdapter],
-                        active_sector_id: int,
-                        loss: mx.array,
-                        optimizer) -> None:
+def _grad_norm(grads) -> float:
+    """L2 norm over a (possibly nested) MLX gradient tree."""
+    from mlx.utils import tree_flatten
+    sq = 0.0
+    for _, g in tree_flatten(grads):
+        if isinstance(g, mx.array) and g.size > 0:
+            sq += float((g * g).sum().item())
+    return sq ** 0.5
+
+
+def masked_sector_update(model,
+                         sector_id: int,
+                         loss_fn,
+                         optimizer) -> tuple:
     """
-    Gradient masking — only sector s* receives gradients during consolidation.
-    Implementation Guide §1.6.1.
+    Apply a gradient update to exactly one sector, leaving the frozen
+    foundational core and every other sector bit-for-bit unchanged
+    (Implementation Guide §1.6.1 — sector isolation by construction).
+
+    Isolation is enforced through MLX freeze/unfreeze: the whole model is
+    frozen, only `sector_id`'s adapter is unfrozen, so `value_and_grad`
+    differentiates w.r.t. that sector alone and the optimizer never allocates
+    state for any other parameter.
+
+    Args:
+        model:     RDMCAFoundational with sectors attached.
+        sector_id: the sector s* to update.
+        loss_fn:   callable(model) -> scalar mx.array (already closes over the
+                   consolidation batch and sets active sectors).
+        optimizer: an mlx optimizer instance.
+
+    Returns:
+        (loss_value: float, grad_norm: float)
     """
-    # TODO: implement gradient masking with MLX stop_gradient
-    # Only the active sector's parameters should be in the optimizer step.
-    raise NotImplementedError
+    if not model.sectors or sector_id not in model.sectors:
+        raise ValueError(f"sector {sector_id} not attached to model")
+
+    model.freeze()                       # freeze foundational core + all sectors
+    model.sectors[sector_id].unfreeze()  # unmask only the target sector
+
+    lg = nn.value_and_grad(model, loss_fn)
+    loss, grads = lg(model)
+    mx.eval(loss)
+    gnorm = _grad_norm(grads)
+
+    optimizer.update(model, grads)
+    mx.eval(model.parameters(), optimizer.state)
+
+    model.freeze()                       # restore: nothing trainable between cycles
+    return float(loss.item()), gnorm
+
+
+# Backwards-compatible alias for older call sites / Implementation Guide naming.
+def apply_masked_update(model, sector_id: int, loss_fn, optimizer) -> tuple:
+    return masked_sector_update(model, sector_id, loss_fn, optimizer)

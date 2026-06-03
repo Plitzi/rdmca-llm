@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 # Auto-bootstrap: re-run with .venv/bin/python if mlx is not available.
 import sys, os
@@ -78,6 +77,7 @@ def generate(model: RDMCAFoundational,
              temperature: float,
              top_p: float,
              vocab_size: int,
+             context_len: int = 2048,
              stream: bool = True) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
@@ -90,9 +90,9 @@ def generate(model: RDMCAFoundational,
     EOS_ID = 3
 
     for _ in range(max_new_tokens):
-        # Keep context within model limit (last 2048 tokens)
-        if tokens.shape[1] > 2048:
-            tokens = tokens[:, -2048:]
+        # Keep context within the model's positional limit.
+        if tokens.shape[1] > context_len:
+            tokens = tokens[:, -context_len:]
 
         logits = model.logits(tokens)     # [1, S, vocab]
         next_logits = logits[0, -1, :]    # [vocab]
@@ -153,7 +153,9 @@ def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
         ckpt_path = Path(args.checkpoint)
     elif args.stage:
         import json as _json
-        stage_dir = Path(f"dist/checkpoints/stage{args.stage}")
+        profile   = cfg.get("profile")
+        root      = Path("dist/checkpoints") / profile if profile else Path("dist/checkpoints")
+        stage_dir = root / f"stage{args.stage}"
 
         def _resolve_json(p: Path) -> Path | None:
             """Read a JSON state file and return the .npz path it points to."""
@@ -277,9 +279,10 @@ def chat_loop(model: RDMCAFoundational, mcfg: ModelConfig,
             new_ids = [2] + [ord(c) % mcfg.vocab_size for c in prompt] + [10]
 
         history.extend(new_ids)
-        # Trim history to fit context window (keep last 1800 tokens)
-        if len(history) > 1800:
-            history = history[-1800:]
+        # Trim history to fit context window (leave room for generation).
+        max_hist = max(64, mcfg.context_len - max_tokens)
+        if len(history) > max_hist:
+            history = history[-max_hist:]
 
         # ── Generate ──────────────────────────────────────────────────────
         print(f"\nRDMCA: ", end="", flush=True)
@@ -292,6 +295,7 @@ def chat_loop(model: RDMCAFoundational, mcfg: ModelConfig,
                 temperature=temperature,
                 top_p=top_p,
                 vocab_size=mcfg.vocab_size,
+                context_len=mcfg.context_len,
                 stream=False,   # decode full response at once
             )
         except Exception as e:
@@ -336,6 +340,8 @@ Examples:
         """,
     )
     parser.add_argument("--config",     default="configs/rdmca_t2.yaml")
+    parser.add_argument("--profile",    type=str, default=None,
+                        help="Hardware profile: nano | m2max | a100 | cluster")
     parser.add_argument("--stage",      type=int, default=None,
                         help="Load latest checkpoint from this stage")
     parser.add_argument("--checkpoint", type=str, default=None,
@@ -351,6 +357,9 @@ Examples:
     parser.add_argument("--maxtok",     type=int,   default=256,
                         help="Max new tokens per turn (default: 256)")
     args = parser.parse_args()
+
+    if args.profile:
+        args.config = f"configs/profiles/{args.profile}.yaml"
 
     if not args.dummy and args.stage is None and args.checkpoint is None:
         print("Specify --stage N, --checkpoint PATH, or --dummy")

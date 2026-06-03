@@ -2,7 +2,14 @@
 Relevance Engine — RDMCA §5
 Central scoring function governing all cognitive operations.
 
-R+(e, s) = σ( w_N·N(e,s) + w_U·U(e,s) + w_C·C(e,s) - w_R·Rep(e,s) ) - P(e,s)
+Faithful to the paper (§5.1, Eq. 1 and §15.4, Eq. 24):
+
+    R(e, s)  = α·N(e,s) + β·U(e,s) + γ·C(e,s) + δ·Rep(e,s)   (α+β+γ+δ = 1)
+    R⁺(e, s) = R(e, s) − λ_p · P(e, s)
+
+Note: Rep is *additive and positive* — repeated exposure raises consolidation
+priority (the spacing effect, §5.1). There is no sigmoid wrapper in the paper;
+thresholds θ are calibrated against the raw weighted sum.
 
 Components:
   N(e,s)   — Novelty:     approximate mutual information via cosine distance
@@ -83,9 +90,12 @@ class RelevanceEngine:
     def __init__(self,
                  ltss=None,
                  weights: Tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2),
-                 thresholds: Tuple[float, float, float] = (THETA_1, THETA_2, THETA_3)):
+                 thresholds: Tuple[float, float, float] = (THETA_1, THETA_2, THETA_3),
+                 lambda_p: float = 1.0):
         self.ltss       = ltss
-        self.w_N, self.w_U, self.w_C, self.w_R = weights
+        # (α, β, γ, δ) for (Novelty, Utility, Coherence, Repetition); sum to 1.
+        self.alpha, self.beta, self.gamma, self.delta = weights
+        self.lambda_p   = lambda_p              # penalty weight λ_p (§15.4)
         self.theta1, self.theta2, self.theta3   = thresholds
         self._state_emb:   Optional[np.ndarray] = None
         self._grad_buffer: Optional[np.ndarray] = None
@@ -98,8 +108,9 @@ class RelevanceEngine:
 
     def score(self, experience) -> float:
         """
-        Returns R+(e,s) ∈ ℝ.  Negative values indicate adversarial content.
-        experience must have: .embedding (np.ndarray), .episodic_buffer (list)
+        Returns R⁺(e,s) = α·N + β·U + γ·C + δ·Rep − λ_p·P  (paper §5.1 / §15.4).
+        Negative values indicate adversarial content (routed to the adv. buffer).
+        experience must have: .embedding (np.ndarray), .episodic_context (list)
         """
         from .penalty import penalty_score
         e = experience.embedding
@@ -108,11 +119,12 @@ class RelevanceEngine:
         N   = novelty(e, s)
         U   = utility(e, self._grad_buffer)
         C   = coherence(e, self.ltss) if self.ltss else 0.5
-        Rep = repetition(e, experience.episodic_context)
+        Rep = repetition(e, experience.episodic_context)   # additive (spacing effect)
         P   = penalty_score(experience)
 
-        raw = self.w_N * N + self.w_U * U + self.w_C * C - self.w_R * Rep
-        return float(1 / (1 + math.exp(-raw))) - P   # sigmoid then subtract penalty
+        R = (self.alpha * N + self.beta * U
+             + self.gamma * C + self.delta * Rep)
+        return float(R - self.lambda_p * P)
 
     # Threshold helpers
     def retrieval_eligible(self, score: float) -> bool:

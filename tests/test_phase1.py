@@ -52,12 +52,10 @@ def test_mrl_loss_decreases(model):
 
 
 def test_mrl_prefix_valid(model):
-    """Truncating to 128 dims must produce valid (finite) logits."""
+    """Truncating to 128 dims via the shared head must produce finite logits."""
     batch   = mx.array(np.random.randint(0, 32000, (1, 32)))
     h       = model(batch)
-    h_small = h[..., :128]
-    head    = model.heads[1]   # 128-dim head
-    logits  = head(h_small)
+    logits  = model.head_at_dim(h, 128)   # shared-head prefix projection
     arr     = np.array(logits.tolist())
     assert np.all(np.isfinite(arr)), "non-finite logits at 128-dim prefix"
 
@@ -105,13 +103,54 @@ def test_re_novelty():
 
 
 # ---------------------------------------------------------------------------
-# Sector isolation (placeholder — requires LoRA integration)
+# Sector wiring + isolation
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(reason="requires trained sectors — run after Phase 1 complete")
+def _small_model():
+    cfg = ModelConfig(vocab_size=512, d_model=64, n_layers=2,
+                      n_heads=2, ffn_dim=128, mrl_dims=[32, 64])
+    return RDMCAFoundational(cfg)
+
+
+def test_sector_zero_output_init():
+    """Attaching zero-init sectors must not change logits (Guide §1.6.2)."""
+    from src.model.lora import build_all_sectors
+    m = _small_model()
+    m.train(False)
+    batch = mx.array(np.random.randint(1, 512, (2, 16)))
+    base = np.array(m.logits(batch).tolist())
+    m.attach_sectors(build_all_sectors(d_model=64, n_layers=2))
+    m.set_active_sectors([(1, 1.0), (2, 1.0)])
+    after = np.array(m.logits(batch).tolist())
+    assert np.allclose(base, after, atol=1e-5), "sectors changed init output"
+
+
 def test_sector_isolation():
-    """S1 update must not change S2-S7 parameter checksums."""
-    pass
+    """An update to S1 must leave the core and S2-S7 bit-identical (§1.6.1)."""
+    import mlx.optimizers as optim
+    from mlx.utils import tree_flatten
+    from src.model.lora import build_all_sectors, masked_sector_update
+
+    m = _small_model()
+    m.attach_sectors(build_all_sectors(d_model=64, n_layers=2))
+    batch = mx.array(np.random.randint(1, 512, (4, 17)))
+
+    before = {k: np.array(v.tolist()) for k, v in tree_flatten(m.parameters())}
+
+    def loss_fn(model):
+        model.set_active_sectors([(1, 1.0)])
+        return model.mrl_loss(batch)
+
+    loss, gnorm = masked_sector_update(m, 1, loss_fn, optim.SGD(learning_rate=0.1))
+    after = {k: np.array(v.tolist()) for k, v in tree_flatten(m.parameters())}
+
+    s1_changed     = any("sectors.1." in k and not np.array_equal(before[k], after[k]) for k in before)
+    others_changed = any(("sectors." in k and "sectors.1." not in k) and not np.array_equal(before[k], after[k]) for k in before)
+    core_changed   = any("sectors." not in k and not np.array_equal(before[k], after[k]) for k in before)
+
+    assert s1_changed,        "S1 did not update"
+    assert not others_changed, "another sector changed during S1 update"
+    assert not core_changed,   "foundational core changed during S1 update"
 
 
 @pytest.mark.skip(reason="requires trained foundational checkpoint")

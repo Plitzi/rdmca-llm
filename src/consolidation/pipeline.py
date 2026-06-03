@@ -25,17 +25,23 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+import mlx.core as mx
+import mlx.optimizers as optim
+from mlx.utils import tree_flatten
+
 from src.memory.episodic_buffer import EpisodicBuffer, Experience
 from src.memory.ltss import LTSS
 from src.memory.mrf import mrf
 from src.relevance.engine import RelevanceEngine
 from src.model.bcf import BCFHead
+from src.model.lora import masked_sector_update
 from src.consolidation.snapshot import SectorSnapshotManager
 from src.consolidation.ambiguity import AmbiguityHandler
 from src.consolidation.pgq import PGQ
 
 
 MIN_BATCH_PER_SECTOR = 8
+CONSOL_SEQ_LEN       = 128    # token length used for consolidation LM updates
 
 
 @dataclass
@@ -72,7 +78,10 @@ class ConsolidationPipeline:
                  ambiguity: AmbiguityHandler,
                  pgq: PGQ,
                  log_dir: str = "logs",
-                 adversarial_buffer: Optional[list] = None):
+                 adversarial_buffer: Optional[list] = None,
+                 model=None,
+                 tokenizer=None,
+                 lr: float = 1e-4):
         self.buffer       = buffer
         self.ltss         = ltss
         self.re           = re
@@ -85,6 +94,13 @@ class ConsolidationPipeline:
         self.adv_buffer   = adversarial_buffer if adversarial_buffer is not None else []
         self._cycle_history: List[AuditEntry] = []
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Optional learning components. When `model` (with sectors attached)
+        # and `tokenizer` are provided, the pipeline performs real masked
+        # gradient updates; otherwise it runs the filter/audit pipeline only.
+        self.model       = model
+        self.tokenizer   = tokenizer
+        self.optimizer   = optim.AdamW(learning_rate=lr) if model is not None else None
 
     def run(self) -> AuditEntry:
         """Execute one full consolidation cycle. Returns the audit log entry."""
@@ -104,9 +120,11 @@ class ConsolidationPipeline:
         # --- Step 2: BCF filter ---
         clean: List[Experience] = []
         for exp in experiences:
-            # TODO: compute hidden state h from base model, then call bcf.is_permissible(h)
-            # Placeholder: pass all through BCF for now
-            clean.append(exp)
+            if self._bcf_permissible(exp):
+                clean.append(exp)
+            else:
+                self.adv_buffer.append(exp)
+                bcf_rejected += 1
 
         # --- Step 3: R+ filter ---
         scored: List[tuple] = []
@@ -162,12 +180,42 @@ class ConsolidationPipeline:
                 continue
             if self.snapshots.is_frozen(sid):
                 continue
-            adapter = self.sectors.get(sid)
+            adapter = self._get_adapter(sid)
             if adapter is None:
                 continue
-            # TODO: run masked gradient update with MLX
-            sectors_updated.append(sid)
-            delta_norms[f"S{sid}"] = 0.0   # placeholder
+
+            # Snapshot the sector before touching it (enables rollback).
+            sector_params = dict(tree_flatten(adapter.parameters()))
+            self.snapshots.snapshot_before_update(sid, sector_params)
+
+            # Without a model + tokenizer we can only do the filter pipeline.
+            if self.model is None or self.tokenizer is None:
+                sectors_updated.append(sid)
+                delta_norms[f"S{sid}"] = 0.0
+                continue
+
+            batch = self._build_token_batch(group)
+            if batch is None:
+                continue
+
+            def loss_fn(model, _batch=batch, _sid=sid):
+                model.set_active_sectors([(_sid, 1.0)])
+                return model.mrl_loss(_batch)
+
+            loss_val, gnorm = masked_sector_update(
+                self.model, sid, loss_fn, self.optimizer)
+            delta_norms[f"S{sid}"] = gnorm
+
+            # Catastrophe detection (gradient-norm anomaly is computable
+            # in-loop; perf/KL/BCF probes are wired separately).
+            cat = self.snapshots.detect_catastrophe(
+                sid, benchmark_delta=0.0, kl_divergence=0.0,
+                bcf_delta=0.0, grad_norm=gnorm)
+            if cat:
+                self.snapshots.rollback(sid, adapter)
+                rollback = True
+            else:
+                sectors_updated.append(sid)
 
         # --- Step 9: PGQ ---
         pgq_result = self.pgq.evaluate(
@@ -203,6 +251,62 @@ class ConsolidationPipeline:
         logging.info(f"[consolidation] cycle {cycle_id} done in "
                      f"{time.time()-t0:.1f}s | health={health:.2f}")
         return entry
+
+    def _bcf_permissible(self, exp: Experience) -> bool:
+        """
+        Behavioral Constraint check (§15.3). Uses the frozen foundational
+        hidden state of the experience text. Falls back to permit-all only
+        when the model/tokenizer/BCF head are not all available (filter
+        pipeline-only mode), so consolidation never silently drops data in
+        test/toy runs.
+        """
+        if self.model is None or self.tokenizer is None or self.bcf is None:
+            return True
+        text = getattr(exp, "text", "") or ""
+        if not text:
+            return True
+        try:
+            ids = self.tokenizer.encode(text, add_eos=True)
+        except TypeError:
+            ids = self.tokenizer.encode(text)
+        if not ids:
+            return True
+        toks = mx.array(ids[:CONSOL_SEQ_LEN])[None]
+        self.model.set_active_sectors([])          # core-only for the BCF gate
+        h = self.model(toks)[:, -1, :]             # final-token hidden state
+        return bool(self.bcf.is_permissible(h).item())
+
+    def _get_adapter(self, sid: int):
+        """Resolve a sector adapter from the model (preferred) or the dict."""
+        if self.model is not None and self.model.sectors:
+            return self.model.sectors.get(sid)
+        return self.sectors.get(sid)
+
+    def _build_token_batch(self, group: List[Experience]):
+        """
+        Tokenize a group of experiences into a padded [B, CONSOL_SEQ_LEN+1]
+        batch for the masked LM consolidation update. Returns None if no text
+        is available to learn from.
+        """
+        L = CONSOL_SEQ_LEN + 1
+        rows = []
+        for exp in group:
+            text = getattr(exp, "text", "") or ""
+            if not text:
+                continue
+            try:
+                ids = self.tokenizer.encode(text, add_eos=True)
+            except TypeError:
+                ids = self.tokenizer.encode(text)
+            if not ids:
+                continue
+            ids = ids[:L]
+            if len(ids) < L:
+                ids = ids + [0] * (L - len(ids))   # pad_id = 0
+            rows.append(ids)
+        if not rows:
+            return None
+        return mx.array(rows)
 
     def _rolling_health(self, clean: bool, window: int = 30) -> float:
         self._cycle_history.append(clean)   # type: ignore

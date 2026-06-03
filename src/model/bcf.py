@@ -48,17 +48,66 @@ class BCFHead(nn.Module):
 
 
 def bcf_loss(logits: mx.array, labels: mx.array) -> mx.array:
-    """Binary cross-entropy for BCF probe set training."""
-    return nn.losses.binary_cross_entropy(logits.squeeze(-1), labels,
-                                          reduction="mean")
+    """Binary cross-entropy (from logits) for BCF probe-set training."""
+    return nn.losses.binary_cross_entropy(
+        logits.squeeze(-1), labels, with_logits=True, reduction="mean")
 
 
-def bcf_probe_delta(pre_params, post_params, probe_loader,
-                    bcf_head: BCFHead, base_model) -> float:
+def _hidden_states(model, tokenizer, texts, seq_len: int = 128) -> mx.array:
+    """Final-token foundational hidden state for each text (core only)."""
+    if hasattr(model, "set_active_sectors"):
+        model.set_active_sectors([])          # BCF reads the frozen core
+    rows = []
+    for t in texts:
+        try:
+            ids = tokenizer.encode(t, add_eos=True)
+        except TypeError:
+            ids = tokenizer.encode(t)
+        ids = (ids or [0])[:seq_len]
+        toks = mx.array(ids)[None]
+        h = model(toks)[:, -1, :]             # [1, d_model]
+        rows.append(h)
+    return mx.concatenate(rows, axis=0)       # [N, d_model]
+
+
+def bcf_accuracy(model, tokenizer, bcf_head: BCFHead, probes) -> float:
     """
-    Measure BCF accuracy change between two sector snapshots.
-    Used by the catastrophe detector (Consolidation §2.3.2).
-    Returns delta accuracy — positive means degradation.
-    TODO: implement full probe evaluation.
+    Accuracy of B(a,s) on a probe set.
+    probes: iterable of (text, label) with label 1 = permissible, 0 = blocked.
     """
-    raise NotImplementedError
+    if not probes:
+        return 1.0
+    texts  = [p[0] for p in probes]
+    labels = mx.array([float(p[1]) for p in probes])
+    h      = _hidden_states(model, tokenizer, texts)
+    preds  = (bcf_head.score(h).squeeze(-1) >= BCF_THRESHOLD).astype(mx.float32)
+    return float((preds == labels).astype(mx.float32).mean().item())
+
+
+def bcf_train_step(model, tokenizer, bcf_head: BCFHead,
+                   probes, optimizer) -> float:
+    """
+    One supervised step on the BCF head over a probe batch. Only the BCF head
+    is trainable — the foundational hidden states are read frozen. Returns loss.
+    """
+    texts  = [p[0] for p in probes]
+    labels = mx.array([float(p[1]) for p in probes])
+    h      = _hidden_states(model, tokenizer, texts)   # frozen-core features
+
+    def loss_fn(head):
+        return bcf_loss(head(h), labels)
+
+    lg = nn.value_and_grad(bcf_head, loss_fn)
+    loss, grads = lg(bcf_head)
+    optimizer.update(bcf_head, grads)
+    mx.eval(bcf_head.parameters(), optimizer.state)
+    return float(loss.item())
+
+
+def bcf_probe_delta(model, tokenizer, bcf_head: BCFHead,
+                    probes, baseline_acc: float) -> float:
+    """
+    BCF accuracy change vs. a baseline (Consolidation §2.3.2). A positive
+    return value means degradation (post-update accuracy fell below baseline).
+    """
+    return baseline_acc - bcf_accuracy(model, tokenizer, bcf_head, probes)

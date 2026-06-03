@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import sys, os
 try:
     import mlx.core  # noqa: F401
@@ -45,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.model.transformer import RDMCAFoundational, ModelConfig
 from src.modalities.text import TextTokenizer
 from src.data.loader import DataLoader, TextDataset
-from src.training.dashboard import TrainingDashboard, CompileSpinner
+from src.training.dashboard import TrainingDashboard
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +73,12 @@ STAGE_NAMES = {
 def load_config(path: str) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def ckpt_root(cfg: dict) -> Path:
+    """Checkpoint root, namespaced by profile so profiles never collide."""
+    profile = cfg.get("profile")
+    return Path("dist/checkpoints") / profile if profile else Path("dist/checkpoints")
 
 
 def cosine_lr(step: int, base_lr: float, min_lr: float,
@@ -148,35 +153,116 @@ def build_data_loader(stage: int, cfg: dict):
         return None
 
 
-def evaluate_gate(model: RDMCAFoundational, stage: int) -> tuple:
-    """
-    Evaluate graduation gate for this stage.
-    Returns (score: float, passed: bool).
+def validation_perplexity(model: RDMCAFoundational,
+                          data_loader, n_batches: int = 8) -> float:
+    """Mean validation perplexity over n held-out batches. inf if no data."""
+    if data_loader is None:
+        return float("inf")
+    losses = []
+    for _ in range(n_batches):
+        batch = data_loader.next_batch()
+        loss  = model.eval_ce(batch)
+        mx.eval(loss)
+        losses.append(loss.item())
+    return float(np.exp(np.mean(losses)))
 
-    REPLACE each branch with the real benchmark evaluation:
-      Stage 1: BLiMP grammaticality (https://github.com/alexwarstadt/blimp)
-      Stage 2: ARC Easy (https://allenai.org/data/arc)
-      Stage 3: GSM8K (https://github.com/openai/grade-school-math)
-      Stage 4: COPA / causal reasoning benchmark
-      Stage 5: BCF probe set (custom, defined in tests/bcf_probes.jsonl)
+
+# Proxy perplexity gates per stage until task-specific benchmarks
+# (BLiMP / ARC / GSM8K / COPA / BCF probes) are wired in. Overridable via
+# cfg["gate"]["max_perplexity"][stage].
+DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 35.0}
+
+
+def evaluate_gate(model: RDMCAFoundational, stage: int,
+                  data_loader=None, cfg: dict = None) -> tuple:
     """
-    metric, threshold, desc = STAGE_GATES[stage]
+    Graduation gate. Operative metric is real validation perplexity (a proxy
+    that actually measures the model); task-specific benchmarks (BLiMP, ARC,
+    GSM8K, COPA, BCF probes) should replace the per-stage threshold as they
+    are wired in. Stage 5 additionally checks BCF probe accuracy when a probe
+    set is available. Returns (score, passed).
+    """
+    _, _, desc = STAGE_GATES[stage]
+    gate_cfg = (cfg or {}).get("gate", {})
+    max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL[stage])
+
+    ppl = validation_perplexity(model, data_loader)
+    passed = ppl <= max_ppl
     print(f"  [gate] Stage {stage}: {desc}")
-    print(f"  [gate] Metric: {metric} | Threshold: {threshold:.2f}")
-    print(f"  [gate] TODO: plug in real benchmark here")
-    # Placeholder — always returns 0 until you implement real eval
-    score = 0.0
-    return score, score >= threshold
+    print(f"  [gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "
+          f"-> {'PASS' if passed else 'fail'}")
+
+    if stage == 5:
+        passed = passed and _bcf_gate(model, cfg)
+    return ppl, passed
+
+
+def _bcf_gate(model: RDMCAFoundational, cfg: dict) -> bool:
+    """Stage-5 BCF probe-accuracy gate (>= 0.90) when probes are available."""
+    probe_path = Path("data/benchmarks/bcf_probes.jsonl")
+    if not probe_path.exists():
+        print("  [gate] BCF probes not found — skipping BCF accuracy check")
+        return True
+    from src.model.bcf import BCFHead, bcf_accuracy
+    from src.modalities.text import TextTokenizer
+    probes = []
+    with open(probe_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            probes.append((rec["text"], int(rec["label"])))
+    head = getattr(model, "bcf_head", None) or BCFHead(model.cfg.d_model)
+    acc  = bcf_accuracy(model, TextTokenizer(), head, probes)
+    print(f"  [gate] BCF probe accuracy={acc:.3f} | threshold>= 0.90")
+    return acc >= 0.90
+
+
+def train_bcf_head(model: RDMCAFoundational, ckpt_dir: Path,
+                   epochs: int = 30, batch: int = 16) -> None:
+    """
+    Train the Behavioral Constraint head on the probe set over frozen-core
+    features (§15.3). Runs only if data/benchmarks/bcf_probes.jsonl exists;
+    the trained head is stored on model.bcf_head and saved beside the stage.
+    """
+    probe_path = Path("data/benchmarks/bcf_probes.jsonl")
+    if not probe_path.exists():
+        print("  [bcf] No probe set — skipping BCF head training "
+              "(expected data/benchmarks/bcf_probes.jsonl)")
+        return
+    from src.model.bcf import BCFHead, bcf_train_step, bcf_accuracy
+    probes = []
+    with open(probe_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rec = json.loads(line)
+                probes.append((rec["text"], int(rec["label"])))
+
+    head = BCFHead(model.cfg.d_model)
+    model.bcf_head = head                       # attach for gate + pipeline use
+    opt = optim.AdamW(learning_rate=1e-3)
+    tok = TextTokenizer()
+    print(f"  [bcf] Training BCF head on {len(probes)} probes, {epochs} epochs")
+    for ep in range(epochs):
+        np.random.shuffle(probes)
+        for i in range(0, len(probes), batch):
+            bcf_train_step(model, tok, head, probes[i:i + batch], opt)
+    acc = bcf_accuracy(model, tok, head, probes)
+    print(f"  [bcf] final probe accuracy={acc:.3f}")
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    mx.savez(str(ckpt_dir / "bcf_head.npz"), **dict(tree_flatten(head.parameters())))
 
 
 def freeze_model(model: RDMCAFoundational, ckpt_dir: Path):
-    """Permanently freeze all foundational parameters after Stage 5."""
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    """Permanently freeze the foundational core after Stage 5 (real MLX freeze)."""
     print("\n" + "=" * 60)
     print("  FREEZING FOUNDATIONAL CORE — Theta_F locked forever")
+    model.freeze()                       # MLX: excludes params from trainable set
     n = model.count_params()
     print(f"  {n/1e6:.1f}M parameters frozen")
-    model.freeze_all()
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
     mx.savez(str(ckpt_dir / "theta_f_frozen.npz"), **dict(tree_flatten(model.parameters())))
     with open(ckpt_dir / "frozen.json", "w") as f:
         json.dump({"frozen": True, "params": n,
@@ -194,7 +280,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     skip_gate = cfg.get("skip_gate", False)   # toy config sets this to true
     stages    = list(cfg["curriculum"].values())
     n_tokens_target = stages[stage - 1]["n_tokens"]
-    ckpt_dir = Path(f"dist/checkpoints/stage{stage}")
+    root      = ckpt_root(cfg)
+    ckpt_dir  = root / f"stage{stage}"
 
     def _fmt_tokens(n: int) -> str:
         if n >= 1_000_000_000:
@@ -229,7 +316,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     # Load previous stage weights as starting point (stages 2-5)
     if stage > 1:
-        prev_ckpt = Path(f"dist/checkpoints/stage{stage-1}/latest.json")
+        prev_ckpt = root / f"stage{stage-1}" / "latest.json"
         with open(prev_ckpt) as f:
             prev_state = json.load(f)
         weights = mx.load(prev_state["checkpoint"])
@@ -262,7 +349,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     step = start_step
     running_loss = 0.0
-    dash_period = 1.0     # refresh dashboard at most once per second (wall-clock)
+    log_interval  = 100   # interval for tps calculation
+    dash_interval = 10    # update dashboard every N steps (smooth)
+    t0 = time.time()
+    t_dash = time.time()
     last_tps = 0.0
 
     def loss_fn(mdl, toks):
@@ -270,88 +360,66 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
 
-    def _next_batch():
-        if data_loader is not None:
-            return data_loader.next_batch()
-        return dummy_batch(model_cfg.vocab_size, seq_len, bs)
-
-    def _train_step(lr: float) -> float:
-        """One optimizer step (with grad accumulation). Returns avg loss."""
-        optimizer.learning_rate = lr
-        acc_loss = 0.0
-        grads = None
-        for _ in range(grad_acc):
-            loss, grads = loss_and_grad_fn(model, _next_batch())
-            mx.eval(loss)
-            acc_loss += loss.item()
-        optimizer.update(model, grads)
-        mx.eval(model.parameters(), optimizer.state)
-        return acc_loss / grad_acc
-
-    print(f"  Stage {stage} | {model.count_params()/1e6:.1f}M params | "
-          f"{'real data' if data_loader else 'dummy batches'}")
-
-    # First step triggers MLX JIT compilation (1-3 min). Run it BEFORE the
-    # Live dashboard so the plain stdout spinner isn't fighting rich for the
-    # terminal (that conflict made it look frozen).
-    last_loss = 0.0
-    if tokens_seen < n_tokens_target:
-        lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
-                       warmup, total_steps)
-        with CompileSpinner("Compiling computation graph (first step)…"):
-            last_loss = _train_step(lr)
-        step        += 1
-        tokens_seen += toks_step
-        running_loss += last_loss
-
     dash = TrainingDashboard(stage, n_tokens_target,
-                             resume_step=step,
+                             resume_step=start_step,
                              resume_tokens=tokens_seen)
 
     with dash:
-        acc_loss = last_loss   # valid even if the loop body never runs
-
-        # Rolling-window throughput: track (time, tokens) at the last refresh.
-        # Reset here so the compile step doesn't pollute the first reading.
-        t_window     = time.time()
-        tokens_window = tokens_seen
-        dash.update(step, tokens_seen, last_loss, tcfg["lr"], 0.0)
+        dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | "
+                   f"{'real data' if data_loader else 'dummy batches'}")
 
         while tokens_seen < n_tokens_target:
             # Update learning rate
             lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
                            warmup, total_steps)
+            optimizer.learning_rate = lr
 
-            acc_loss = _train_step(lr)
+            # Gradient accumulation
+            acc_loss = 0.0
+            grads = None
+            for _ in range(grad_acc):
+                if data_loader is not None:
+                    batch = data_loader.next_batch()
+                else:
+                    batch = dummy_batch(model_cfg.vocab_size, seq_len, bs)
+                loss, g = loss_and_grad_fn(model, batch)
+                mx.eval(loss)
+                acc_loss += loss.item()
+                grads = g
+
+            optimizer.update(model, grads)
+            mx.eval(model.parameters(), optimizer.state)
 
             step         += 1
             tokens_seen  += toks_step
-            running_loss += acc_loss
+            running_loss += acc_loss / grad_acc
 
-            # Refresh dashboard at most once per second (wall-clock), so it's
-            # smooth whether a step takes 5ms (toy) or 2s (ctx=1024 real).
-            now = time.time()
-            if now - t_window >= dash_period:
-                dt = now - t_window
-                last_tps = (tokens_seen - tokens_window) / dt if dt > 0 else 0.0
-                t_window      = now
-                tokens_window = tokens_seen
-                dash.update(step, tokens_seen, acc_loss, lr, last_tps)
+            # Recalculate tps every log_interval steps
+            if step % log_interval == 0:
+                elapsed  = time.time() - t0
+                last_tps = (log_interval * toks_step) / elapsed
+                running_loss = 0.0
+                t0 = time.time()
+
+            # Dashboard refresh every dash_interval steps (smooth)
+            if step % dash_interval == 0:
+                avg_loss = running_loss / max(step % log_interval or log_interval, 1)
+                dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
 
             # Checkpoint
             if step % save_every == 0:
                 save_checkpoint(model, step, stage, tokens_seen,
-                               acc_loss, ckpt_dir)
+                               acc_loss / grad_acc, ckpt_dir)
                 dash.set_checkpoint(step)
                 dash.print(f"[ckpt] step {step:,}")
 
             # Gate evaluation
             if step % eval_every == 0:
-                score, passed = evaluate_gate(model, stage)
+                score, passed = evaluate_gate(model, stage, data_loader, cfg)
                 dash.set_gate_result(score, passed)
                 if passed:
                     save_checkpoint(model, step, stage, tokens_seen,
-                                   acc_loss, ckpt_dir)
+                                   acc_loss / grad_acc, ckpt_dir)
                     mx.savez(str(ckpt_dir / "final.npz"),
                              **dict(tree_flatten(model.parameters())))
                     with open(ckpt_dir / "stage_complete.json", "w") as f:
@@ -363,15 +431,16 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                     dash.print(f"[bold green]Stage {stage} COMPLETE — "
                                f"gate {score:.4f}[/bold green]")
                     if stage == 5:
-                        freeze_model(model, Path("dist/checkpoints/foundational"))
+                        train_bcf_head(model, ckpt_dir)
+                        freeze_model(model, root / "foundational")
                     return True
 
         # Final dashboard update so it shows 100%
-        dash.update(step, tokens_seen, acc_loss, lr, last_tps)
+        dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
 
         # Budget exhausted
         save_checkpoint(model, step, stage, tokens_seen,
-                       acc_loss, ckpt_dir)
+                       acc_loss / grad_acc, ckpt_dir)
 
         if skip_gate:
             # Toy / smoke-test run — gate not required
@@ -384,7 +453,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             dash.print(f"[bold green]Stage {stage} COMPLETE (toy run — gate skipped)[/bold green]")
             return True
 
-        score, passed = evaluate_gate(model, stage)
+        score, passed = evaluate_gate(model, stage, data_loader, cfg)
         dash.set_gate_result(score, passed)
         if passed:
             dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")
@@ -410,16 +479,23 @@ Examples:
     )
     parser.add_argument("--stage",  type=int, required=True,
                         choices=[1, 2, 3, 4, 5], help="Curriculum stage (1-5)")
+    parser.add_argument("--profile", type=str, default=None,
+                        help="Hardware profile: nano | m2max | a100 | cluster "
+                             "(resolves to configs/profiles/<name>.yaml)")
     parser.add_argument("--config", type=str, default="configs/rdmca_t2.yaml")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint in stage dir")
     args = parser.parse_args()
 
+    if args.profile:
+        args.config = f"configs/profiles/{args.profile}.yaml"
     cfg = load_config(args.config)
+    print(f"  Profile: {cfg.get('profile', '(custom)')} | "
+          f"tier: {cfg.get('tier', '?')} | config: {args.config}")
 
     # Prerequisite check
     if args.stage > 1:
-        prev = Path(f"dist/checkpoints/stage{args.stage-1}/stage_complete.json")
+        prev = ckpt_root(cfg) / f"stage{args.stage-1}" / "stage_complete.json"
         if not prev.exists():
             print(f"ERROR: Stage {args.stage-1} must complete before Stage {args.stage}.")
             print(f"  Run: python train_stage.py --stage {args.stage-1} --config {args.config}")
