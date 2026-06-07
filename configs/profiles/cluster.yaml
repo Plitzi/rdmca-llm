@@ -6,6 +6,7 @@
 # Target hardware: multi-GPU A100/H100 cluster
 profile: cluster
 tier: T4                       # full system + sector expansion (PGQ)
+backend: mlx                   # mlx | torch  (torch/CUDA backend not implemented yet)
 notes: "~450M params at d_model=1024. Needs a distributed CUDA train loop."
 
 model:

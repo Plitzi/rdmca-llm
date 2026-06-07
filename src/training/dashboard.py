@@ -42,11 +42,15 @@ STAGE_NAMES = {
 
 
 def _sparkline(values: list[float], width: int = 12) -> str:
-    if not values:
-        return "─" * width
-    lo, hi = min(values), max(values)
+    import math
+    # Drop non-finite values (e.g. NaN from an unstable fp16 run) so the
+    # dashboard never crashes; show a marker if nothing finite remains.
+    finite = [v for v in values if math.isfinite(v)]
+    if not finite:
+        return "⚠ NaN" if values else "─" * width
+    lo, hi = min(finite), max(finite)
     rng = hi - lo or 1.0
-    chars = [_SPARKS[int((v - lo) / rng * (len(_SPARKS) - 1))] for v in values[-width:]]
+    chars = [_SPARKS[int((v - lo) / rng * (len(_SPARKS) - 1))] for v in finite[-width:]]
     return "".join(chars)
 
 

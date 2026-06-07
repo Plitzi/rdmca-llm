@@ -8,6 +8,7 @@
 # Tokenizer:       python scripts/train_tokenizer.py --vocab_size 65536 --sample_mb 1000
 profile: a100
 tier: T3
+backend: mlx                   # mlx | torch  (torch/CUDA backend not implemented yet)
 notes: "~250M params at d_model=768. Requires a CUDA train loop (not yet in repo)."
 
 model:
@@ -23,6 +24,7 @@ model:
   languages: ["en", "es"]
 
 training:
+  precision: bf16              # fp32 | bf16 | fp16
   lr: 2.5e-4
   lr_min: 2.5e-5
   weight_decay: 0.1

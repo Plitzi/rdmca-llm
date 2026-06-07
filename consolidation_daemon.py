@@ -76,9 +76,9 @@ def _build_model(cfg: dict):
     """Load the frozen foundational core + attach (and reload) LoRA sectors."""
     import mlx.core as mx
     from mlx.utils import tree_unflatten
-    from src.model.transformer import RDMCAFoundational, ModelConfig
+    from src.model.transformer import RDMCAFoundational, ModelConfig, set_model_precision
     from src.model.lora import build_all_sectors
-    from src.config import load_tokenizer_info, unified_vocab_size
+    from src.config import load_tokenizer_info, unified_vocab_size, get_precision
 
     mcfg = dict(cfg["model"])
     info = load_tokenizer_info()
@@ -104,6 +104,7 @@ def _build_model(cfg: dict):
                     if k.startswith(f"S{sid}/")}
             if flat:
                 adapter.update(tree_unflatten(list(flat.items())))
+    set_model_precision(model, get_precision(cfg))
     mx.eval(model.parameters())
     return model, root
 
@@ -190,9 +191,10 @@ def main():
                         help="Run one cycle immediately and exit (skip idle detection)")
     args = parser.parse_args()
 
-    from src.config import resolve_config_path, load_config
+    from src.config import resolve_config_path, load_config, require_backend
     config_path = resolve_config_path(args.config, args.profile)
     cfg = load_config(config_path)
+    require_backend(cfg)              # mlx only for now; torch errors clearly
 
     Path("logs").mkdir(exist_ok=True)
     logging.info(f"Daemon started | config={config_path} | once={args.once}")

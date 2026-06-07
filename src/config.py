@@ -19,6 +19,9 @@ import yaml
 DEFAULT_CONFIG = "configs/rdmca_t2.yaml"
 TOKENIZER_INFO = "dist/tokenizer/tokenizer_info.json"
 
+SUPPORTED_BACKENDS = ("mlx", "torch")
+SUPPORTED_PRECISIONS = ("fp32", "bf16", "fp16")
+
 
 def resolve_config_path(config: Optional[str] = None,
                         profile: Optional[str] = None) -> str:
@@ -37,6 +40,40 @@ def get_languages(cfg: dict) -> List[str]:
     """Canonical language list for a config. Defaults to ['en']."""
     langs = (cfg.get("model", {}) or {}).get("languages")
     return list(langs) if langs else ["en"]
+
+
+# ---------------------------------------------------------------------------
+# Compute backend (mlx | torch) and training/inference precision
+# ---------------------------------------------------------------------------
+
+def get_backend(cfg: dict) -> str:
+    """Selected compute backend. Top-level `backend:` key, default 'mlx'."""
+    return (cfg.get("backend") or "mlx").lower()
+
+
+def require_backend(cfg: dict) -> str:
+    """
+    Return the configured backend, or fail loudly. The PyTorch backend is not
+    implemented yet (selectable now, wired later) — there is no silent fallback.
+    """
+    backend = get_backend(cfg)
+    if backend == "mlx":
+        return "mlx"
+    if backend == "torch":
+        raise NotImplementedError(
+            "backend: torch is configured but the PyTorch backend is not "
+            "implemented yet. Use `backend: mlx` for now.")
+    raise ValueError(
+        f"Unknown backend '{backend}'. Supported: {', '.join(SUPPORTED_BACKENDS)}")
+
+
+def get_precision(cfg: dict) -> str:
+    """Training/inference precision from `training.precision`, default 'bf16'."""
+    prec = ((cfg.get("training", {}) or {}).get("precision") or "bf16").lower()
+    if prec not in SUPPORTED_PRECISIONS:
+        raise ValueError(
+            f"Unknown precision '{prec}'. Supported: {', '.join(SUPPORTED_PRECISIONS)}")
+    return prec
 
 
 def load_tokenizer_info(path: str = TOKENIZER_INFO) -> Optional[dict]:

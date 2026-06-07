@@ -7,7 +7,7 @@ AUDIO_VOCAB_SIZE (~25 tokens/sec). Indices occupy the audio range of the unified
 vocabulary (offset applied by the perception layer / caller).
 
 This keeps the project self-contained and torch-free. EnCodec (Meta) is a valid
-drop-in alternative if you prefer a pretrained codec — see GUIDE.md.
+drop-in alternative if you prefer a pretrained codec — see docs/GUIDE.md.
 
 Train with: python scripts/train_audio_tokenizer.py
 """

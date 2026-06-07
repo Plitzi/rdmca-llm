@@ -41,10 +41,11 @@ import mlx.optimizers as optim
 from mlx.utils import tree_flatten
 
 sys.path.insert(0, str(Path(__file__).parent))
-from src.model.transformer import RDMCAFoundational, ModelConfig
+from src.model.transformer import RDMCAFoundational, ModelConfig, set_model_precision
 from src.modalities.text import TextTokenizer
 from src.data.loader import DataLoader
 from src.training.dashboard import TrainingDashboard
+from src.config import require_backend, get_precision
 
 
 # ---------------------------------------------------------------------------
@@ -296,9 +297,11 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     model_cfg = ModelConfig(**{k: v for k, v in mcfg.items()
                                if k in ModelConfig.__dataclass_fields__})
     model = RDMCAFoundational(model_cfg)
+    precision = get_precision(cfg)
+    set_model_precision(model, precision)
     print(f"  Model: {model.count_params()/1e6:.1f}M params | "
           f"d_model={model_cfg.d_model} | layers={model_cfg.n_layers} | "
-          f"vocab={model_cfg.vocab_size}")
+          f"vocab={model_cfg.vocab_size} | precision={precision}")
 
     # Load previous stage weights as starting point (stages 2-5)
     if stage > 1:
@@ -320,7 +323,11 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     if resume:
         start_step, tokens_seen = load_checkpoint(model, ckpt_dir)
 
-    # Real data loader (falls back to dummy if data not ready)
+    # Re-apply precision: loading prev-stage / resume weights restores their
+    # saved dtype, so cast once more before training in the configured precision.
+    set_model_precision(model, precision)
+
+    # Real data loader
     data_loader = build_data_loader(stage, cfg)
 
     # Derived constants
@@ -478,8 +485,10 @@ Examples:
     if args.profile:
         args.config = f"configs/profiles/{args.profile}.yaml"
     cfg = load_config(args.config)
+    require_backend(cfg)              # mlx only for now; torch errors clearly
     print(f"  Profile: {cfg.get('profile', '(custom)')} | "
-          f"tier: {cfg.get('tier', '?')} | config: {args.config}")
+          f"tier: {cfg.get('tier', '?')} | backend: {cfg.get('backend', 'mlx')} | "
+          f"config: {args.config}")
 
     # Prerequisite check
     if args.stage > 1:
@@ -507,7 +516,7 @@ Examples:
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print(f"  Options: extend corpus, adjust thresholds, or --resume")
-        print(f"  See: GUIDE.md")
+        print(f"  See: docs/GUIDE.md")
 
 
 if __name__ == "__main__":

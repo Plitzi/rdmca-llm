@@ -11,6 +11,31 @@ from typing import List, Optional
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from mlx.utils import tree_map
+
+
+# Compute precision (training & inference). bf16 is the paper default; fp16 is
+# fastest for quick tests (no loss-scaling — use for smoke runs, not gates).
+PRECISION_DTYPES = {
+    "fp32": mx.float32,
+    "bf16": mx.bfloat16,
+    "fp16": mx.float16,
+}
+_FLOAT_DTYPES = (mx.float32, mx.bfloat16, mx.float16)
+
+
+def set_model_precision(model: nn.Module, precision: str) -> None:
+    """Cast all float parameters of a module to the given precision in place.
+    Integer params (none in this model) and non-arrays are left untouched."""
+    dtype = PRECISION_DTYPES[precision]
+
+    def _cast(p):
+        if isinstance(p, mx.array) and p.dtype in _FLOAT_DTYPES:
+            return p.astype(dtype)
+        return p
+
+    model.update(tree_map(_cast, model.parameters()))
+    mx.eval(model.parameters())
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +78,10 @@ def apply_rope(x: mx.array, freqs: mx.array) -> mx.array:
     half = D // 2
     x1 = x[..., :half]
     x2 = x[..., half:]
-    cos = mx.cos(freqs)[None, :S, None, :]   # [1, S, 1, half]
-    sin = mx.sin(freqs)[None, :S, None, :]
+    # cos/sin are computed in fp32; cast to x.dtype so low-precision (bf16/fp16)
+    # activations are not silently promoted back to fp32 here.
+    cos = mx.cos(freqs)[None, :S, None, :].astype(x.dtype)   # [1, S, 1, half]
+    sin = mx.sin(freqs)[None, :S, None, :].astype(x.dtype)
     rotated = mx.concatenate([x1 * cos - x2 * sin,
                                x1 * sin + x2 * cos], axis=-1)
     return rotated
@@ -142,8 +169,8 @@ class CausalSelfAttention(nn.Module):
         # Scaled dot-product attention
         attn = (q @ k.transpose(0, 1, 3, 2)) * self.scale  # [B, H, S, S]
 
-        # Causal mask
-        causal = mx.triu(mx.full((S, S), -1e9), k=1)
+        # Causal mask (match attn dtype so bf16/fp16 stays low-precision here)
+        causal = mx.triu(mx.full((S, S), -1e9), k=1).astype(attn.dtype)
         attn = attn + causal[None, None, :, :]
 
         if mask is not None:

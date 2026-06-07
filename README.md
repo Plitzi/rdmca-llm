@@ -1,57 +1,60 @@
 # RDMCA — Relevance-Driven Modular Cognitive Architecture
 
-**Apple MLX · idiomas configurables · multimodal (texto + imagen + audio) · currículum de 5 stages**
+**Apple MLX · configurable languages · multimodal (text + image + audio) · 5-stage curriculum**
 
-Modelo de lenguaje adaptativo entrenado desde cero: un *core* cognitivo que se
-congela permanentemente + sectores LoRA modulares que aprenden a diario por
-**consolidación** de experiencias reales. Texto, imagen y audio comparten un único
-espacio de tokens (Era 3b). Behavioral Constraint Function (BCF) integrada.
+An adaptive language model trained from scratch: a cognitive *core* that is frozen
+permanently + modular LoRA sectors that keep learning daily through **consolidation** of
+real experiences. Text, image and audio share a single token space (Era 3b). Behavioral
+Constraint Function (BCF) built in.
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. Entorno
+# 1. Environment
 /opt/homebrew/bin/python3.10 -m venv .venv && source .venv/bin/activate
 pip install mlx mlx-lm sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
 
-# 2. Probar TODO el pipeline real con poca data (~10 min, perfil `test`)
+# 2. Exercise the WHOLE real pipeline on a little data (~10 min, `test` profile)
 python scripts/prepare_data.py    --profile test --stage 1 --limit 50
 python scripts/train_tokenizer.py --profile test --vocab_size 8000 --sample_mb 20
 python train_stage.py             --profile test --stage 1
 python chat.py                    --profile test --stage 1
 ```
 
-➡️ **Guía completa, paso a paso: [GUIDE.md](GUIDE.md)** (setup → idiomas → datos →
-tokenizers → 5 stages → freeze/BCF → chat texto/imagen/audio → consolidación diaria).
+➡️ **Full step-by-step guide: [docs/GUIDE.md](docs/GUIDE.md)** (setup → backend/precision
+→ languages → data → tokenizers → 5 stages → freeze/BCF → chat text/image/audio → daily
+consolidation).
 
 ---
 
-## El modelo en un vistazo
+## The model at a glance
 
 | | |
 |---|---|
-| Arquitectura | Decoder-only · RoPE · RMSNorm · SwiGLU · MRL |
-| Core congelable | foundational (Θ_F) + 7 sectores LoRA |
-| Idiomas | **configurables** (`model.languages`), por defecto EN+ES |
-| Multimodal | texto ∪ imagen (VQ-VAE) ∪ audio (VQ-VAE log-mel), vocab unificado |
-| Currículum | 5 stages → core congelado → consolidación diaria |
-| Seguridad | BCF + taxonomía de ataques (filtro adversarial en consolidación) |
+| Architecture | Decoder-only · RoPE · RMSNorm · SwiGLU · MRL |
+| Freezable core | foundational (Θ_F) + 7 LoRA sectors |
+| Backend | `mlx` (PyTorch backend selectable in config, not implemented yet) |
+| Precision | `fp32 / bf16 / fp16` (`training.precision`, default bf16) |
+| Languages | **configurable** (`model.languages`), EN+ES by default |
+| Multimodal | text ∪ image (VQ-VAE) ∪ audio (log-mel VQ-VAE), unified vocab |
+| Curriculum | 5 stages → frozen core → daily consolidation |
+| Safety | BCF + attack taxonomy (adversarial filter in consolidation) |
 | Hardware | Apple MLX (M-series) |
 
-Perfiles de hardware en `configs/profiles/`: `test` (smoke), `nano` (~26M),
+Hardware profiles in `configs/profiles/`: `test` (smoke), `nano` (~26M),
 `m2max` (~109M), `a100`, `cluster`.
 
 ---
 
-## Documentación
+## Documentation
 
-| Doc | Contenido |
+| Doc | Contents |
 |---|---|
-| [GUIDE.md](GUIDE.md) | Guía única paso a paso (init → entrenar → usar → consolidar) |
-| [docs/reference/architecture.md](docs/reference/architecture.md) | Modelo, sectores, vocab unificado, estructura, migración T3/T4 |
-| [docs/papers/](docs/papers/) | Paper teórico + guía de implementación (referencia) |
+| [docs/GUIDE.md](docs/GUIDE.md) | Single step-by-step guide (init → train → use → consolidate) |
+| [docs/reference/architecture.md](docs/reference/architecture.md) | Model, sectors, unified vocab, structure, scaling |
+| [docs/papers/](docs/papers/) | Theory paper + implementation guide (reference) |
 
 ## Tests
 

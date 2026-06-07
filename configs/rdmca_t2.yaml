@@ -2,6 +2,8 @@
 # d_model=256, bilingual EN+ES
 # vocab_size=65536 per Implementation Guide §7.7 (multilingual)
 
+backend: mlx          # mlx | torch  (torch backend not implemented yet)
+
 model:
   d_model: 256
   n_layers: 8
@@ -15,6 +17,7 @@ model:
   languages: ["en", "es"]
 
 training:
+  precision: bf16     # fp32 | bf16 | fp16  (lower = faster, fp16 for quick tests)
   lr: 3.0e-4
   lr_min: 3.0e-5
   weight_decay: 0.1

@@ -46,9 +46,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.model.transformer import RDMCAFoundational, ModelConfig
+from src.model.transformer import RDMCAFoundational, ModelConfig, set_model_precision
 from src.modalities.text import TextTokenizer
 from src.memory.experience_log import log_experience
+from src.config import require_backend, get_precision, load_config
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -122,9 +123,9 @@ def generate(model: RDMCAFoundational,
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
-    import yaml
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
+    require_backend(cfg)              # mlx only for now; torch errors clearly
+    precision = get_precision(cfg)
 
     model_dict = dict(cfg["model"])
     # Sync vocab_size with trained tokenizer if available
@@ -144,6 +145,7 @@ def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
         dummy = mx.array(np.zeros((1, 2), dtype=np.int32))
         _ = model(dummy)
         mx.eval(model.parameters())
+        set_model_precision(model, precision)
         print("  [dummy mode] Random weights — output will be gibberish.")
         print("  Run training first to get meaningful generations.\n")
         return model, mcfg
@@ -186,6 +188,7 @@ def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
     weights = mx.load(str(ckpt_path))
     model.load_weights(list(weights.items()))
     mx.eval(model.parameters())
+    set_model_precision(model, precision)    # cast to configured inference precision
     return model, mcfg
 
 
