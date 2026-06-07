@@ -48,8 +48,10 @@ class TextDataset:
             self.rng.shuffle(files)
         return files
 
-    def _iter_texts(self) -> Iterator[str]:
-        """Yield raw text strings from all files in the data directory."""
+    def _iter_records(self) -> Iterator[dict]:
+        """Yield records from all files. JSONL rows are dicts; TXT lines become
+        {"text": line}. A record may carry pre-tokenized multimodal ids under
+        "tokens" (unified vocab) instead of "text"."""
         files = list(self._files)
         if self.shuffle:
             self.rng.shuffle(files)
@@ -61,20 +63,25 @@ class TextDataset:
                         continue
                     if path.suffix == ".jsonl":
                         try:
-                            rec = json.loads(line)
-                            yield rec.get("text", "")
+                            yield json.loads(line)
                         except json.JSONDecodeError:
                             continue
                     else:
-                        yield line
+                        yield {"text": line}
 
     def _iter_tokens(self) -> Iterator[int]:
-        """Yield individual token IDs from the full corpus."""
-        for text in self._iter_texts():
+        """Yield token IDs from the full corpus (text or pre-tokenized multimodal)."""
+        for rec in self._iter_records():
+            tokens = rec.get("tokens")
+            if tokens:
+                yield from tokens
+                continue
+            text = rec.get("text", "")
             if not text.strip():
                 continue
             try:
-                ids = self.tokenizer.encode(text, add_bos=True, add_eos=True)
+                ids = self.tokenizer.encode(
+                    text, lang=rec.get("lang", "en"), add_bos=True, add_eos=True)
                 yield from ids
             except Exception:
                 continue
@@ -101,10 +108,7 @@ class TextDataset:
 
 
 class DataLoader:
-    """
-    Wraps TextDataset with token counting and progress tracking.
-    Drop-in replacement for dummy_batch() in train_stage.py.
-    """
+    """Wraps TextDataset with token counting; yields fixed-shape batches."""
 
     def __init__(self, dataset: TextDataset):
         self._ds       = dataset

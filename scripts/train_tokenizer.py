@@ -21,7 +21,12 @@ import os
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.config import resolve_config_path, load_config, get_languages
+from src.modalities.vocab import MODALITY_SPECIALS, build_modality_layout
 
 from rich.console import Console
 from collections import deque
@@ -107,19 +112,23 @@ def build_text_sample(data_dir, label: str, out_txt: str,
 # ──────────────────────────────────────────────────────────────────────────────
 
 def train_spm(combined_input: str, prefix: str,
-              vocab_size: int, bilingual: bool, num_threads: int) -> None:
+              vocab_size: int, langs: list, num_threads: int) -> None:
     """
     Run SentencePiece in a subprocess (avoids GIL freeze).
     Captures stdout+stderr and shows the last 5 lines in the live panel.
+
+    User-defined symbols are derived from the configured languages
+    (`<lang:XX>`) plus the multimodal boundary tokens, so the vocabulary always
+    matches the project's language selection.
     """
     import json as _json, queue, subprocess, tempfile, threading
 
+    user_symbols = [f"<lang:{l}>" for l in langs] + list(MODALITY_SPECIALS)
     params = dict(
         input=combined_input, model_prefix=prefix, vocab_size=vocab_size,
         character_coverage=0.9999, model_type="bpe",
         pad_id=0, unk_id=1, bos_id=2, eos_id=3,
-        user_defined_symbols=["<lang:en>","<lang:es>","<lang:fr>",
-                               "<lang:de>","<lang:zh>","<lang:ja>","<lang:ar>"],
+        user_defined_symbols=user_symbols,
         num_threads=num_threads,
     )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -133,7 +142,7 @@ def train_spm(combined_input: str, prefix: str,
         f"import os; os.unlink({repr(params_file)})\n"
     )
 
-    lang_label = "EN+ES" if bilingual else "monolingual"
+    lang_label = "+".join(l.upper() for l in langs)
     task = progress.add_task(
         f"Training BPE  vocab={vocab_size}  {lang_label}  {num_threads} threads",
         total=None, info="",
@@ -179,18 +188,19 @@ def train_spm(combined_input: str, prefix: str,
 # Summary panel
 # ──────────────────────────────────────────────────────────────────────────────
 
-def show_summary(prefix: str, vocab_size: int,
-                 output_dir: str, tests: list[tuple]) -> None:
+def show_summary(prefix: str, vocab_size: int, unified_size: int,
+                 langs: list, output_dir: str, tests: list[tuple]) -> None:
     model_size = Path(prefix + ".model").stat().st_size / 1024
 
     tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     tbl.add_column("key",   style="bold cyan",  no_wrap=True, width=18)
     tbl.add_column("value", style="white")
 
-    tbl.add_row("Output",     str(Path(output_dir)))
-    tbl.add_row("Model size", f"{model_size:.0f} KB")
-    tbl.add_row("Vocab size", str(vocab_size))
-    tbl.add_row("Languages",  "EN + ES")
+    tbl.add_row("Output",       str(Path(output_dir)))
+    tbl.add_row("Model size",   f"{model_size:.0f} KB")
+    tbl.add_row("Text vocab",   str(vocab_size))
+    tbl.add_row("Unified vocab", f"{unified_size}  (text + image + audio)")
+    tbl.add_row("Languages",    " + ".join(l.upper() for l in langs))
 
     tbl.add_row("", "")
     tbl.add_row("Verification", "")
@@ -210,9 +220,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir",   default="data/stage1_language")
     parser.add_argument("--output_dir", default="dist/tokenizer")
+    parser.add_argument("--config",     default=None,
+                        help="Config path (languages source of truth)")
+    parser.add_argument("--profile",    default=None,
+                        help="Hardware profile: nano | m2max | test | …")
+    parser.add_argument("--lang",       default=None,
+                        help="Comma-separated override of config languages")
     parser.add_argument("--vocab_size", type=int, default=65536)
     parser.add_argument("--sample_mb",  type=int, default=500)
     args = parser.parse_args()
+
+    # Languages: --lang override > config(model.languages) > ['en']
+    cfg = load_config(resolve_config_path(args.config, args.profile))
+    langs = ([l.strip() for l in args.lang.split(",")] if args.lang
+             else get_languages(cfg))
+    console.print(f"  Languages: {', '.join(langs)}")
 
     data_dir = Path(args.data_dir)
     if not any(data_dir.glob("*.jsonl")):
@@ -230,16 +252,16 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     prefix = str(Path(args.output_dir) / "rdmca_spm")
 
-    en_files = list(data_dir.glob("*_en.jsonl"))
-    es_files = list(data_dir.glob("*_es.jsonl"))
-    if not en_files and not es_files:
-        en_files = list(data_dir.glob("*.jsonl"))
-        es_files = []
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    langs_to_build = [(l, f) for l, f in [("EN", en_files), ("ES", es_files)] if f]
+    # One sample stream per configured language (files tagged *_<lang>.jsonl).
+    # If no per-language files exist, fall back to all jsonl under the first lang.
+    langs_to_build = []
+    for lang in langs:
+        files = list(data_dir.glob(f"*_{lang}.jsonl"))
+        if files:
+            langs_to_build.append((lang, files))
     if not langs_to_build:
+        langs_to_build = [(langs[0], list(data_dir.glob("*.jsonl")))]
+    if not any(f for _, f in langs_to_build):
         console.print("[red]ERROR:[/red] No language files found.")
         sys.exit(1)
 
@@ -292,25 +314,51 @@ def main():
                 )
 
             # ── Phase 2: train BPE (spinner in same live display) ─────────────
+            built_langs = [l for l, _ in langs_to_build]
             train_spm(combined_input, prefix, vocab_size,
-                      bilingual=len(tmp_paths) > 1,
+                      langs=built_langs,
                       num_threads=os.cpu_count() or 4)
 
-            # ── Save tokenizer_info.json ──────────────────────────────────────
-            with open(Path(args.output_dir) / "tokenizer_info.json", "w") as f:
-                json.dump({"vocab_size": vocab_size,
-                           "model": prefix + ".model"}, f)
-
-            # ── Phase 3: verify ───────────────────────────────────────────────
+            # ── Phase 3: load model, build unified vocab metadata ─────────────
             sp = spm.SentencePieceProcessor()
             sp.Load(prefix + ".model")
-            for lang, text in [
-                ("en", "The quick brown fox jumps over the lazy dog."),
-                ("es", "El zorro marrón rápido salta sobre el perro perezoso."),
-                ("es", "La matemática es el lenguaje en que está escrito el universo."),
-            ]:
-                enc = sp.EncodeAsIds(text)
-                dec = sp.DecodeIds(enc)
+            text_vocab = sp.GetPieceSize()
+            layout     = build_modality_layout(text_vocab)
+
+            lang_token_ids = {l: sp.PieceToId(f"<lang:{l}>") for l in built_langs}
+            modality_tokens = {
+                "mod_text":  sp.PieceToId("<mod:text>"),
+                "mod_image": sp.PieceToId("<mod:image>"),
+                "mod_audio": sp.PieceToId("<mod:audio>"),
+                "mod_end":   sp.PieceToId("<mod_end>"),
+            }
+
+            # Unified vocab_size spans text ∪ image ∪ audio so the model's
+            # embedding table covers every modality from the start.
+            with open(Path(args.output_dir) / "tokenizer_info.json", "w") as f:
+                json.dump({
+                    "vocab_size": layout["total"],
+                    "text_vocab_size": text_vocab,
+                    "model": prefix + ".model",
+                    "languages": built_langs,
+                    "lang_token_ids": lang_token_ids,
+                    "modality_tokens": modality_tokens,
+                    "modality_layout": layout,
+                }, f, indent=2)
+
+            unified_size = layout["total"]
+
+            # ── Verify round-trip per configured language ─────────────────────
+            samples = {
+                "en": "The quick brown fox jumps over the lazy dog.",
+                "es": "El zorro marrón rápido salta sobre el perro perezoso.",
+                "fr": "Le rapide renard brun saute par-dessus le chien paresseux.",
+                "de": "Der schnelle braune Fuchs springt über den faulen Hund.",
+            }
+            for lang in built_langs:
+                text = samples.get(lang, "Hello world, 123.")
+                enc  = sp.EncodeAsIds(text)
+                dec  = sp.DecodeIds(enc)
                 results.append((lang, text, len(enc), dec.strip() == text.strip()))
 
         finally:
@@ -319,9 +367,8 @@ def main():
                     os.unlink(p)
 
     console.print()
-    show_summary(prefix, vocab_size, args.output_dir, results)
-    console.print("\nNext: [bold]python train_stage.py --stage 1 "
-                  "--config configs/rdmca_t2.yaml[/bold]")
+    show_summary(prefix, vocab_size, unified_size, built_langs, args.output_dir, results)
+    console.print("\nNext: [bold]python train_stage.py --stage 1[/bold]")
 
 
 if __name__ == "__main__":

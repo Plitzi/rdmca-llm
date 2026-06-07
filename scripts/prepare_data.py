@@ -6,14 +6,15 @@ if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(
     os.execv(_venv, [_venv] + sys.argv)
 
 """
-RDMCA Data Preparation Script — Bilingual EN + ES
-===================================================
-Downloads and processes all 5 curriculum stage datasets.
-Output: data/stage{N}_*/  in .jsonl format  {"text": "...", "lang": "en"|"es"}
+RDMCA Data Preparation Script — config-driven language set
+===========================================================
+Downloads and processes all 5 curriculum stage datasets for the languages in
+the config (`model.languages`), or a `--lang` override.
+Output: data/stage{N}_*/  in .jsonl format  {"text": "...", "lang": "<code>"}
 
 Strategy
 --------
-Wikipedia EN + ES are the backbone for all stages.
+Wikipedia (one dump per configured language) is the backbone for all stages.
 Each article is tagged with its language and routed to the correct stage
 by category keywords (bilingual — same keywords trigger in both languages).
 Small task-specific datasets are mixed in for domain-specific stages.
@@ -41,6 +42,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Iterator, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 TOKEN_BUDGET_M = {1: 1500, 2: 500, 3: 1000, 4: 1000, 5: 500}
 
@@ -345,16 +348,13 @@ def prepare_stage(stage: int, langs: List[str],
     out_dir = dir_map[stage]
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Budget split: EN gets 60%, ES gets 40% of the total token target
-    budget_per_lang = {
-        "en": int(budget * 0.60),
-        "es": int(budget * 0.40),
-    }
+    # Budget split: equitable across the configured languages.
+    per_lang = budget // max(len(langs), 1)
 
     # Wikipedia per language
     for lang in langs:
         wiki_path   = out_dir / f"wikipedia_{lang}.jsonl"
-        lang_budget = budget_per_lang.get(lang, budget // len(langs))
+        lang_budget = per_lang
 
         ok, reason = _validate_jsonl(wiki_path, lang_budget)
         if ok:
@@ -375,46 +375,56 @@ def prepare_stage(stage: int, langs: List[str],
         tokens = write_jsonl(filtered_wiki(), wiki_path, lang_budget)
         print(f"  Wikipedia {lang.upper()}: {tokens/1e6:.0f}M tokens → {wiki_path}")
 
-    # Stage-specific task datasets
-    if stage == 2:
+    # Stage-specific task datasets (only the ones matching configured languages).
+    if stage == 2 and "en" in langs:
         arc_path = out_dir / "arc_en.jsonl"
         if not arc_path.exists():
             tokens = write_jsonl(stream_arc(), arc_path, 10)
             print(f"  ARC (EN): {tokens/1e6:.2f}M tokens → {arc_path}")
 
-    if stage == 3:
-        gsm_path = out_dir / "gsm8k_bilingual.jsonl"
+    if stage == 3 and ("en" in langs or "es" in langs):
+        gsm_path = out_dir / "gsm8k_tasks.jsonl"
         if not gsm_path.exists():
             tokens = write_jsonl(stream_gsm8k_bilingual(), gsm_path, 10)
-            print(f"  GSM8K EN+ES: {tokens/1e6:.2f}M tokens → {gsm_path}")
+            print(f"  GSM8K tasks: {tokens/1e6:.2f}M tokens → {gsm_path}")
 
-        math_path = out_dir / "competition_math_en.jsonl"
-        if not math_path.exists():
-            tokens = write_jsonl(stream_math(), math_path, 20)
-            print(f"  MATH (EN): {tokens/1e6:.2f}M tokens → {math_path}")
+        if "en" in langs:
+            math_path = out_dir / "competition_math_en.jsonl"
+            if not math_path.exists():
+                tokens = write_jsonl(stream_math(), math_path, 20)
+                print(f"  MATH (EN): {tokens/1e6:.2f}M tokens → {math_path}")
 
-    if stage == 5:
-        ethics_path = out_dir / "ethics_bilingual.jsonl"
+    if stage == 5 and ("en" in langs or "es" in langs):
+        ethics_path = out_dir / "ethics_tasks.jsonl"
         if not ethics_path.exists():
             tokens = write_jsonl(stream_ethics_bilingual(), ethics_path, 1)
-            print(f"  Ethics EN+ES: {tokens/1e6:.2f}M tokens → {ethics_path}")
+            print(f"  Ethics tasks: {tokens/1e6:.2f}M tokens → {ethics_path}")
 
     print(f"  Stage {stage} data ready in {out_dir}/")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="RDMCA Bilingual Data Preparation")
+    parser = argparse.ArgumentParser(description="RDMCA curriculum data preparation")
     parser.add_argument("--stage", default="all",
                         help="Stage number (1-5) or 'all'")
-    parser.add_argument("--lang", default="en,es",
-                        help="Comma-separated language codes (default: en,es)")
+    parser.add_argument("--config", default=None,
+                        help="Config path (languages source of truth)")
+    parser.add_argument("--profile", default=None,
+                        help="Hardware profile: nano | m2max | test | …")
+    parser.add_argument("--lang", default=None,
+                        help="Comma-separated override of config languages")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit each Wikipedia stream to N MB (testing)")
     args = parser.parse_args()
 
     _setup_hf_token()
 
-    langs  = [l.strip() for l in args.lang.split(",")]
+    # Languages: --lang override > config(model.languages) > ['en']
+    from src.config import resolve_config_path, load_config, get_languages
+    if args.lang:
+        langs = [l.strip() for l in args.lang.split(",")]
+    else:
+        langs = get_languages(load_config(resolve_config_path(args.config, args.profile)))
     stages = list(range(1, 6)) if args.stage == "all" else [int(args.stage)]
 
     print(f"Languages: {langs}")

@@ -42,6 +42,8 @@ from src.consolidation.pgq import PGQ
 
 MIN_BATCH_PER_SECTOR = 8
 CONSOL_SEQ_LEN       = 128    # token length used for consolidation LM updates
+LTSS_DUPLICATE_COH   = 0.95  # cosine sim above which an experience is flagged
+DEFAULT_SECTOR       = 1     # fallback sector when routing is unavailable
 
 
 @dataclass
@@ -81,6 +83,8 @@ class ConsolidationPipeline:
                  adversarial_buffer: Optional[list] = None,
                  model=None,
                  tokenizer=None,
+                 semantic_router=None,
+                 sector_router=None,
                  lr: float = 1e-4):
         self.buffer       = buffer
         self.ltss         = ltss
@@ -94,6 +98,11 @@ class ConsolidationPipeline:
         self.adv_buffer   = adversarial_buffer if adversarial_buffer is not None else []
         self._cycle_history: List[AuditEntry] = []
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Optional routing components for sector assignment (step 6). When not
+        # provided, the pipeline falls back to exp.sector_assignment.
+        self.semantic_router = semantic_router
+        self.sector_router   = sector_router
 
         # Optional learning components. When `model` (with sectors attached)
         # and `tokenizer` are provided, the pipeline performs real masked
@@ -138,9 +147,17 @@ class ConsolidationPipeline:
                 scored.append((exp, score))
 
         # --- Step 4: LTSS consistency filter ---
+        # Flag near-duplicate / potentially-conflicting experiences (very high
+        # similarity to an existing LTSS node) for review; they still pass
+        # through so the MRF can decide redundancy vs. reinforcement.
         consistent: List[tuple] = []
         for exp, score in scored:
-            # TODO: compute KL divergence against LTSS representations
+            try:
+                coh = self.ltss.max_cosine_similarity(exp.embedding)
+            except Exception:
+                coh = 0.0
+            if coh >= LTSS_DUPLICATE_COH:
+                ltss_flagged += 1
             consistent.append((exp, score))
 
         # --- Step 5: MRF ---
@@ -159,8 +176,10 @@ class ConsolidationPipeline:
         # --- Step 6: Ambiguity scoring ---
         final: List[Experience] = []
         for exp in to_consolidate:
-            # TODO: get affinities from STR
-            affinities = [(exp.sector_assignment or 1, 0.8)]
+            affinities = self._sector_affinities(exp)
+            if self.sector_router is not None:
+                exp.sector_assignment = (self.sector_router.assign(affinities)
+                                         or exp.sector_assignment)
             verdict = self.ambiguity.handle(exp, affinities, cycle_id)
             if verdict == "clear":
                 final.append(exp)
@@ -218,10 +237,13 @@ class ConsolidationPipeline:
                 sectors_updated.append(sid)
 
         # --- Step 9: PGQ ---
+        busiest = (max(sector_groups, key=lambda s: len(sector_groups[s]))
+                   if sector_groups else DEFAULT_SECTOR)
         pgq_result = self.pgq.evaluate(
             cycle_id, saturation=0.0, exc_rate=0.0,
             pred_error=0.0, cluster_novel=0.0,
-            busiest_sector_id=1, sectors=self.sectors,
+            busiest_sector_id=busiest, sectors=self.sectors,
+            model=self.model,
         )
 
         # --- Audit log ---
@@ -260,7 +282,8 @@ class ConsolidationPipeline:
         pipeline-only mode), so consolidation never silently drops data in
         test/toy runs.
         """
-        if self.model is None or self.tokenizer is None or self.bcf is None:
+        if (self.model is None or self.tokenizer is None or self.bcf is None
+                or not getattr(self.tokenizer, "ready", False)):
             return True
         text = getattr(exp, "text", "") or ""
         if not text:
@@ -282,12 +305,27 @@ class ConsolidationPipeline:
             return self.model.sectors.get(sid)
         return self.sectors.get(sid)
 
+    def _sector_affinities(self, exp: Experience):
+        """Sector affinities for an experience (STR §12). Uses the semantic
+        router over the experience embedding when available; otherwise falls
+        back to the experience's pre-assigned sector."""
+        if self.semantic_router is not None and exp.embedding is not None:
+            from src.routing.semantic_router import Chunk
+            emb = mx.array(np.asarray(exp.embedding, dtype=np.float32))
+            chunk = Chunk(tokens=[], modality=exp.modality)
+            routed = self.semantic_router.route(chunk, emb)
+            if routed:
+                return routed
+        return [(exp.sector_assignment or DEFAULT_SECTOR, 1.0)]
+
     def _build_token_batch(self, group: List[Experience]):
         """
         Tokenize a group of experiences into a padded [B, CONSOL_SEQ_LEN+1]
         batch for the masked LM consolidation update. Returns None if no text
         is available to learn from.
         """
+        if not getattr(self.tokenizer, "ready", False):
+            return None
         L = CONSOL_SEQ_LEN + 1
         rows = []
         for exp in group:

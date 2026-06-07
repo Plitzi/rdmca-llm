@@ -309,6 +309,19 @@ class RDMCAFoundational(nn.Module):
             block.attn.layer_idx = i
             block.attn._sector_delta = self._compute_delta
 
+    def add_sector(self, sector_id: int, rank: int = 4):
+        """Instantiate and register a new adaptive sector at runtime (PGQ new
+        sector creation, §10.7.4). It participates in inference immediately
+        because _compute_delta reads self.sectors live."""
+        from src.model.lora import SectorAdapter, LoRAConfig
+        if self.sectors is None:
+            self.attach_sectors({})
+        adapter = SectorAdapter(LoRAConfig(
+            d_model=self.cfg.d_model, n_layers=len(self.blocks),
+            sector_id=sector_id, rank=rank))
+        self.sectors[sector_id] = adapter
+        return adapter
+
     def set_active_sectors(self, pairs) -> None:
         """Set which sectors contribute deltas: list of (sector_id, weight)."""
         self._routing.active = list(pairs) if pairs else []

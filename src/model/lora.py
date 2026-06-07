@@ -20,7 +20,7 @@ SECTORS: Dict[int, Dict] = {
     3: {"name": "WorldKnowledge","trigger": "factual, domain-specific, encyclopedic",      "rank": 8},
     4: {"name": "Procedural",    "trigger": "planning, tool use, sequential action",       "rank": 8},
     5: {"name": "Social",        "trigger": "pragmatics, intent, social norms",            "rank": 8},
-    6: {"name": "Multimodal",    "trigger": "cross-modal grounding (Phase 3+)",            "rank": 8},
+    6: {"name": "Multimodal",    "trigger": "cross-modal grounding (image/audio ↔ text)", "rank": 8},
     7: {"name": "Behavioral",    "trigger": "ethics, constraints — adversarial buffer ONLY","rank": 4},
 }
 
@@ -49,6 +49,24 @@ class LoRALinear(nn.Module):
     def __call__(self, x: mx.array) -> mx.array:
         return self.lora_B(self.lora_A(x)) * self.scale
 
+    def grow(self, delta: int) -> None:
+        """Increase rank by `delta`, preserving current output (PGQ expansion,
+        Guide §4.2 / GradMax-style): new A rows are small-random, new B columns
+        are zero, so the added components produce zero output at first."""
+        in_dim   = self.lora_A.weight.shape[1]
+        out_dim  = self.lora_B.weight.shape[0]
+        old_rank = self.lora_A.weight.shape[0]
+        new_rank = old_rank + delta
+        newA = mx.concatenate(
+            [self.lora_A.weight, mx.random.normal((delta, in_dim)) * 0.02], axis=0)
+        newB = mx.concatenate(
+            [self.lora_B.weight, mx.zeros((out_dim, delta))], axis=1)
+        self.lora_A = nn.Linear(in_dim, new_rank, bias=False)
+        self.lora_A.weight = newA
+        self.lora_B = nn.Linear(new_rank, out_dim, bias=False)
+        self.lora_B.weight = newB
+        self.scale = self.scale * old_rank / new_rank   # keep alpha/rank constant
+
 
 class SectorAdapter(nn.Module):
     """
@@ -74,6 +92,15 @@ class SectorAdapter(nn.Module):
     def delta(self, layer_idx: int, proj: str, x: mx.array) -> mx.array:
         """Return the LoRA delta for a specific projection in a specific layer."""
         return self.adapters[layer_idx][proj](x)
+
+    def grow_rank(self, delta: int) -> int:
+        """Grow every projection's LoRA rank by `delta` (PGQ sector expansion).
+        Returns the new rank."""
+        for layer in self.adapters:
+            for proj in layer.values():
+                proj.grow(delta)
+        self.rank += delta
+        return self.rank
 
 
 def build_all_sectors(d_model: int, n_layers: int) -> Dict[int, SectorAdapter]:

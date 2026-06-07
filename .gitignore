@@ -16,6 +16,7 @@ dist/checkpoints/**/*.json
 dist/tokenizer/*.model
 dist/tokenizer/*.vocab
 dist/tokenizer/tokenizer_info.json
+dist/tokenizer/*vqvae*          # image/audio VQ-VAE tokenizers
 
 # ── Training data (large downloads) ───────────────────────────────────────────
 data/stage1_language/*.jsonl
@@ -29,6 +30,8 @@ logs/*.log
 logs/*.json
 dist/snapshots/*.npz
 dist/snapshots/*.json
+data/ltss.db                    # long-term semantic store (consolidation)
+data/experiences.jsonl          # experience queue (chat → daemon)
 
 # ── macOS ──────────────────────────────────────────────────────────────────────
 .DS_Store

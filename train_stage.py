@@ -43,7 +43,7 @@ from mlx.utils import tree_flatten
 sys.path.insert(0, str(Path(__file__).parent))
 from src.model.transformer import RDMCAFoundational, ModelConfig
 from src.modalities.text import TextTokenizer
-from src.data.loader import DataLoader, TextDataset
+from src.data.loader import DataLoader
 from src.training.dashboard import TrainingDashboard
 
 
@@ -119,45 +119,31 @@ def load_checkpoint(model, ckpt_dir: Path):
     return state["step"], state["tokens_seen"]
 
 
-def dummy_batch(vocab_size: int, seq_len: int, batch_size: int) -> mx.array:
-    """Fallback when tokenizer or data is not yet available."""
-    return mx.array(np.random.randint(1, vocab_size, (batch_size, seq_len + 1)))
-
-
-def build_data_loader(stage: int, cfg: dict):
+def build_data_loader(stage: int, cfg: dict) -> DataLoader:
     """
-    Try to build a real DataLoader from stage data.
-    Falls back to dummy_batch if data or tokenizer is missing.
+    Build a real DataLoader from stage data. Exits with actionable instructions
+    if the tokenizer or the stage corpus is missing (no random-batch fallback).
     """
     tokenizer = TextTokenizer()
     if not tokenizer.ready:
-        print("  [data] Tokenizer not found — using dummy batches.")
-        print("         Run: python scripts/train_tokenizer.py")
-        return None
-
-    stage_dirs = {
-        1: "data/stage1_language",
-        2: "data/stage2_patterns",
-        3: "data/stage3_abstraction",
-        4: "data/stage4_causal",
-        5: "data/stage5_ethics",
-    }
-    data_dir = stage_dirs[stage]
+        print("ERROR: tokenizer not found at dist/tokenizer/rdmca_spm.model")
+        print("  Run: python scripts/train_tokenizer.py --profile <profile>")
+        sys.exit(1)
     try:
         loader = DataLoader.from_config(stage, cfg, tokenizer)
+        data_dir = list(cfg["curriculum"].values())[stage - 1].get("data_dir")
         print(f"  [data] Real data loader: {data_dir}")
         return loader
     except FileNotFoundError as e:
-        print(f"  [data] {e}")
-        print(f"         Run: python scripts/prepare_data.py --stage {stage}")
-        return None
+        print(f"ERROR: {e}")
+        print(f"  Run: python scripts/prepare_data.py --stage {stage} "
+              f"--profile {cfg.get('profile', '')}".rstrip())
+        sys.exit(1)
 
 
 def validation_perplexity(model: RDMCAFoundational,
                           data_loader, n_batches: int = 8) -> float:
-    """Mean validation perplexity over n held-out batches. inf if no data."""
-    if data_loader is None:
-        return float("inf")
+    """Mean validation perplexity over n held-out batches."""
     losses = []
     for _ in range(n_batches):
         batch = data_loader.next_batch()
@@ -365,8 +351,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                              resume_tokens=tokens_seen)
 
     with dash:
-        dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | "
-                   f"{'real data' if data_loader else 'dummy batches'}")
+        dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
 
         while tokens_seen < n_tokens_target:
             # Update learning rate
@@ -378,10 +363,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             acc_loss = 0.0
             grads = None
             for _ in range(grad_acc):
-                if data_loader is not None:
-                    batch = data_loader.next_batch()
-                else:
-                    batch = dummy_batch(model_cfg.vocab_size, seq_len, bs)
+                batch = data_loader.next_batch()
                 loss, g = loss_and_grad_fn(model, batch)
                 mx.eval(loss)
                 acc_loss += loss.item()
@@ -443,20 +425,26 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                        acc_loss / grad_acc, ckpt_dir)
 
         if skip_gate:
-            # Toy / smoke-test run — gate not required
+            # Smoke-test run (e.g. profile=test) — graduation gate not required
             ckpt_file = str(ckpt_dir / f"step_{step:08d}.npz")
             with open(ckpt_dir / "stage_complete.json", "w") as f:
                 json.dump({"stage": stage, "step": step,
                            "tokens_seen": tokens_seen, "gate_score": None,
                            "checkpoint": ckpt_file,
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
-            dash.print(f"[bold green]Stage {stage} COMPLETE (toy run — gate skipped)[/bold green]")
+            dash.print(f"[bold green]Stage {stage} COMPLETE (gate skipped)[/bold green]")
+            if stage == 5:
+                train_bcf_head(model, ckpt_dir)
+                freeze_model(model, root / "foundational")
             return True
 
         score, passed = evaluate_gate(model, stage, data_loader, cfg)
         dash.set_gate_result(score, passed)
         if passed:
             dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")
+            if stage == 5:
+                train_bcf_head(model, ckpt_dir)
+                freeze_model(model, root / "foundational")
         else:
             dash.print(f"Budget exhausted. Gate: {score:.4f} "
                        f"(need {STAGE_GATES[stage][1]:.2f}) — run --resume to continue")
@@ -505,20 +493,21 @@ Examples:
     passed = train_stage(args.stage, cfg, resume=args.resume)
 
     skip_gate = cfg.get("skip_gate", False)
+    prof_flag = f" --profile {args.profile}" if args.profile else f" --config {args.config}"
     if passed:
         if skip_gate:
-            print(f"\nToy Stage {args.stage} complete. Pipeline verified.")
-            print(f"Next: python chat.py --stage {args.stage}")
+            print(f"\nStage {args.stage} complete (smoke test). Pipeline verified.")
+            print(f"Next: python chat.py{prof_flag} --stage {args.stage}")
         elif args.stage < 5:
             nxt = args.stage + 1
-            print(f"\nNext: python train_stage.py --stage {nxt} --config {args.config}")
+            print(f"\nNext: python train_stage.py{prof_flag} --stage {nxt}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
-            print("Next: run consolidation_daemon.py to begin daily learning.")
+            print(f"Next: python consolidation_daemon.py{prof_flag} --once")
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print(f"  Options: extend corpus, adjust thresholds, or --resume")
-        print(f"  See: docs/guides/training.md")
+        print(f"  See: GUIDE.md")
 
 
 if __name__ == "__main__":

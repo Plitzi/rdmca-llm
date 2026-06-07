@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.model.transformer import RDMCAFoundational, ModelConfig
 from src.modalities.text import TextTokenizer
+from src.memory.experience_log import log_experience
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -209,7 +210,8 @@ def chat_loop(model: RDMCAFoundational, mcfg: ModelConfig,
     temperature = args.temp
     top_p       = args.topp
     max_tokens  = args.maxtok
-    history: list[int] = []    # accumulated token IDs for context
+    # Seed context with the multimodal grounding prefix (image/audio), if any.
+    history: list[int] = list(getattr(args, "mm_prefix", []) or [])
     last_stats: dict   = {}
 
     tok_ready = tokenizer.ready
@@ -322,6 +324,10 @@ def chat_loop(model: RDMCAFoundational, mcfg: ModelConfig,
             "temperature": temperature, "top_p": top_p,
         }
 
+        # Record the interaction as an experience for daily consolidation.
+        if tok_ready:
+            log_experience(prompt, lang=lang, modality="text")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Entry point
@@ -348,8 +354,12 @@ Examples:
                         help="Path to a specific .npz checkpoint")
     parser.add_argument("--dummy",      action="store_true",
                         help="Use random weights (no checkpoint needed)")
-    parser.add_argument("--lang",       default="en", choices=["en", "es"],
-                        help="Starting language (default: en)")
+    parser.add_argument("--image",      type=str, default=None,
+                        help="Image file to ground the conversation on (multimodal)")
+    parser.add_argument("--audio",      type=str, default=None,
+                        help="Audio file to ground the conversation on (multimodal)")
+    parser.add_argument("--lang",       default="en",
+                        help="Starting language code (default: en)")
     parser.add_argument("--temp",       type=float, default=0.8,
                         help="Sampling temperature (default: 0.8)")
     parser.add_argument("--topp",       type=float, default=0.9,
@@ -373,6 +383,24 @@ Examples:
     print(f"  d_model={mcfg.d_model} | vocab={mcfg.vocab_size} | "
           f"layers={mcfg.n_layers} | context={mcfg.context_len}")
     print(f"  Tokenizer: {'ready' if tokenizer.ready else 'NOT trained yet'}")
+
+    # Optional multimodal grounding prefix (image/audio) via the perception layer.
+    args.mm_prefix = []
+    if args.image or args.audio:
+        from src.modalities.perception import MultimodalPerception
+        mpl = MultimodalPerception(text_tok=tokenizer)
+        segments = []
+        if args.image:
+            segments.append(("image", args.image))
+        if args.audio:
+            segments.append(("audio", args.audio))
+        try:
+            args.mm_prefix = mpl.build_sequence(segments)
+            print(f"  Multimodal prefix: {len(args.mm_prefix)} tokens "
+                  f"({'image ' if args.image else ''}{'audio' if args.audio else ''})")
+        except RuntimeError as e:
+            print(f"  [multimodal] {e}")
+            sys.exit(1)
 
     chat_loop(model, mcfg, tokenizer, args)
 

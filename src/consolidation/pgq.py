@@ -29,8 +29,7 @@ import numpy as np
 THETA_STABLE  = 0.3
 THETA_EXPAND  = 0.5
 THETA_SECTOR  = 0.75
-MAX_RANK_GROW = 0.05    # 5% per cycle
-DELTA_RANK    = 2       # rank increment when expanding
+DELTA_RANK    = 2       # LoRA rank increment when expanding a sector
 
 
 PGQDecision = Literal["stable", "monitor", "expand", "new_sector"]
@@ -76,10 +75,12 @@ class PGQ:
                  pred_error: float,
                  cluster_novel: float,
                  busiest_sector_id: int,
-                 sectors: dict) -> PGQResult:
+                 sectors: dict,
+                 model=None) -> PGQResult:
         """
-        Evaluate growth necessity and return a decision.
-        sectors: {sector_id: SectorAdapter} — to apply rank increase.
+        Evaluate growth necessity and apply the resulting structural change.
+        sectors: {sector_id: SectorAdapter} (rank growth applied in place).
+        model:   RDMCAFoundational — required to instantiate a new sector.
         """
         score = self.gns(saturation, exc_rate, pred_error, cluster_novel)
 
@@ -94,33 +95,34 @@ class PGQ:
                                action_detail=f"observation cycle {cnt}/3")
 
         elif score < THETA_SECTOR:
-            # Expand: increase LoRA rank of highest-load sector
+            # Expand: grow LoRA rank of the highest-load sector in place.
             adapter = sectors.get(busiest_sector_id)
-            if adapter:
-                new_rank = min(
-                    adapter.rank + DELTA_RANK,
-                    int(adapter.rank * (1 + MAX_RANK_GROW)) + DELTA_RANK,
-                )
-                # TODO: grow rank in-place (requires re-init with new rank)
+            if adapter is not None:
+                old_rank = adapter.rank
+                new_rank = adapter.grow_rank(DELTA_RANK)
                 logging.info(f"PGQ: expand S{busiest_sector_id} rank "
-                             f"{adapter.rank} → {new_rank}")
+                             f"{old_rank} → {new_rank}")
                 result = PGQResult(cycle_id, score, "expand",
                                    sector_id=busiest_sector_id,
-                                   action_detail=f"rank → {new_rank}")
+                                   action_detail=f"rank {old_rank} → {new_rank}")
                 self._monitor_counts[busiest_sector_id] = 0
             else:
                 result = PGQResult(cycle_id, score, "monitor",
                                    action_detail="adapter not found")
 
         else:
-            # Create new sector
+            # Create a new adaptive sector at minimum viable rank (§10.7.4).
             new_sid = self._next_sector_id
             self._next_sector_id += 1
-            logging.info(f"PGQ: create new sector S{new_sid}")
-            # TODO: instantiate new SectorAdapter and register it
+            if model is not None and hasattr(model, "add_sector"):
+                model.add_sector(new_sid, rank=4)
+                sectors[new_sid] = model.sectors[new_sid]
+                detail = f"S{new_sid} created at rank 4"
+            else:
+                detail = f"S{new_sid} requested (no model to instantiate)"
+            logging.info(f"PGQ: {detail}")
             result = PGQResult(cycle_id, score, "new_sector",
-                               sector_id=new_sid,
-                               action_detail=f"S{new_sid} created at rank 4")
+                               sector_id=new_sid, action_detail=detail)
 
         self._history.append(result)
         return result

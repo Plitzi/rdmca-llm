@@ -19,6 +19,7 @@ import numpy as np
 SCHEMA_NODES = """
 CREATE TABLE IF NOT EXISTS ltss_nodes (
     id           TEXT PRIMARY KEY,
+    embedding    BLOB,          -- float32 vector bytes (emb_dim)
     content      TEXT,
     modality     TEXT,
     sector       TEXT,
@@ -79,36 +80,40 @@ class LTSS:
         self._rebuild_index()
 
     def _rebuild_index(self) -> None:
-        """Load all stored embeddings into the in-memory FAISS index."""
-        try:
-            import faiss
-            rows = self._conn.execute(
-                "SELECT id FROM ltss_nodes ORDER BY created_at"
-            ).fetchall()
-            # TODO: load embedding blobs and build faiss.IndexFlatIP index
-            self._faiss_index = None   # placeholder until FAISS is wired
-            self._ids = [r[0] for r in rows]
-        except ImportError:
-            self._faiss_index = None
+        """Load stored ids + embeddings on startup (persistence across restarts).
+        Vectors are searched brute-force in numpy (see search()), which stays
+        under the <10ms target at this scale; swap in FAISS here only if the
+        store grows past ~100k nodes."""
+        rows = self._conn.execute(
+            "SELECT id, embedding FROM ltss_nodes ORDER BY created_at"
+        ).fetchall()
+        self._ids = []
+        self._embeddings = []
+        for node_id, blob in rows:
+            self._ids.append(node_id)
+            if blob is not None:
+                self._embeddings.append(
+                    np.frombuffer(blob, dtype=np.float32).copy())
 
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
     def add(self, node: LTSSNode) -> None:
-        """Persist a new node and update the in-memory index."""
+        """Persist a new node (embedding included) and update the in-memory index."""
         now = time.time()
         node.created_at    = node.created_at or now
         node.last_accessed = node.last_accessed or now
+        emb = np.asarray(node.embedding, dtype=np.float32)
         self._conn.execute(
             "INSERT OR REPLACE INTO ltss_nodes "
-            "(id, content, modality, sector, created_at, last_accessed, access_count) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (node.id, node.content, node.modality, node.sector,
+            "(id, embedding, content, modality, sector, created_at, last_accessed, access_count) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (node.id, emb.tobytes(), node.content, node.modality, node.sector,
              node.created_at, node.last_accessed, node.access_count),
         )
         self._conn.commit()
-        self._embeddings.append(node.embedding)
+        self._embeddings.append(emb)
         self._ids.append(node.id)
 
     def add_edge(self, src_id: str, dst_id: str,
