@@ -7,7 +7,7 @@ import time
 from collections import deque
 from typing import Optional
 
-import mlx.core as mx
+import src.backend as backend
 
 from rich.console import Console
 from rich.layout import Layout
@@ -55,10 +55,14 @@ def _sparkline(values: list[float], width: int = 12) -> str:
 
 
 def _mem_str() -> str:
-    """Active GPU memory via MLX Metal API (returns '─' if unavailable)."""
+    """Active accelerator memory via the active backend (returns '─' if
+    unavailable, e.g. CPU-only torch)."""
     try:
-        active = mx.get_active_memory() / 1e9
-        peak   = mx.get_peak_memory()   / 1e9
+        stats = backend.current().engine.memory_stats()
+        active = stats.get("active", 0) / 1e9
+        peak   = stats.get("peak", 0) / 1e9
+        if peak <= 0:
+            return "─"
         return f"{active:.1f} GB active  /  {peak:.1f} GB peak"
     except Exception:
         return "─"

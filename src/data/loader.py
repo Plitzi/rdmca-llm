@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Iterator, List, Optional
 
 import numpy as np
-import mlx.core as mx
 
 
 class TextDataset:
@@ -86,10 +85,11 @@ class TextDataset:
             except Exception:
                 continue
 
-    def batches(self) -> Iterator[mx.array]:
+    def batches(self) -> Iterator[np.ndarray]:
         """
-        Yields mx.array of shape [batch_size, seq_len+1].
-        Loops over the corpus indefinitely.
+        Yields a numpy int32 array of shape [batch_size, seq_len+1]. Backend-
+        neutral — the training step converts to a backend tensor via
+        `B.ops.array(batch)`. Loops over the corpus indefinitely.
         """
         tokens_needed = self.batch_size * (self.seq_len + 1)
         buf: List[int] = []
@@ -100,7 +100,7 @@ class TextDataset:
                 if len(buf) >= tokens_needed:
                     arr = np.array(buf[:tokens_needed], dtype=np.int32)
                     arr = arr.reshape(self.batch_size, self.seq_len + 1)
-                    yield mx.array(arr)
+                    yield arr
                     buf = buf[tokens_needed:]
 
     def __iter__(self):
@@ -115,7 +115,7 @@ class DataLoader:
         self._iter     = dataset.batches()
         self.tokens_per_batch = dataset.batch_size * dataset.seq_len
 
-    def next_batch(self) -> mx.array:
+    def next_batch(self) -> np.ndarray:
         return next(self._iter)
 
     @classmethod

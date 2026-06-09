@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-# Auto-bootstrap: re-run with .venv/bin/python if mlx is not available.
+# Auto-bootstrap: re-run with .venv/bin/python if dependencies are not available.
 import sys, os
 try:
-    import mlx.core  # noqa: F401 — just checking availability
+    import numpy  # noqa: F401 — just checking the venv is active
 except ModuleNotFoundError:
     venv_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            ".venv", "bin", "python")
     if os.path.exists(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
         os.execv(venv_py, [venv_py] + sys.argv)
-    print("ERROR: mlx not found and .venv/bin/python not available.")
+    print("ERROR: dependencies not found and .venv/bin/python not available.")
     print("Run:  source .venv/bin/activate   (or follow README setup)")
     sys.exit(1)
 
@@ -41,25 +41,27 @@ import sys
 import time
 from pathlib import Path
 
-import mlx.core as mx
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.model.transformer import RDMCAFoundational, ModelConfig, set_model_precision
-from src.modalities.text import TextTokenizer
+import src.backend as backend
 from src.memory.experience_log import log_experience
 from src.config import require_backend, get_precision, load_config
+
+# Model/tokenizer modules are imported lazily inside load_model() — only AFTER
+# require_backend() has selected the backend — so model classes bind to it.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Generation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def sample_top_p(logits: mx.array, temperature: float, top_p: float) -> int:
+def sample_top_p(logits, temperature: float, top_p: float) -> int:
+    logits_np = np.asarray(backend.current().ops.to_numpy(logits), dtype=np.float32)
     if temperature == 0.0:
-        return int(mx.argmax(logits).item())
-    logits_np = np.array((logits / temperature).tolist(), dtype=np.float32)
+        return int(np.argmax(logits_np))
+    logits_np = logits_np / temperature
     logits_np -= logits_np.max()
     probs = np.exp(logits_np)
     probs /= probs.sum()
@@ -73,7 +75,7 @@ def sample_top_p(logits: mx.array, temperature: float, top_p: float) -> int:
     return int(np.random.choice(top_idx, p=top_prob))
 
 
-def generate(model: RDMCAFoundational,
+def generate(model,
              input_ids: list,
              max_new_tokens: int,
              temperature: float,
@@ -85,7 +87,9 @@ def generate(model: RDMCAFoundational,
     Returns (generated_ids, tokens_per_second).
     If stream=True, prints each token as it is generated.
     """
-    tokens = mx.array(input_ids)[None]   # [1, S]
+    ops = backend.current().ops
+    engine = backend.current().engine
+    tokens = ops.array(np.asarray([input_ids], dtype=np.int64))   # [1, S]
     generated: list[int] = []
     t0 = time.perf_counter()
 
@@ -98,7 +102,7 @@ def generate(model: RDMCAFoundational,
 
         logits = model.logits(tokens)     # [1, S, vocab]
         next_logits = logits[0, -1, :]    # [vocab]
-        mx.eval(next_logits)
+        engine.eval(next_logits)
 
         next_id = sample_top_p(next_logits, temperature, top_p)
 
@@ -106,8 +110,8 @@ def generate(model: RDMCAFoundational,
             break
 
         generated.append(next_id)
-        new_tok = mx.array([[next_id]])
-        tokens  = mx.concatenate([tokens, new_tok], axis=1)
+        new_tok = ops.array(np.asarray([[next_id]], dtype=np.int64))
+        tokens  = ops.concatenate([tokens, new_tok], axis=1)
 
         if stream:
             # Flush single token — will be decoded by caller
@@ -122,10 +126,15 @@ def generate(model: RDMCAFoundational,
 # Model loading
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
+def load_model(args):
     cfg = load_config(args.config)
-    require_backend(cfg)              # mlx only for now; torch errors clearly
+    require_backend(cfg)              # selects the configured backend (mlx | torch)
+    B = backend.current()
     precision = get_precision(cfg)
+
+    # Import model modules now that the backend is selected.
+    from src.model.transformer import RDMCAFoundational, set_model_precision
+    from src.model.config import ModelConfig
 
     model_dict = dict(cfg["model"])
     # Sync vocab_size with trained tokenizer if available
@@ -142,10 +151,11 @@ def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
 
     if args.dummy:
         # Force-init weights with a dummy pass so parameters are allocated
-        dummy = mx.array(np.zeros((1, 2), dtype=np.int32))
-        _ = model(dummy)
-        mx.eval(model.parameters())
         set_model_precision(model, precision)
+        dummy = B.ops.array(np.zeros((1, 2), dtype=np.int64))
+        _ = model(dummy)
+        B.engine.eval(model.parameters())
+        B.engine.set_eval(model)
         print("  [dummy mode] Random weights — output will be gibberish.")
         print("  Run training first to get meaningful generations.\n")
         return model, mcfg
@@ -185,10 +195,9 @@ def load_model(args) -> tuple[RDMCAFoundational, ModelConfig]:
         sys.exit(1)
 
     print(f"  Loading checkpoint: {ckpt_path}")
-    weights = mx.load(str(ckpt_path))
-    model.load_weights(list(weights.items()))
-    mx.eval(model.parameters())
+    B.engine.load_weights(model, str(ckpt_path))
     set_model_precision(model, precision)    # cast to configured inference precision
+    B.engine.set_eval(model)                 # disable dropout for inference
     return model, mcfg
 
 
@@ -204,8 +213,7 @@ BANNER = """
 ╚══════════════════════════════════════════════════════╝"""
 
 
-def chat_loop(model: RDMCAFoundational, mcfg: ModelConfig,
-              tokenizer: TextTokenizer, args) -> None:
+def chat_loop(model, mcfg, tokenizer, args) -> None:
     print(BANNER)
 
     # Session state
@@ -381,6 +389,7 @@ Examples:
 
     print("Loading model…")
     model, mcfg = load_model(args)
+    from src.modalities.text import TextTokenizer
     tokenizer   = TextTokenizer()
 
     print(f"  d_model={mcfg.d_model} | vocab={mcfg.vocab_size} | "

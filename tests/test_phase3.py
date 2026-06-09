@@ -19,16 +19,19 @@ def test_vqvae_roundtrip_shapes():
 
 
 def test_vqvae_trains_one_step():
-    """A single gradient step computes a finite, non-negative loss."""
-    import mlx.core as mx
-    import mlx.nn as nn
-    import mlx.optimizers as optim
+    """A single gradient step computes a finite, non-negative loss.
+
+    Backend-neutral: the VQ-VAE is channels-first (NCHW), so the input batch is
+    [B, 3, H, W]. Runs on whichever backend is active (mlx | torch)."""
+    import src.backend as backend
+    B = backend.current()
     m = ImageVQVAE(img_size=32)
-    x = mx.array(np.random.rand(4, 32, 32, 3).astype(np.float32))
-    lg = nn.value_and_grad(m, lambda mdl, b: mdl.loss(b))
-    opt = optim.AdamW(learning_rate=1e-3)
-    l0, g = lg(m, x); opt.update(m, g); mx.eval(m.parameters())
-    assert float(l0) >= 0.0
+    B.engine.set_precision(m, "fp32")
+    x = B.ops.array(np.random.rand(4, 3, 32, 32).astype(np.float32))   # NCHW
+    lg = B.engine.value_and_grad(m, lambda mdl, b: mdl.loss(b))
+    opt = B.engine.make_optimizer(m, lr=1e-3, weight_decay=0.0)
+    l0, g = lg(m, x); B.engine.optimizer_step(opt, m, g)
+    assert float(B.engine.item(l0)) >= 0.0
 
 
 def test_unified_vocab_layout_disjoint():

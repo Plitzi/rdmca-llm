@@ -1,6 +1,6 @@
 # ── RDMCA profile: A100 ──────────────────────────────────────────────────────
 # Goal: a strong reference model on a single datacenter GPU (A100 40/80 GB).
-# Note: PyTorch/CUDA backend is NOT yet implemented in this repo (MLX only).
+# CUDA/GPU runs use backend: torch; Apple Silicon uses backend: torch.
 # This profile defines the target architecture/budget; run on Apple Silicon via
 # MLX for now, or port the train loop to PyTorch for CUDA. See docs.
 #
@@ -8,7 +8,7 @@
 # Tokenizer:       python scripts/train_tokenizer.py --vocab_size 65536 --sample_mb 1000
 profile: a100
 tier: T3
-backend: mlx                   # mlx | torch  (torch/CUDA backend not implemented yet)
+backend: torch                   # mlx | torch  (both supported)
 notes: "~250M params at d_model=768. Requires a CUDA train loop (not yet in repo)."
 
 model:

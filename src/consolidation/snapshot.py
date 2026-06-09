@@ -17,7 +17,9 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import mlx.core as mx
+import numpy as np
+
+import src.backend as backend
 
 BUFFER_DEPTH     = 7     # days
 DELTA_PERF       = 0.02  # 2% performance drop threshold
@@ -42,11 +44,12 @@ class SectorSnapshotManager:
     def snapshot_before_update(self, sector_id: int,
                                 sector_params: dict,
                                 cycle_t: Optional[float] = None) -> Path:
-        """Save sector params before a gradient update."""
+        """Save sector params before a gradient update. `sector_params` is a
+        {name: numpy array} mapping (see engine.state_dict)."""
         t   = cycle_t or time.time()
         tag = int(t)
         path = self.snapshot_dir / f"sector_{sector_id}_t{tag}.npz"
-        mx.savez(str(path), **sector_params)
+        np.savez(str(path), **sector_params)
         self._prune_old_snapshots(sector_id)
         return path
 
@@ -70,9 +73,8 @@ class SectorSnapshotManager:
             logging.error(f"ROLLBACK failed: no snapshot for sector {sector_id}")
             return False
         target = snaps[-1]
-        params = mx.load(str(target))
-        sector_adapter.load_weights(list(params.items()))
-        mx.eval(sector_adapter.parameters())
+        params = dict(np.load(str(target)))
+        backend.current().engine.load_state_dict(sector_adapter, params)
         logging.warning(f"ROLLBACK: sector {sector_id} restored from {target.name}")
         self._cat_counts[sector_id] = self._cat_counts.get(sector_id, 0) + 1
         if self._cat_counts[sector_id] >= 3:

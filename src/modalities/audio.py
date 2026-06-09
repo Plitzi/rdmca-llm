@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
-import mlx.core as mx
-import mlx.nn as nn
-from mlx.utils import tree_flatten, tree_unflatten
 
+import src.backend as backend
 from .vq import VectorQuantizer
 from .vocab import AUDIO_VOCAB_SIZE
+
+B = backend.current()
+nn = B.nn
+ops = B.ops
 
 SAMPLE_RATE = 16_000
 N_MELS      = 64
@@ -87,9 +89,9 @@ class _Encoder(nn.Module):
         self.c2 = nn.Conv1d(HIDDEN, HIDDEN, 4, stride=2, padding=1)
         self.c3 = nn.Conv1d(HIDDEN, EMB_DIM, 3, stride=1, padding=1)
 
-    def __call__(self, x: mx.array) -> mx.array:   # x: [B, T, N_MELS]
-        x = nn.relu(self.c1(x))
-        x = nn.relu(self.c2(x))
+    def __call__(self, x):                         # x: [B, N_MELS, T] (NCL)
+        x = ops.relu(self.c1(x))
+        x = ops.relu(self.c2(x))
         return self.c3(x)
 
 
@@ -100,14 +102,18 @@ class _Decoder(nn.Module):
         self.t1 = nn.ConvTranspose1d(HIDDEN, HIDDEN, 4, stride=2, padding=1)
         self.t2 = nn.ConvTranspose1d(HIDDEN, N_MELS, 4, stride=2, padding=1)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        x = nn.relu(self.c1(x))
-        x = nn.relu(self.t1(x))
+    def __call__(self, x):
+        x = ops.relu(self.c1(x))
+        x = ops.relu(self.t1(x))
         return self.t2(x)
 
 
 class AudioVQVAE(nn.Module):
-    """1-D VQ-VAE over log-mel frames (~/4 time downsampling → ~25 tok/s)."""
+    """1-D VQ-VAE over log-mel frames (~/4 time downsampling → ~25 tok/s).
+
+    Internal tensor layout is channels-first (NCL = [B, N_MELS, T]) so the
+    convs are backend-neutral. NOTE: weight checkpoints are not cross-backend
+    (conv layouts differ) — train + load on the same backend."""
 
     def __init__(self, codebook_size: int = AUDIO_VOCAB_SIZE):
         super().__init__()
@@ -116,39 +122,43 @@ class AudioVQVAE(nn.Module):
         self.vq      = VectorQuantizer(codebook_size, EMB_DIM)
         self.decoder = _Decoder()
 
-    def _crop(self, a: mx.array, b: mx.array):
-        t = min(a.shape[1], b.shape[1])
-        return a[:, :t, :], b[:, :t, :]
+    def _crop(self, a, b):
+        t = min(a.shape[2], b.shape[2])            # time is the last axis (NCL)
+        return a[:, :, :t], b[:, :, :t]
+
+    def _quantize(self, z):
+        """z encoder output [B, EMB, T'] → (z_q NCL, idx [B,T'], vq_loss)."""
+        z = ops.transpose(z, (0, 2, 1))            # -> [B, T', EMB] for VQ
+        z_q, idx, vq_loss = self.vq(z)
+        return ops.transpose(z_q, (0, 2, 1)), idx, vq_loss
 
     # -- training --------------------------------------------------------
-    def loss(self, mel: mx.array) -> mx.array:
-        """mel: [B, T, N_MELS]. Reconstruction MSE + VQ loss."""
-        z = self.encoder(mel)
-        z_q, _, vq_loss = self.vq(z)
+    def loss(self, mel):
+        """mel: [B, N_MELS, T]. Reconstruction MSE + VQ loss."""
+        z_q, _, vq_loss = self._quantize(self.encoder(mel))
         recon = self.decoder(z_q)
         recon, target = self._crop(recon, mel)
-        return mx.mean((recon - target) ** 2) + vq_loss
+        return ops.mean((recon - target) ** 2) + vq_loss
 
     # -- inference -------------------------------------------------------
     def encode_ids(self, wav: np.ndarray, sr: int = SAMPLE_RATE) -> List[int]:
         """waveform → list of raw codebook indices."""
-        mel = mx.array(logmel(wav, sr))[None]     # [1, T, N_MELS]
-        z = self.encoder(mel)
-        _, idx, _ = self.vq(z)
-        mx.eval(idx)
-        return [int(v) for v in np.array(idx).reshape(-1)]
+        mel = ops.array(np.transpose(logmel(wav, sr), (1, 0))[None])  # [1, N_MELS, T]
+        _, idx, _ = self._quantize(self.encoder(mel))
+        B.engine.eval(idx)
+        return [int(v) for v in ops.to_numpy(idx).reshape(-1)]
 
     def decode_mel(self, ids: List[int]) -> np.ndarray:
         """Raw codebook indices → reconstructed log-mel [T, N_MELS]."""
-        idx = mx.array(np.array(ids, dtype=np.int32).reshape(1, -1))
-        z_q = self.vq.lookup(idx)
-        mel = self.decoder(z_q)
-        mx.eval(mel)
-        return np.array(mel)[0]
+        idx = ops.array(np.array(ids, dtype=np.int64).reshape(1, -1))  # [1, L]
+        z_q = ops.transpose(self.vq.lookup(idx), (0, 2, 1))            # [1, EMB, L]
+        mel = self.decoder(z_q)                                        # [1, N_MELS, T]
+        B.engine.eval(mel)
+        return np.transpose(ops.to_numpy(mel)[0], (1, 0))              # [T, N_MELS]
 
     # -- persistence -----------------------------------------------------
     def save(self, path: str) -> None:
-        mx.savez(path, **dict(tree_flatten(self.parameters())))
+        B.engine.save_weights(self, path)
         Path(path).with_suffix(".json").write_text(
             json.dumps({"codebook_size": self.codebook_size,
                         "n_mels": N_MELS, "sample_rate": SAMPLE_RATE}))
@@ -161,6 +171,5 @@ class AudioVQVAE(nn.Module):
         meta_path = p.with_suffix(".json")
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         model = cls(codebook_size=meta.get("codebook_size", AUDIO_VOCAB_SIZE))
-        model.update(tree_unflatten(list(mx.load(str(p)).items())))
-        mx.eval(model.parameters())
+        B.engine.load_weights(model, str(p))
         return model

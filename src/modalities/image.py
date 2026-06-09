@@ -1,15 +1,19 @@
 """
 Image Tokenizer — VQ-VAE (RDMCA §7.2 / Implementation Guide §3.1)
 
-A small convolutional VQ-VAE, trained from scratch in MLX (no external vision
-model), that maps an image to a grid of discrete tokens drawn from a learned
-codebook of size IMAGE_VOCAB_SIZE. Those indices occupy the image range of the
-unified vocabulary (offset applied by the perception layer / caller).
+A small convolutional VQ-VAE, trained from scratch (no external vision model),
+that maps an image to a grid of discrete tokens drawn from a learned codebook of
+size IMAGE_VOCAB_SIZE. Those indices occupy the image range of the unified
+vocabulary (offset applied by the perception layer / caller).
 
 Pipeline:  image → encoder (conv ↓) → vector-quantize → indices  (encode)
            indices → codebook → decoder (conv ↑) → image          (decode)
 
 Train with: python scripts/train_image_tokenizer.py
+
+Backend-neutral: convs use the channels-first (NCHW) convention via the backend
+facade. NOTE: VQ-VAE weight checkpoints are not cross-backend (conv weight
+layouts differ between MLX and PyTorch); train + load on the same backend.
 """
 from __future__ import annotations
 import json
@@ -17,12 +21,14 @@ from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
-import mlx.core as mx
-import mlx.nn as nn
-from mlx.utils import tree_flatten, tree_unflatten
 
+import src.backend as backend
 from .vq import VectorQuantizer
 from .vocab import IMAGE_VOCAB_SIZE
+
+B = backend.current()
+nn = B.nn
+ops = B.ops
 
 DEFAULT_IMG_SIZE = 32      # square; CIFAR-scale by default, configurable
 EMB_DIM          = 64
@@ -37,9 +43,9 @@ class _Encoder(nn.Module):
         self.c2 = nn.Conv2d(HIDDEN, HIDDEN, 4, stride=2, padding=1)
         self.c3 = nn.Conv2d(HIDDEN, EMB_DIM, 3, stride=1, padding=1)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        x = nn.relu(self.c1(x))
-        x = nn.relu(self.c2(x))
+    def __call__(self, x):                       # x: [B, 3, H, W]
+        x = ops.relu(self.c1(x))
+        x = ops.relu(self.c2(x))
         return self.c3(x)
 
 
@@ -50,10 +56,10 @@ class _Decoder(nn.Module):
         self.t1 = nn.ConvTranspose2d(HIDDEN, HIDDEN, 4, stride=2, padding=1)
         self.t2 = nn.ConvTranspose2d(HIDDEN, 3, 4, stride=2, padding=1)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        x = nn.relu(self.c1(x))
-        x = nn.relu(self.t1(x))
-        return mx.sigmoid(self.t2(x))
+    def __call__(self, x):
+        x = ops.relu(self.c1(x))
+        x = ops.relu(self.t1(x))
+        return ops.sigmoid(self.t2(x))
 
 
 class ImageVQVAE(nn.Module):
@@ -71,30 +77,35 @@ class ImageVQVAE(nn.Module):
         self.decoder = _Decoder()
 
     # -- training --------------------------------------------------------
-    def loss(self, x: mx.array) -> mx.array:
-        """x: [B, H, W, 3] in [0,1]. Reconstruction MSE + VQ loss."""
-        z = self.encoder(x)
+    def loss(self, x):
+        """x: [B, 3, H, W] in [0,1]. Reconstruction MSE + VQ loss."""
+        z = self.encoder(x)                       # [B, EMB, g, g]
+        z = ops.transpose(z, (0, 2, 3, 1))        # -> [B, g, g, EMB] for VQ
         z_q, _, vq_loss = self.vq(z)
+        z_q = ops.transpose(z_q, (0, 3, 1, 2))    # -> NCHW for decoder
         recon = self.decoder(z_q)
-        return mx.mean((recon - x) ** 2) + vq_loss
+        return ops.mean((recon - x) ** 2) + vq_loss
 
     # -- inference -------------------------------------------------------
     def encode_ids(self, image) -> List[int]:
         """np image [H,W,3] (0-255 or 0-1) → list of raw codebook indices."""
-        x = mx.array(self._preprocess(image))[None]    # [1,H,W,3]
-        z = self.encoder(x)
+        chw = np.transpose(self._preprocess(image), (2, 0, 1))  # [3,H,W]
+        x = ops.array(chw[None])                                 # [1,3,H,W]
+        z = ops.transpose(self.encoder(x), (0, 2, 3, 1))         # [1,g,g,EMB]
         _, idx, _ = self.vq(z)
-        mx.eval(idx)
-        return [int(v) for v in np.array(idx).reshape(-1)]
+        B.engine.eval(idx)
+        return [int(v) for v in ops.to_numpy(idx).reshape(-1)]
 
     def decode_ids(self, ids: List[int]) -> np.ndarray:
         """Raw codebook indices → reconstructed image [H,W,3] uint8."""
         g = self.grid
-        idx = mx.array(np.array(ids[:g * g], dtype=np.int32).reshape(1, g, g))
-        z_q = self.vq.lookup(idx)
-        img = self.decoder(z_q)
-        mx.eval(img)
-        return (np.clip(np.array(img)[0], 0, 1) * 255).astype(np.uint8)
+        idx = ops.array(np.array(ids[:g * g], dtype=np.int64).reshape(1, g, g))
+        z_q = self.vq.lookup(idx)                                # [1,g,g,EMB]
+        z_q = ops.transpose(z_q, (0, 3, 1, 2))                   # -> NCHW
+        img = self.decoder(z_q)                                  # [1,3,H,W]
+        B.engine.eval(img)
+        out = np.transpose(ops.to_numpy(img)[0], (1, 2, 0))      # [H,W,3]
+        return (np.clip(out, 0, 1) * 255).astype(np.uint8)
 
     def _preprocess(self, image) -> np.ndarray:
         arr = np.asarray(image, dtype=np.float32)
@@ -107,7 +118,7 @@ class ImageVQVAE(nn.Module):
 
     # -- persistence -----------------------------------------------------
     def save(self, path: str) -> None:
-        mx.savez(path, **dict(tree_flatten(self.parameters())))
+        B.engine.save_weights(self, path)
         meta = {"img_size": self.img_size, "codebook_size": self.codebook_size}
         Path(path).with_suffix(".json").write_text(json.dumps(meta))
 
@@ -120,8 +131,7 @@ class ImageVQVAE(nn.Module):
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         model = cls(img_size=meta.get("img_size", DEFAULT_IMG_SIZE),
                     codebook_size=meta.get("codebook_size", IMAGE_VOCAB_SIZE))
-        model.update(tree_unflatten(list(mx.load(str(p)).items())))
-        mx.eval(model.parameters())
+        B.engine.load_weights(model, str(p))
         return model
 
 

@@ -28,19 +28,25 @@ Contents:
 
 ## 1. Requirements
 
-- A Mac with Apple Silicon (M1/M2/M3/M4) — training uses **Apple MLX** (unified GPU).
-- macOS with Homebrew and Python 3.10.
+- **Apple Silicon Mac** (M1/M2/M3/M4) with the **MLX** backend (unified GPU), **or**
+  **Linux/cloud with NVIDIA CUDA** (or CPU/MPS) with the **PyTorch** backend.
+- Python 3.10 (macOS: Homebrew).
 - ~40 GB free (data + weights + venv) for a real run; the `test` profile needs little.
 
 ## 2. Setup (once)
 
 ```bash
-/opt/homebrew/bin/python3.10 -m venv .venv
+/opt/homebrew/bin/python3.10 -m venv .venv      # (any Python 3.10 venv on Linux)
 source .venv/bin/activate
-pip install mlx mlx-lm sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
+pip install sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
 
-# Check that MLX uses the Apple Silicon GPU
-python -c "import mlx.core as mx; print(mx.default_device())"   # Device(gpu, 0)
+# + exactly ONE compute backend:
+pip install mlx mlx-lm     # Apple Silicon — fastest on Mac
+pip install torch          # Linux/cloud (CUDA) or Mac (MPS/CPU)
+
+# Sanity-check the backend you installed:
+python -c "import mlx.core as mx; print(mx.default_device())"          # MLX → Device(gpu, 0)
+python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_available())"
 ```
 
 `pillow`/`soundfile` are only needed for the multimodal parts (loading images/audio).
@@ -52,18 +58,25 @@ themselves with the venv's Python if you run them without activating it.
 Both are set in the config / profile.
 
 ```yaml
-backend: mlx          # mlx | torch  (the torch backend is not implemented yet)
+backend: mlx          # mlx | torch  (both fully supported)
 training:
   precision: bf16     # fp32 | bf16 | fp16
 ```
 
-- **Backend** — `mlx` is the only implemented backend today. `backend: torch` is
-  accepted by the config but fails fast with a clear error (no silent fallback); the
-  PyTorch backend will be wired in later.
+- **Backend** — the **same model code** runs on either backend (one source of truth
+  behind `src/backend/`); `require_backend()` selects it at startup. Use `mlx` on
+  Apple Silicon (fastest there) and `torch` on Linux/cloud CUDA (or Mac MPS/CPU). The
+  cloud profiles `a100`/`cluster` default to `torch`; `test`/`nano`/`m2max` to `mlx`.
+  PyTorch auto-picks the device: CUDA → MPS → CPU.
+  **Checkpoints are cross-backend** for the text foundational model: a core trained on
+  MLX loads into the PyTorch model and vice-versa (identical parameter names).
+  *Exception:* the image/audio VQ-VAE weight checkpoints are **not** cross-backend
+  (conv weight layouts differ) — train and load those on the same backend.
 - **Precision** — `bf16` is the default (paper default, fast and stable on Apple
-  Silicon). `fp32` is the most stable. `fp16` is the fastest for quick smoke tests but
-  has no loss-scaling, so it can produce NaNs on a real run — use it only to sanity-check
-  the pipeline. Lower precision = faster training and less memory.
+  Silicon and CUDA). `fp32` is the most stable. `fp16` is the fastest for quick smoke
+  tests but has no loss-scaling, so it can produce NaNs on a real run — use it only to
+  sanity-check the pipeline. Note: `bf16` on Mac **MPS** (torch) is slower and less
+  precise than on MLX/CUDA — prefer MLX on Mac, or `fp32` for MPS sanity runs.
 
 ## 4. Choose languages
 
@@ -118,8 +131,10 @@ python scripts/train_tokenizer.py --profile m2max --vocab_size 65536 --sample_mb
 
 ### 6.2 Image and audio (optional, for multimodal)
 
-VQ-VAEs trained from scratch in MLX. They map image/audio to discrete tokens in the
-matching range of the unified vocabulary.
+VQ-VAEs trained from scratch (on the active backend, MLX or PyTorch). They map
+image/audio to discrete tokens in the matching range of the unified vocabulary. Pick the
+backend with `--backend mlx|torch` (default: auto). Note their weight checkpoints are not
+cross-backend — train and load on the same backend.
 
 ```bash
 # Image (CIFAR-10 by default; or --images-dir with your own images)
@@ -243,8 +258,8 @@ rm -rf snapshots/* logs/* data/runtime/ltss.db data/runtime/experiences.jsonl
 The model uses MRL (nested embeddings). A large model can be **truncated down** to a
 smaller tier at inference (not the other way around): train at the size you will use.
 Profiles: `test` (smoke), `nano` (~26M), `m2max` (~109M), `a100`, `cluster` (the last two
-define the target architecture; running them on NVIDIA needs the torch/CUDA backend,
-which is not implemented yet). See [reference/architecture.md](reference/architecture.md).
+target NVIDIA GPUs and default to `backend: torch`, so they run on CUDA out of the box).
+See [reference/architecture.md](reference/architecture.md).
 
 ---
 

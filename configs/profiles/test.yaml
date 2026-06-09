@@ -11,7 +11,7 @@
 #   python chat.py --profile test --stage 1
 profile: test
 tier: dev
-backend: mlx                    # mlx | torch  (torch backend not implemented yet)
+backend: mlx                    # mlx | torch  (both supported)
 notes: "Pipeline smoke test on real data. Weights are not production-quality."
 
 skip_gate: true                 # don't require the graduation gate on a test run
@@ -26,7 +26,7 @@ model:
   mrl_dims: [64, 128, 256]
   dropout: 0.1
   rope_theta: 10000.0
-  languages: ["en", "es"]       # ← edit this to change the language selection
+  languages: ["en"]  # "es"      # ← edit this to change the language selection
 
 training:
   precision: bf16     # fast + stable for smoke tests (fp16 also works but can NaN without loss-scaling)

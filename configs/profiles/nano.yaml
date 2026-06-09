@@ -10,7 +10,7 @@
 # Chat:            python chat.py --profile nano --stage 1
 profile: nano
 tier: dev                     # inference + light consolidation
-backend: mlx                  # mlx | torch  (torch backend not implemented yet)
+backend: mlx                  # mlx | torch  (both supported)
 notes: "Fast first model. vocab_size is overridden by the trained tokenizer."
 
 model:

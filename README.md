@@ -1,6 +1,6 @@
 # RDMCA — Relevance-Driven Modular Cognitive Architecture
 
-**Apple MLX · configurable languages · multimodal (text + image + audio) · 5-stage curriculum**
+**MLX + PyTorch backends · configurable languages · multimodal (text + image + audio) · 5-stage curriculum**
 
 An adaptive language model trained from scratch: a cognitive *core* that is frozen
 permanently + modular LoRA sectors that keep learning daily through **consolidation** of
@@ -14,7 +14,10 @@ Constraint Function (BCF) built in.
 ```bash
 # 1. Environment
 /opt/homebrew/bin/python3.10 -m venv .venv && source .venv/bin/activate
-pip install mlx mlx-lm sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
+pip install sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
+# + ONE compute backend:
+pip install mlx mlx-lm     # Apple Silicon (fastest on Mac)
+pip install torch          # Linux/cloud (CUDA) or Mac (MPS/CPU)
 
 # 2. Exercise the WHOLE real pipeline on a little data (~10 min, `test` profile)
 python scripts/prepare_data.py    --profile test --stage 1 --limit 50
@@ -35,13 +38,13 @@ consolidation).
 |---|---|
 | Architecture | Decoder-only · RoPE · RMSNorm · SwiGLU · MRL |
 | Freezable core | foundational (Θ_F) + 7 LoRA sectors |
-| Backend | `mlx` (PyTorch backend selectable in config, not implemented yet) |
+| Backend | `mlx` or `torch` (`backend:` key) — same model code, one source of truth |
 | Precision | `fp32 / bf16 / fp16` (`training.precision`, default bf16) |
 | Languages | **configurable** (`model.languages`), EN+ES by default |
 | Multimodal | text ∪ image (VQ-VAE) ∪ audio (log-mel VQ-VAE), unified vocab |
 | Curriculum | 5 stages → frozen core → daily consolidation |
 | Safety | BCF + attack taxonomy (adversarial filter in consolidation) |
-| Hardware | Apple MLX (M-series) |
+| Hardware | Apple Silicon (MLX) · NVIDIA/CUDA & CPU/MPS (PyTorch) |
 
 Hardware profiles in `configs/profiles/`: `test` (smoke), `nano` (~26M),
 `m2max` (~109M), `a100`, `cluster`.

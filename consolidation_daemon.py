@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import sys, os
 try:
-    import mlx.core  # noqa: F401
+    import numpy  # noqa: F401
 except ModuleNotFoundError:
     venv_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            ".venv", "bin", "python")
     if os.path.exists(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
         os.execv(venv_py, [venv_py] + sys.argv)
-    print("ERROR: mlx not found. Run: source .venv/bin/activate")
+    print("ERROR: dependencies not found. Run: source .venv/bin/activate")
     sys.exit(1)
 
 """
@@ -74,12 +74,14 @@ def _ckpt_root(cfg: dict) -> Path:
 
 def _build_model(cfg: dict):
     """Load the frozen foundational core + attach (and reload) LoRA sectors."""
-    import mlx.core as mx
-    from mlx.utils import tree_unflatten
-    from src.model.transformer import RDMCAFoundational, ModelConfig, set_model_precision
+    import numpy as np
+    import src.backend as backend
+    from src.model.transformer import RDMCAFoundational, set_model_precision
+    from src.model.config import ModelConfig
     from src.model.lora import build_all_sectors
     from src.config import load_tokenizer_info, unified_vocab_size, get_precision
 
+    B = backend.current()
     mcfg = dict(cfg["model"])
     info = load_tokenizer_info()
     mcfg["vocab_size"] = unified_vocab_size(info, mcfg.get("vocab_size", 65536))
@@ -92,39 +94,40 @@ def _build_model(cfg: dict):
     if not frozen.exists():
         logging.error(f"No frozen core at {frozen}. Train through Stage 5 first.")
         return None, None
-    model.load_weights(list(mx.load(str(frozen)).items()))
+    B.engine.load_weights(model, str(frozen))
 
     sectors = build_all_sectors(model_cfg.d_model, model_cfg.n_layers)
     model.attach_sectors(sectors)
+    set_model_precision(model, get_precision(cfg))   # move sectors to device/dtype too
     sec_path = root / "sectors.npz"
     if sec_path.exists():
-        saved = dict(mx.load(str(sec_path)))
+        saved = dict(np.load(str(sec_path)))
         for sid, adapter in sectors.items():
             flat = {k.split("/", 1)[1]: v for k, v in saved.items()
                     if k.startswith(f"S{sid}/")}
             if flat:
-                adapter.update(tree_unflatten(list(flat.items())))
+                B.engine.load_state_dict(adapter, flat)
     set_model_precision(model, get_precision(cfg))
-    mx.eval(model.parameters())
     return model, root
 
 
 def _save_sectors(model, root: Path) -> None:
-    import mlx.core as mx
-    from mlx.utils import tree_flatten
+    import numpy as np
+    import src.backend as backend
+    B = backend.current()
     flat = {}
     for sid, adapter in (model.sectors or {}).items():
-        for k, v in tree_flatten(adapter.parameters()):
+        for k, v in B.engine.state_dict(adapter).items():
             flat[f"S{sid}/{k}"] = v
     if flat:
-        mx.savez(str(root / "sectors.npz"), **flat)
+        np.savez(str(root / "sectors.npz"), **flat)
 
 
 def run_consolidation(cfg: dict) -> None:
     """Build the full pipeline from the experience queue and run one cycle."""
     import numpy as np
-    import mlx.core as mx
-    from mlx.utils import tree_unflatten
+    import src.backend as backend
+    from src.config import get_precision
     from src.memory.episodic_buffer import EpisodicBuffer, Experience
     from src.memory.experience_log import load_experiences, clear_experiences
     from src.memory.ltss import LTSS
@@ -147,12 +150,13 @@ def run_consolidation(cfg: dict) -> None:
     model, root = _build_model(cfg)
     if model is None:
         return
+    B = backend.current()
     tokenizer = TextTokenizer()
     d_model   = model.cfg.d_model
 
     # Embed each experience with the frozen core's final hidden state.
     texts = [r.get("text", "") for r in records]
-    embs  = np.array(_hidden_states(model, tokenizer, texts))   # [N, d_model]
+    embs  = B.ops.to_numpy(_hidden_states(model, tokenizer, texts))   # [N, d_model]
 
     buffer = EpisodicBuffer(max_size=max(len(records), 1000))
     for r, e in zip(records, embs):
@@ -165,9 +169,11 @@ def run_consolidation(cfg: dict) -> None:
     re.update_state(embs.mean(axis=0))
 
     bcf = BCFHead(d_model)
+    B.engine.set_precision(bcf, get_precision(cfg))   # match model device/dtype
     bcf_path = root / "stage5" / "bcf_head.npz"
     if bcf_path.exists():
-        bcf.update(tree_unflatten(list(mx.load(str(bcf_path)).items())))
+        B.engine.load_weights(bcf, str(bcf_path))
+        B.engine.set_precision(bcf, get_precision(cfg))
 
     pipeline = ConsolidationPipeline(
         buffer=buffer, ltss=ltss, re=re, bcf=bcf, sectors=model.sectors,

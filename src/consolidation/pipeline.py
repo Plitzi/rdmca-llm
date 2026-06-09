@@ -25,9 +25,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-import mlx.core as mx
-import mlx.optimizers as optim
-from mlx.utils import tree_flatten
+import src.backend as backend
 
 from src.memory.episodic_buffer import EpisodicBuffer, Experience
 from src.memory.ltss import LTSS
@@ -109,7 +107,8 @@ class ConsolidationPipeline:
         # gradient updates; otherwise it runs the filter/audit pipeline only.
         self.model       = model
         self.tokenizer   = tokenizer
-        self.optimizer   = optim.AdamW(learning_rate=lr) if model is not None else None
+        self.optimizer   = (backend.current().engine.make_optimizer(
+            model, lr=lr, weight_decay=0.0) if model is not None else None)
 
     def run(self) -> AuditEntry:
         """Execute one full consolidation cycle. Returns the audit log entry."""
@@ -204,7 +203,7 @@ class ConsolidationPipeline:
                 continue
 
             # Snapshot the sector before touching it (enables rollback).
-            sector_params = dict(tree_flatten(adapter.parameters()))
+            sector_params = backend.current().engine.state_dict(adapter)
             self.snapshots.snapshot_before_update(sid, sector_params)
 
             # Without a model + tokenizer we can only do the filter pipeline.
@@ -294,7 +293,7 @@ class ConsolidationPipeline:
             ids = self.tokenizer.encode(text)
         if not ids:
             return True
-        toks = mx.array(ids[:CONSOL_SEQ_LEN])[None]
+        toks = backend.current().ops.array(np.asarray([ids[:CONSOL_SEQ_LEN]], dtype=np.int64))
         self.model.set_active_sectors([])          # core-only for the BCF gate
         h = self.model(toks)[:, -1, :]             # final-token hidden state
         return bool(self.bcf.is_permissible(h).item())
@@ -311,7 +310,7 @@ class ConsolidationPipeline:
         back to the experience's pre-assigned sector."""
         if self.semantic_router is not None and exp.embedding is not None:
             from src.routing.semantic_router import Chunk
-            emb = mx.array(np.asarray(exp.embedding, dtype=np.float32))
+            emb = backend.current().ops.array(np.asarray(exp.embedding, dtype=np.float32))
             chunk = Chunk(tokens=[], modality=exp.modality)
             routed = self.semantic_router.route(chunk, emb)
             if routed:
@@ -344,7 +343,7 @@ class ConsolidationPipeline:
             rows.append(ids)
         if not rows:
             return None
-        return mx.array(rows)
+        return backend.current().ops.array(np.asarray(rows, dtype=np.int64))
 
     def _rolling_health(self, clean: bool, window: int = 30) -> float:
         self._cycle_history.append(clean)   # type: ignore

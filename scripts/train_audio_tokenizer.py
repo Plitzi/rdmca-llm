@@ -20,16 +20,16 @@ import argparse
 import time
 
 import numpy as np
-import mlx.core as mx
-import mlx.nn as nn
-import mlx.optimizers as optim
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.modalities.audio import AudioVQVAE, logmel, SAMPLE_RATE, N_MELS
-from src.modalities.perception import load_audio
+import src.backend as backend
+# Audio model + helpers are imported lazily (in main()/helpers) AFTER the
+# backend is selected, so their classes bind to the chosen backend.
 
 OUT_PATH = "dist/tokenizer/audio_vqvae.npz"
 CLIP_SECS = 1.0
+SAMPLE_RATE = 16_000   # mirror of audio.SAMPLE_RATE (avoids an early import)
+N_MELS      = 64
 
 
 def synthetic_corpus(n: int, sr: int) -> list:
@@ -46,16 +46,19 @@ def synthetic_corpus(n: int, sr: int) -> list:
 
 
 def load_wavs(audio_dir: str, n: int, sr: int) -> list:
+    from src.modalities.perception import load_audio
     paths = [p for p in Path(audio_dir).rglob("*")
              if p.suffix.lower() in (".wav", ".flac", ".ogg")]
     return [load_audio(p, sr) for p in paths[:n]]
 
 
-def to_mel_batch(clips, idx) -> mx.array:
-    """Stack a batch of clips into [B, T, N_MELS], cropping to the shortest."""
-    mels = [logmel(clips[i]) for i in idx]
+def to_mel_batch(clips, idx) -> np.ndarray:
+    """Stack a batch of clips into NCL [B, N_MELS, T], cropping to the shortest."""
+    from src.modalities.audio import logmel
+    mels = [logmel(clips[i]) for i in idx]              # each [T, N_MELS]
     t = min(m.shape[0] for m in mels)
-    return mx.array(np.stack([m[:t] for m in mels], axis=0))
+    batch = np.stack([m[:t] for m in mels], axis=0)     # [B, T, N_MELS]
+    return np.transpose(batch, (0, 2, 1)).astype(np.float32)   # [B, N_MELS, T]
 
 
 def main():
@@ -66,7 +69,14 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--out", default=OUT_PATH)
+    ap.add_argument("--backend", default=None, choices=["mlx", "torch"],
+                    help="Compute backend (default: auto — mlx if available, else torch)")
     args = ap.parse_args()
+
+    if args.backend:
+        backend.select(args.backend)
+    B = backend.current()
+    from src.modalities.audio import AudioVQVAE   # binds to the selected backend
 
     if args.audio_dir:
         print(f"Loading audio from {args.audio_dir} …")
@@ -79,20 +89,20 @@ def main():
     print(f"  {len(clips)} clips | sr={SAMPLE_RATE} | n_mels={N_MELS}")
 
     model = AudioVQVAE()
-    opt = optim.AdamW(learning_rate=args.lr)
-    lg = nn.value_and_grad(model, lambda m, mel: m.loss(mel))
+    B.engine.set_precision(model, "fp32")
+    opt = B.engine.make_optimizer(model, lr=args.lr, weight_decay=0.0)
+    lg = B.engine.value_and_grad(model, lambda m, mel: m.loss(mel))
 
     n = len(clips)
     print(f"Training {args.steps} steps (batch {args.batch}) …")
     t0 = time.time()
     for step in range(1, args.steps + 1):
         idx = np.random.randint(0, n, size=min(args.batch, n))
-        mel = to_mel_batch(clips, idx)
+        mel = B.ops.array(to_mel_batch(clips, idx))
         loss, grads = lg(model, mel)
-        opt.update(model, grads)
-        mx.eval(model.parameters(), opt.state)
+        B.engine.optimizer_step(opt, model, grads)
         if step % 100 == 0 or step == 1:
-            print(f"  step {step:5d} | loss {float(loss):.4f} | "
+            print(f"  step {step:5d} | loss {B.engine.item(loss):.4f} | "
                   f"{step/(time.time()-t0):.1f} it/s")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

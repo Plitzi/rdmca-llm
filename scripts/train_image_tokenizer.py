@@ -20,14 +20,14 @@ import argparse
 import time
 
 import numpy as np
-import mlx.core as mx
-import mlx.nn as nn
-import mlx.optimizers as optim
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.modalities.image import ImageVQVAE, DEFAULT_IMG_SIZE
+import src.backend as backend
+# Model module is imported lazily in main() AFTER the backend is selected, so the
+# module's classes bind to the chosen backend (importing it binds eagerly).
 
 OUT_PATH = "dist/tokenizer/image_vqvae.npz"
+DEFAULT_IMG_SIZE = 32   # CIFAR-scale default (kept here to avoid an early import)
 
 
 def load_images(images_dir, dataset, n, img_size):
@@ -67,27 +67,35 @@ def main():
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--out", default=OUT_PATH)
+    ap.add_argument("--backend", default=None, choices=["mlx", "torch"],
+                    help="Compute backend (default: auto — mlx if available, else torch)")
     args = ap.parse_args()
+
+    if args.backend:
+        backend.select(args.backend)
+    B = backend.current()
+    from src.modalities.image import ImageVQVAE   # binds to the selected backend
 
     print(f"Loading up to {args.n} images …")
     data = load_images(args.images_dir, args.dataset, args.n, args.img_size)
     print(f"  {data.shape[0]} images at {args.img_size}×{args.img_size}")
 
     model = ImageVQVAE(img_size=args.img_size)
-    opt = optim.AdamW(learning_rate=args.lr)
-    lg = nn.value_and_grad(model, lambda m, x: m.loss(x))
+    B.engine.set_precision(model, "fp32")
+    opt = B.engine.make_optimizer(model, lr=args.lr, weight_decay=0.0)
+    lg = B.engine.value_and_grad(model, lambda m, x: m.loss(x))
 
     n = data.shape[0]
     print(f"Training {args.steps} steps (batch {args.batch}) → {model.n_tokens} tokens/image")
     t0 = time.time()
     for step in range(1, args.steps + 1):
         idx = np.random.randint(0, n, size=args.batch)
-        x = mx.array(data[idx])
+        # data is NHWC [B,H,W,3]; the model is channels-first (NCHW).
+        x = B.ops.array(np.transpose(data[idx], (0, 3, 1, 2)))
         loss, grads = lg(model, x)
-        opt.update(model, grads)
-        mx.eval(model.parameters(), opt.state)
+        B.engine.optimizer_step(opt, model, grads)
         if step % 100 == 0 or step == 1:
-            print(f"  step {step:5d} | loss {float(loss):.4f} | "
+            print(f"  step {step:5d} | loss {B.engine.item(loss):.4f} | "
                   f"{step/(time.time()-t0):.1f} it/s")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

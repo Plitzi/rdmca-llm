@@ -11,11 +11,16 @@ Constraint hierarchy (§15.2):
   C2 — Epistemic integrity                (weight 0.9, immutable)
   C3 — Autonomy and agency preservation   (weight 0.8, immutable)
   C4 — Contextual appropriateness         (weight 0.5, adjustable)
+
+Backend-neutral (written against `src.backend.current()`).
 """
 from __future__ import annotations
 
-import mlx.core as mx
-import mlx.nn as nn
+import src.backend as backend
+
+B = backend.current()
+nn = B.nn
+ops = B.ops
 
 
 BCF_THRESHOLD = 0.5   # B(a,s) < threshold → action blocked
@@ -30,30 +35,28 @@ class BCFHead(nn.Module):
 
     def __init__(self, d_model: int, hidden: int = 128):
         super().__init__()
-        self.fc1   = nn.Linear(d_model, hidden)
-        self.act   = nn.ReLU()
-        self.fc2   = nn.Linear(hidden, 1)
+        self.fc1 = nn.Linear(d_model, hidden)
+        self.fc2 = nn.Linear(hidden, 1)
 
-    def __call__(self, h: mx.array) -> mx.array:
+    def __call__(self, h):
         """h: [..., d_model]  →  [..., 1] logit"""
-        return self.fc2(self.act(self.fc1(h)))
+        return self.fc2(ops.relu(self.fc1(h)))
 
-    def score(self, h: mx.array) -> mx.array:
+    def score(self, h):
         """Returns B(a,s) ∈ [0,1] probability (permissible = high score)."""
-        return mx.sigmoid(self(h))
+        return ops.sigmoid(self(h))
 
-    def is_permissible(self, h: mx.array) -> mx.array:
+    def is_permissible(self, h):
         """Boolean mask: True if B(a,s) ≥ BCF_THRESHOLD."""
         return self.score(h) >= BCF_THRESHOLD
 
 
-def bcf_loss(logits: mx.array, labels: mx.array) -> mx.array:
+def bcf_loss(logits, labels):
     """Binary cross-entropy (from logits) for BCF probe-set training."""
-    return nn.losses.binary_cross_entropy(
-        logits.squeeze(-1), labels, with_logits=True, reduction="mean")
+    return ops.bce_with_logits(logits.squeeze(-1), labels, reduction="mean")
 
 
-def _hidden_states(model, tokenizer, texts, seq_len: int = 128) -> mx.array:
+def _hidden_states(model, tokenizer, texts, seq_len: int = 128):
     """Final-token foundational hidden state for each text (core only)."""
     if hasattr(model, "set_active_sectors"):
         model.set_active_sectors([])          # BCF reads the frozen core
@@ -64,10 +67,10 @@ def _hidden_states(model, tokenizer, texts, seq_len: int = 128) -> mx.array:
         except TypeError:
             ids = tokenizer.encode(t)
         ids = (ids or [0])[:seq_len]
-        toks = mx.array(ids)[None]
+        toks = ops.array(ids)[None]
         h = model(toks)[:, -1, :]             # [1, d_model]
         rows.append(h)
-    return mx.concatenate(rows, axis=0)       # [N, d_model]
+    return ops.concatenate(rows, axis=0)      # [N, d_model]
 
 
 def bcf_accuracy(model, tokenizer, bcf_head: BCFHead, probes) -> float:
@@ -78,10 +81,10 @@ def bcf_accuracy(model, tokenizer, bcf_head: BCFHead, probes) -> float:
     if not probes:
         return 1.0
     texts  = [p[0] for p in probes]
-    labels = mx.array([float(p[1]) for p in probes])
+    labels = ops.array([float(p[1]) for p in probes])
     h      = _hidden_states(model, tokenizer, texts)
-    preds  = (bcf_head.score(h).squeeze(-1) >= BCF_THRESHOLD).astype(mx.float32)
-    return float((preds == labels).astype(mx.float32).mean().item())
+    preds  = ops.astype(bcf_head.score(h).squeeze(-1) >= BCF_THRESHOLD, ops.float32)
+    return float(ops.astype(preds == labels, ops.float32).mean().item())
 
 
 def bcf_train_step(model, tokenizer, bcf_head: BCFHead,
@@ -91,17 +94,16 @@ def bcf_train_step(model, tokenizer, bcf_head: BCFHead,
     is trainable — the foundational hidden states are read frozen. Returns loss.
     """
     texts  = [p[0] for p in probes]
-    labels = mx.array([float(p[1]) for p in probes])
-    h      = _hidden_states(model, tokenizer, texts)   # frozen-core features
+    labels = ops.array([float(p[1]) for p in probes])
+    h      = ops.stop_gradient(_hidden_states(model, tokenizer, texts))  # frozen features
 
     def loss_fn(head):
         return bcf_loss(head(h), labels)
 
-    lg = nn.value_and_grad(bcf_head, loss_fn)
-    loss, grads = lg(bcf_head)
-    optimizer.update(bcf_head, grads)
-    mx.eval(bcf_head.parameters(), optimizer.state)
-    return float(loss.item())
+    grad_fn = B.engine.value_and_grad(bcf_head, loss_fn)
+    loss, grads = grad_fn(bcf_head)
+    B.engine.optimizer_step(optimizer, bcf_head, grads)
+    return B.engine.item(loss)
 
 
 def bcf_probe_delta(model, tokenizer, bcf_head: BCFHead,

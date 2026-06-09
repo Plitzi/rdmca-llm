@@ -8,7 +8,7 @@
 # Chat:            python chat.py --profile m2max --stage 1
 profile: m2max
 tier: T3                       # full inference + daily consolidation
-backend: mlx                   # mlx | torch  (torch backend not implemented yet)
+backend: mlx                   # mlx | torch  (both supported)
 notes: "Balanced for 64 GB unified memory. ~120M params at d_model=512."
 
 model:
@@ -21,7 +21,7 @@ model:
   mrl_dims: [128, 256, 512]
   dropout: 0.1
   rope_theta: 10000.0
-  languages: ["en", "es"]
+  languages: ["en"] # , "es"
 
 training:
   precision: bf16              # fp32 | bf16 | fp16

@@ -4,13 +4,18 @@ Seven LoRA adapters attached to the frozen foundational model.
 Each adapts Q, K, V, O projection layers of every attention block.
 Zero-output initialization: at init the model behaves identically to the base.
 Gradient masking ensures only the target sector receives updates per cycle.
+
+Backend-neutral (written against `src.backend.current()`).
 """
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-import mlx.core as mx
-import mlx.nn as nn
+import src.backend as backend
+from src.model.config import LoRAConfig
+
+B = backend.current()
+nn = B.nn
+ops = B.ops
 
 
 # Sector registry — matches Implementation Guide §1.6
@@ -25,28 +30,19 @@ SECTORS: Dict[int, Dict] = {
 }
 
 
-@dataclass
-class LoRAConfig:
-    d_model: int
-    n_layers: int
-    sector_id: int
-    rank: int
-    alpha: float = 1.0   # scaling: weight = alpha / rank
-
-
 class LoRALinear(nn.Module):
     """Single LoRA-adapted linear layer. Zero-output at initialization."""
 
     def __init__(self, in_dim: int, out_dim: int, rank: int, alpha: float = 1.0):
         super().__init__()
         self.scale = alpha / rank
-        # A initialized with Kaiming normal; B initialized at zero
+        # A initialized with default init; B initialized at zero
         self.lora_A = nn.Linear(in_dim, rank, bias=False)
         self.lora_B = nn.Linear(rank, out_dim, bias=False)
         # Zero-init B so output delta is 0 at start
-        self.lora_B.weight = mx.zeros((out_dim, rank))
+        self.lora_B.weight = nn.Parameter(ops.zeros((out_dim, rank)))
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def __call__(self, x):
         return self.lora_B(self.lora_A(x)) * self.scale
 
     def grow(self, delta: int) -> None:
@@ -57,14 +53,14 @@ class LoRALinear(nn.Module):
         out_dim  = self.lora_B.weight.shape[0]
         old_rank = self.lora_A.weight.shape[0]
         new_rank = old_rank + delta
-        newA = mx.concatenate(
-            [self.lora_A.weight, mx.random.normal((delta, in_dim)) * 0.02], axis=0)
-        newB = mx.concatenate(
-            [self.lora_B.weight, mx.zeros((out_dim, delta))], axis=1)
+        newA = ops.concatenate(
+            [self.lora_A.weight, ops.randn((delta, in_dim)) * 0.02], axis=0)
+        newB = ops.concatenate(
+            [self.lora_B.weight, ops.zeros((out_dim, delta))], axis=1)
         self.lora_A = nn.Linear(in_dim, new_rank, bias=False)
-        self.lora_A.weight = newA
+        self.lora_A.weight = nn.Parameter(newA)
         self.lora_B = nn.Linear(new_rank, out_dim, bias=False)
-        self.lora_B.weight = newB
+        self.lora_B.weight = nn.Parameter(newB)
         self.scale = self.scale * old_rank / new_rank   # keep alpha/rank constant
 
 
@@ -78,18 +74,19 @@ class SectorAdapter(nn.Module):
         super().__init__()
         self.sector_id = cfg.sector_id
         self.rank      = cfg.rank
-        # One LoRA adapter per (layer, projection) pair
-        self.adapters: List[Dict[str, LoRALinear]] = [
-            {
+        # One LoRA adapter per (layer, projection) pair. ModuleList of
+        # ModuleDict so params register under both backends.
+        self.adapters = nn.ModuleList([
+            nn.ModuleDict({
                 "q": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
                 "k": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
                 "v": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
                 "o": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
-            }
+            })
             for _ in range(cfg.n_layers)
-        ]
+        ])
 
-    def delta(self, layer_idx: int, proj: str, x: mx.array) -> mx.array:
+    def delta(self, layer_idx: int, proj: str, x):
         """Return the LoRA delta for a specific projection in a specific layer."""
         return self.adapters[layer_idx][proj](x)
 
@@ -97,8 +94,8 @@ class SectorAdapter(nn.Module):
         """Grow every projection's LoRA rank by `delta` (PGQ sector expansion).
         Returns the new rank."""
         for layer in self.adapters:
-            for proj in layer.values():
-                proj.grow(delta)
+            for proj in ("q", "k", "v", "o"):
+                layer[proj].grow(delta)
         self.rank += delta
         return self.rank
 
@@ -113,16 +110,6 @@ def build_all_sectors(d_model: int, n_layers: int) -> Dict[int, SectorAdapter]:
     return sectors
 
 
-def _grad_norm(grads) -> float:
-    """L2 norm over a (possibly nested) MLX gradient tree."""
-    from mlx.utils import tree_flatten
-    sq = 0.0
-    for _, g in tree_flatten(grads):
-        if isinstance(g, mx.array) and g.size > 0:
-            sq += float((g * g).sum().item())
-    return sq ** 0.5
-
-
 def masked_sector_update(model,
                          sector_id: int,
                          loss_fn,
@@ -132,17 +119,17 @@ def masked_sector_update(model,
     foundational core and every other sector bit-for-bit unchanged
     (Implementation Guide §1.6.1 — sector isolation by construction).
 
-    Isolation is enforced through MLX freeze/unfreeze: the whole model is
-    frozen, only `sector_id`'s adapter is unfrozen, so `value_and_grad`
-    differentiates w.r.t. that sector alone and the optimizer never allocates
-    state for any other parameter.
+    Isolation is enforced through the backend's trainable-mask: the whole model
+    is frozen, only `sector_id`'s adapter is made trainable, so the gradient is
+    computed w.r.t. that sector alone and the optimizer only touches params with
+    a gradient.
 
     Args:
         model:     RDMCAFoundational with sectors attached.
         sector_id: the sector s* to update.
-        loss_fn:   callable(model) -> scalar mx.array (already closes over the
+        loss_fn:   callable(model) -> scalar loss (already closes over the
                    consolidation batch and sets active sectors).
-        optimizer: an mlx optimizer instance.
+        optimizer: a backend optimizer instance.
 
     Returns:
         (loss_value: float, grad_norm: float)
@@ -150,19 +137,17 @@ def masked_sector_update(model,
     if not model.sectors or sector_id not in model.sectors:
         raise ValueError(f"sector {sector_id} not attached to model")
 
-    model.freeze()                       # freeze foundational core + all sectors
-    model.sectors[sector_id].unfreeze()  # unmask only the target sector
+    B.engine.set_trainable(model, [model.sectors[sector_id]])
 
-    lg = nn.value_and_grad(model, loss_fn)
-    loss, grads = lg(model)
-    mx.eval(loss)
-    gnorm = _grad_norm(grads)
+    grad_fn = B.engine.value_and_grad(model, loss_fn)
+    loss, grads = grad_fn(model)
+    B.engine.eval(loss)
+    gnorm = B.engine.grad_norm(model, grads)
 
-    optimizer.update(model, grads)
-    mx.eval(model.parameters(), optimizer.state)
+    B.engine.optimizer_step(optimizer, model, grads)
 
-    model.freeze()                       # restore: nothing trainable between cycles
-    return float(loss.item()), gnorm
+    B.engine.freeze_all(model)           # restore: nothing trainable between cycles
+    return B.engine.item(loss), gnorm
 
 
 # Backwards-compatible alias for older call sites / Implementation Guide naming.

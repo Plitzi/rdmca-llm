@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import sys, os
 try:
-    import mlx.core  # noqa: F401
+    import numpy  # noqa: F401
 except ModuleNotFoundError:
     venv_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            ".venv", "bin", "python")
     if os.path.exists(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
         os.execv(venv_py, [venv_py] + sys.argv)
-    print("ERROR: mlx not found. Run: source .venv/bin/activate")
+    print("ERROR: dependencies not found. Run: source .venv/bin/activate")
     sys.exit(1)
 
 """
@@ -35,17 +35,14 @@ import yaml
 import numpy as np
 from pathlib import Path
 
-import mlx.core as mx
-import mlx.nn as nn
-import mlx.optimizers as optim
-from mlx.utils import tree_flatten
-
 sys.path.insert(0, str(Path(__file__).parent))
-from src.model.transformer import RDMCAFoundational, ModelConfig, set_model_precision
-from src.modalities.text import TextTokenizer
-from src.data.loader import DataLoader
-from src.training.dashboard import TrainingDashboard
+import src.backend as backend
 from src.config import require_backend, get_precision
+
+# NOTE: model/data/dashboard modules are imported lazily (inside the functions
+# below) — only AFTER require_backend() has selected the compute backend — so
+# their classes bind to the configured backend (mlx | torch). Importing them at
+# module load would bind to the default backend before selection.
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +91,7 @@ def save_checkpoint(model, step: int, stage: int,
                     tokens_seen: int, loss: float, ckpt_dir: Path):
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     fname = ckpt_dir / f"step_{step:08d}.npz"
-    mx.savez(str(fname), **dict(tree_flatten(model.parameters())))
+    backend.current().engine.save_weights(model, str(fname))
     state = {
         "step": step, "stage": stage,
         "tokens_seen": tokens_seen, "loss": round(loss, 6),
@@ -112,19 +109,19 @@ def load_checkpoint(model, ckpt_dir: Path):
         return 0, 0
     with open(latest) as f:
         state = json.load(f)
-    weights = mx.load(state["checkpoint"])
-    model.load_weights(list(weights.items()))
-    mx.eval(model.parameters())
+    backend.current().engine.load_weights(model, state["checkpoint"])
     print(f"  [resume] step={state['step']:,} | "
           f"{state['tokens_seen']/1e6:.1f}M tokens | loss={state['loss']:.4f}")
     return state["step"], state["tokens_seen"]
 
 
-def build_data_loader(stage: int, cfg: dict) -> DataLoader:
+def build_data_loader(stage: int, cfg: dict):
     """
     Build a real DataLoader from stage data. Exits with actionable instructions
     if the tokenizer or the stage corpus is missing (no random-batch fallback).
     """
+    from src.modalities.text import TextTokenizer
+    from src.data.loader import DataLoader
     tokenizer = TextTokenizer()
     if not tokenizer.ready:
         print("ERROR: tokenizer not found at dist/tokenizer/rdmca_spm.model")
@@ -142,15 +139,15 @@ def build_data_loader(stage: int, cfg: dict) -> DataLoader:
         sys.exit(1)
 
 
-def validation_perplexity(model: RDMCAFoundational,
-                          data_loader, n_batches: int = 8) -> float:
+def validation_perplexity(model, data_loader, n_batches: int = 8) -> float:
     """Mean validation perplexity over n held-out batches."""
+    B = backend.current()
     losses = []
     for _ in range(n_batches):
-        batch = data_loader.next_batch()
+        batch = B.ops.array(data_loader.next_batch())
         loss  = model.eval_ce(batch)
-        mx.eval(loss)
-        losses.append(loss.item())
+        B.engine.eval(loss)
+        losses.append(B.engine.item(loss))
     return float(np.exp(np.mean(losses)))
 
 
@@ -160,7 +157,7 @@ def validation_perplexity(model: RDMCAFoundational,
 DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 35.0}
 
 
-def evaluate_gate(model: RDMCAFoundational, stage: int,
+def evaluate_gate(model, stage: int,
                   data_loader=None, cfg: dict = None) -> tuple:
     """
     Graduation gate. Operative metric is real validation perplexity (a proxy
@@ -184,7 +181,7 @@ def evaluate_gate(model: RDMCAFoundational, stage: int,
     return ppl, passed
 
 
-def _bcf_gate(model: RDMCAFoundational, cfg: dict) -> bool:
+def _bcf_gate(model, cfg: dict) -> bool:
     """Stage-5 BCF probe-accuracy gate (>= 0.90) when probes are available."""
     probe_path = Path("data/benchmarks/bcf_probes.jsonl")
     if not probe_path.exists():
@@ -206,7 +203,7 @@ def _bcf_gate(model: RDMCAFoundational, cfg: dict) -> bool:
     return acc >= 0.90
 
 
-def train_bcf_head(model: RDMCAFoundational, ckpt_dir: Path,
+def train_bcf_head(model, ckpt_dir: Path, precision: str = "fp32",
                    epochs: int = 30, batch: int = 16) -> None:
     """
     Train the Behavioral Constraint head on the probe set over frozen-core
@@ -219,6 +216,7 @@ def train_bcf_head(model: RDMCAFoundational, ckpt_dir: Path,
               "(expected data/benchmarks/bcf_probes.jsonl)")
         return
     from src.model.bcf import BCFHead, bcf_train_step, bcf_accuracy
+    from src.modalities.text import TextTokenizer
     probes = []
     with open(probe_path) as f:
         for line in f:
@@ -228,8 +226,9 @@ def train_bcf_head(model: RDMCAFoundational, ckpt_dir: Path,
                 probes.append((rec["text"], int(rec["label"])))
 
     head = BCFHead(model.cfg.d_model)
+    backend.current().engine.set_precision(head, precision)   # match model device/dtype
     model.bcf_head = head                       # attach for gate + pipeline use
-    opt = optim.AdamW(learning_rate=1e-3)
+    opt = backend.current().engine.make_optimizer(head, lr=1e-3, weight_decay=0.0)
     tok = TextTokenizer()
     print(f"  [bcf] Training BCF head on {len(probes)} probes, {epochs} epochs")
     for ep in range(epochs):
@@ -239,18 +238,18 @@ def train_bcf_head(model: RDMCAFoundational, ckpt_dir: Path,
     acc = bcf_accuracy(model, tok, head, probes)
     print(f"  [bcf] final probe accuracy={acc:.3f}")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    mx.savez(str(ckpt_dir / "bcf_head.npz"), **dict(tree_flatten(head.parameters())))
+    backend.current().engine.save_weights(head, str(ckpt_dir / "bcf_head.npz"))
 
 
-def freeze_model(model: RDMCAFoundational, ckpt_dir: Path):
-    """Permanently freeze the foundational core after Stage 5 (real MLX freeze)."""
+def freeze_model(model, ckpt_dir: Path):
+    """Permanently freeze the foundational core after Stage 5."""
     print("\n" + "=" * 60)
     print("  FREEZING FOUNDATIONAL CORE — Theta_F locked forever")
-    model.freeze()                       # MLX: excludes params from trainable set
+    backend.current().engine.freeze_all(model)   # excludes params from trainable set
     n = model.count_params()
     print(f"  {n/1e6:.1f}M parameters frozen")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    mx.savez(str(ckpt_dir / "theta_f_frozen.npz"), **dict(tree_flatten(model.parameters())))
+    backend.current().engine.save_weights(model, str(ckpt_dir / "theta_f_frozen.npz"))
     with open(ckpt_dir / "frozen.json", "w") as f:
         json.dump({"frozen": True, "params": n,
                    "timestamp": time.time()}, f, indent=2)
@@ -294,6 +293,13 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             mcfg = dict(mcfg)
             mcfg["vocab_size"] = actual_vocab
 
+    # Backend already selected by require_backend(); import model modules now so
+    # their classes bind to it.
+    from src.model.transformer import RDMCAFoundational, set_model_precision
+    from src.model.config import ModelConfig
+    from src.training.dashboard import TrainingDashboard
+    B = backend.current()
+
     model_cfg = ModelConfig(**{k: v for k, v in mcfg.items()
                                if k in ModelConfig.__dataclass_fields__})
     model = RDMCAFoundational(model_cfg)
@@ -308,15 +314,11 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
         prev_ckpt = root / f"stage{stage-1}" / "latest.json"
         with open(prev_ckpt) as f:
             prev_state = json.load(f)
-        weights = mx.load(prev_state["checkpoint"])
-        model.load_weights(list(weights.items()))
-        mx.eval(model.parameters())
+        B.engine.load_weights(model, prev_state["checkpoint"])
         print(f"  Loaded Stage {stage-1} weights as starting point")
 
-    optimizer = optim.AdamW(
-        learning_rate=tcfg["lr"],
-        weight_decay=tcfg["weight_decay"],
-    )
+    optimizer = B.engine.make_optimizer(
+        model, lr=tcfg["lr"], weight_decay=tcfg["weight_decay"])
 
     start_step = 0
     tokens_seen = 0
@@ -351,7 +353,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     def loss_fn(mdl, toks):
         return mdl.mrl_loss(toks)
 
-    loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
+    loss_and_grad_fn = B.engine.value_and_grad(model, loss_fn)
 
     dash = TrainingDashboard(stage, n_tokens_target,
                              resume_step=start_step,
@@ -364,20 +366,19 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             # Update learning rate
             lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
                            warmup, total_steps)
-            optimizer.learning_rate = lr
+            B.engine.set_lr(optimizer, lr)
 
             # Gradient accumulation
             acc_loss = 0.0
             grads = None
             for _ in range(grad_acc):
-                batch = data_loader.next_batch()
+                batch = B.ops.array(data_loader.next_batch())
                 loss, g = loss_and_grad_fn(model, batch)
-                mx.eval(loss)
-                acc_loss += loss.item()
+                B.engine.eval(loss)
+                acc_loss += B.engine.item(loss)
                 grads = g
 
-            optimizer.update(model, grads)
-            mx.eval(model.parameters(), optimizer.state)
+            B.engine.optimizer_step(optimizer, model, grads)
 
             step         += 1
             tokens_seen  += toks_step
@@ -409,8 +410,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 if passed:
                     save_checkpoint(model, step, stage, tokens_seen,
                                    acc_loss / grad_acc, ckpt_dir)
-                    mx.savez(str(ckpt_dir / "final.npz"),
-                             **dict(tree_flatten(model.parameters())))
+                    B.engine.save_weights(model, str(ckpt_dir / "final.npz"))
                     with open(ckpt_dir / "stage_complete.json", "w") as f:
                         json.dump({
                             "stage": stage, "step": step,
@@ -420,7 +420,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                     dash.print(f"[bold green]Stage {stage} COMPLETE — "
                                f"gate {score:.4f}[/bold green]")
                     if stage == 5:
-                        train_bcf_head(model, ckpt_dir)
+                        train_bcf_head(model, ckpt_dir, precision)
                         freeze_model(model, root / "foundational")
                     return True
 
@@ -441,7 +441,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
             dash.print(f"[bold green]Stage {stage} COMPLETE (gate skipped)[/bold green]")
             if stage == 5:
-                train_bcf_head(model, ckpt_dir)
+                train_bcf_head(model, ckpt_dir, precision)
                 freeze_model(model, root / "foundational")
             return True
 
@@ -450,7 +450,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
         if passed:
             dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")
             if stage == 5:
-                train_bcf_head(model, ckpt_dir)
+                train_bcf_head(model, ckpt_dir, precision)
                 freeze_model(model, root / "foundational")
         else:
             dash.print(f"Budget exhausted. Gate: {score:.4f} "

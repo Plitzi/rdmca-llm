@@ -28,7 +28,6 @@ import time
 import math
 from typing import List, Optional, Tuple
 
-import mlx.core as mx
 import numpy as np
 
 

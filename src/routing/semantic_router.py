@@ -22,9 +22,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-import mlx.core as mx
-import mlx.nn as nn
 import numpy as np
+
+import src.backend as backend
+
+B = backend.current()
+nn = B.nn
+ops = B.ops
 
 
 NUM_SECTORS    = 7
@@ -50,9 +54,9 @@ class STRClassifier(nn.Module):
         super().__init__()
         self.fc   = nn.Linear(d_model, n_sectors, bias=True)
 
-    def __call__(self, emb: mx.array) -> mx.array:
+    def __call__(self, emb):
         """emb: [..., d_model]  →  [..., n_sectors] probabilities"""
-        return mx.softmax(self.fc(emb), axis=-1)
+        return ops.softmax(self.fc(emb), axis=-1)
 
 
 class SemanticTokenRouter:
@@ -74,13 +78,12 @@ class SemanticTokenRouter:
             for i in range(0, len(tokens), CHUNK_SIZE)
         ]
 
-    def route(self, chunk: Chunk,
-              emb: mx.array) -> List[Tuple[int, float]]:
+    def route(self, chunk: Chunk, emb) -> List[Tuple[int, float]]:
         """
         Returns list of (sector_id, affinity) for all sectors with
         affinity ≥ MIN_AFFINITY, sorted descending.
         """
-        probs = self.classifier(emb).tolist()   # [n_sectors]
+        probs = ops.to_numpy(self.classifier(emb)).reshape(-1).tolist()   # [n_sectors]
         routed = [
             (sid + 1, float(p))
             for sid, p in enumerate(probs)

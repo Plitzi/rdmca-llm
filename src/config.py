@@ -53,18 +53,17 @@ def get_backend(cfg: dict) -> str:
 
 def require_backend(cfg: dict) -> str:
     """
-    Return the configured backend, or fail loudly. The PyTorch backend is not
-    implemented yet (selectable now, wired later) — there is no silent fallback.
+    Activate and return the configured compute backend (mlx | torch). Selects
+    it in `src.backend` so subsequently-imported model modules bind to it, then
+    fails loudly on an unknown name. Call this BEFORE importing model modules.
     """
-    backend = get_backend(cfg)
-    if backend == "mlx":
-        return "mlx"
-    if backend == "torch":
-        raise NotImplementedError(
-            "backend: torch is configured but the PyTorch backend is not "
-            "implemented yet. Use `backend: mlx` for now.")
-    raise ValueError(
-        f"Unknown backend '{backend}'. Supported: {', '.join(SUPPORTED_BACKENDS)}")
+    name = get_backend(cfg)
+    if name not in SUPPORTED_BACKENDS:
+        raise ValueError(
+            f"Unknown backend '{name}'. Supported: {', '.join(SUPPORTED_BACKENDS)}")
+    import src.backend as backend
+    backend.select(name)
+    return name
 
 
 def get_precision(cfg: dict) -> str:

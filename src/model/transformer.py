@@ -2,89 +2,60 @@
 RDMCA Foundational Transformer — T2 Edge (d_model=256)
 Decoder-only, RoPE, RMSNorm pre-norm, SwiGLU FFN.
 MRL (Matryoshka Representation Learning) loss over nested prefix dims.
+
+Backend-neutral: written once against the active backend facade
+(`src.backend.current()`), so the same code runs on MLX or PyTorch. Select the
+backend (via `src.backend.select`) BEFORE importing this module.
 """
 from __future__ import annotations
-import math
-from dataclasses import dataclass, field
 from typing import List, Optional
 
-import mlx.core as mx
-import mlx.nn as nn
 import numpy as np
-from mlx.utils import tree_map
+
+import src.backend as backend
+from src.model.config import ModelConfig   # re-exported below for compatibility
+
+B = backend.current()
+nn = B.nn
+ops = B.ops
 
 
-# Compute precision (training & inference). bf16 is the paper default; fp16 is
-# fastest for quick tests (no loss-scaling — use for smoke runs, not gates).
-PRECISION_DTYPES = {
-    "fp32": mx.float32,
-    "bf16": mx.bfloat16,
-    "fp16": mx.float16,
-}
-_FLOAT_DTYPES = (mx.float32, mx.bfloat16, mx.float16)
-
-
-def set_model_precision(model: nn.Module, precision: str) -> None:
-    """Cast all float parameters of a module to the given precision in place.
-    Integer params (none in this model) and non-arrays are left untouched."""
-    dtype = PRECISION_DTYPES[precision]
-
-    def _cast(p):
-        if isinstance(p, mx.array) and p.dtype in _FLOAT_DTYPES:
-            return p.astype(dtype)
-        return p
-
-    model.update(tree_map(_cast, model.parameters()))
-    mx.eval(model.parameters())
+# Compatibility shim: precision is now owned by the engine. Older call sites
+# import `set_model_precision` from here.
+def set_model_precision(model, precision: str) -> None:
+    """Cast all float parameters of a module to the given precision in place."""
+    B.engine.set_precision(model, precision)
 
 
 # ---------------------------------------------------------------------------
-# Config
+# RoPE — frequency tables precomputed on the host (numpy), so they never enter
+# the backend parameter tree; converted to backend tensors on the fly per pass.
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ModelConfig:
-    d_model: int = 256
-    n_layers: int = 8
-    n_heads: int = 4
-    ffn_dim: int = 1024
-    context_len: int = 2048
-    vocab_size: int = 32000
-    mrl_dims: List[int] = field(default_factory=lambda: [64, 128, 256])
-    dropout: float = 0.1
-    rope_theta: float = 10000.0
-
-
-# ---------------------------------------------------------------------------
-# RoPE
-# ---------------------------------------------------------------------------
-
-def _rope_freqs(dim: int, theta: float, max_len: int) -> mx.array:
-    """Precompute cosine/sine rotation matrices [max_len, dim//2, 2]."""
+def _rope_tables(dim: int, theta: float, max_len: int):
+    """Precompute cos/sin rotation tables [max_len, dim//2] as numpy arrays."""
     half = dim // 2
-    exponents = mx.arange(0, half, dtype=mx.float32) * 2.0 / dim
-    inv_freq = 1.0 / (theta ** exponents)           # [half]
-    positions = mx.arange(max_len, dtype=mx.float32) # [max_len]
-    freqs = mx.outer(positions, inv_freq)             # [max_len, half]
-    return freqs                                       # use cos/sin on the fly
+    exponents = np.arange(0, half, dtype=np.float32) * 2.0 / dim
+    inv_freq = 1.0 / (theta ** exponents)                 # [half]
+    positions = np.arange(max_len, dtype=np.float32)      # [max_len]
+    freqs = np.outer(positions, inv_freq)                 # [max_len, half]
+    return np.cos(freqs), np.sin(freqs)
 
 
-def apply_rope(x: mx.array, freqs: mx.array) -> mx.array:
+def apply_rope(x, cos, sin):
     """
-    x: [batch, seq, n_heads, head_dim]
-    freqs: [seq, head_dim // 2]
+    x:   [batch, seq, n_heads, head_dim]
+    cos/sin: [seq, head_dim // 2]  (backend tensors)
     """
-    B, S, H, D = x.shape
+    D = x.shape[-1]
     half = D // 2
     x1 = x[..., :half]
     x2 = x[..., half:]
-    # cos/sin are computed in fp32; cast to x.dtype so low-precision (bf16/fp16)
-    # activations are not silently promoted back to fp32 here.
-    cos = mx.cos(freqs)[None, :S, None, :].astype(x.dtype)   # [1, S, 1, half]
-    sin = mx.sin(freqs)[None, :S, None, :].astype(x.dtype)
-    rotated = mx.concatenate([x1 * cos - x2 * sin,
-                               x1 * sin + x2 * cos], axis=-1)
-    return rotated
+    # cos/sin precomputed in fp32; cast to x.dtype so bf16/fp16 stays low-prec.
+    cos = ops.astype(cos[None, :, None, :], x.dtype)      # [1, S, 1, half]
+    sin = ops.astype(sin[None, :, None, :], x.dtype)
+    return ops.concatenate([x1 * cos - x2 * sin,
+                            x1 * sin + x2 * cos], axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +66,10 @@ class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
-        self.weight = mx.ones((dim,))
+        self.weight = nn.Parameter(ops.ones((dim,)))
 
-    def __call__(self, x: mx.array) -> mx.array:
-        norm = mx.sqrt(mx.mean(x * x, axis=-1, keepdims=True) + self.eps)
+    def __call__(self, x):
+        norm = ops.sqrt(ops.mean(x * x, axis=-1, keepdims=True) + self.eps)
         return x / norm * self.weight
 
 
@@ -110,8 +81,8 @@ class SwiGLU(nn.Module):
         self.up_proj   = nn.Linear(d_model, ffn_dim, bias=False)
         self.down_proj = nn.Linear(ffn_dim, d_model, bias=False)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        return self.down_proj(nn.silu(self.gate_proj(x)) * self.up_proj(x))
+    def __call__(self, x):
+        return self.down_proj(ops.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
 class CausalSelfAttention(nn.Module):
@@ -128,20 +99,17 @@ class CausalSelfAttention(nn.Module):
         self.o_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
         self.dropout = nn.Dropout(cfg.dropout)
 
-        # Precompute RoPE frequencies
-        freqs = _rope_freqs(self.head_dim, cfg.rope_theta, cfg.context_len)
-        self._freqs = freqs  # [max_len, head_dim//2]
+        # RoPE tables (numpy host arrays — invisible to the param tree).
+        self._rope_cos, self._rope_sin = _rope_tables(
+            self.head_dim, cfg.rope_theta, cfg.context_len)
 
-        # Sector wiring (set by RDMCAFoundational.attach_sectors).
-        # layer_idx: this block's index;  _sector_delta: a callable
-        # (layer_idx, proj, x) -> mx.array delta, or None when no sectors.
-        # Both are plain Python attributes, ignored by the MLX param tree.
+        # Sector wiring (set by RDMCAFoundational.attach_sectors). Plain Python
+        # attributes, ignored by both backends' parameter trees.
         self.layer_idx = 0
         self._sector_delta = None
 
-    def __call__(self, x: mx.array,
-                 mask: Optional[mx.array] = None) -> mx.array:
-        B, S, D = x.shape
+    def __call__(self, x, mask=None):
+        Bsz, S, D = x.shape
         H, Hd = self.n_heads, self.head_dim
 
         q = self.q_proj(x)
@@ -152,34 +120,35 @@ class CausalSelfAttention(nn.Module):
             q = q + self._sector_delta(self.layer_idx, "q", x)
             k = k + self._sector_delta(self.layer_idx, "k", x)
             v = v + self._sector_delta(self.layer_idx, "v", x)
-        q = q.reshape(B, S, H, Hd)
-        k = k.reshape(B, S, H, Hd)
-        v = v.reshape(B, S, H, Hd)
+        q = q.reshape(Bsz, S, H, Hd)
+        k = k.reshape(Bsz, S, H, Hd)
+        v = v.reshape(Bsz, S, H, Hd)
 
-        # Apply RoPE
-        freqs = self._freqs[:S]
-        q = apply_rope(q, freqs)
-        k = apply_rope(k, freqs)
+        # Apply RoPE (convert host tables to backend tensors once per pass).
+        cos = ops.array(self._rope_cos[:S])
+        sin = ops.array(self._rope_sin[:S])
+        q = apply_rope(q, cos, sin)
+        k = apply_rope(k, cos, sin)
 
         # [B, H, S, Hd]
-        q = q.transpose(0, 2, 1, 3)
-        k = k.transpose(0, 2, 1, 3)
-        v = v.transpose(0, 2, 1, 3)
+        q = ops.transpose(q, (0, 2, 1, 3))
+        k = ops.transpose(k, (0, 2, 1, 3))
+        v = ops.transpose(v, (0, 2, 1, 3))
 
         # Scaled dot-product attention
-        attn = (q @ k.transpose(0, 1, 3, 2)) * self.scale  # [B, H, S, S]
+        attn = (q @ ops.transpose(k, (0, 1, 3, 2))) * self.scale  # [B, H, S, S]
 
         # Causal mask (match attn dtype so bf16/fp16 stays low-precision here)
-        causal = mx.triu(mx.full((S, S), -1e9), k=1).astype(attn.dtype)
+        causal = ops.astype(ops.triu(ops.full((S, S), -1e9), k=1), attn.dtype)
         attn = attn + causal[None, None, :, :]
 
         if mask is not None:
             attn = attn + mask
 
-        attn = mx.softmax(attn.astype(mx.float32), axis=-1).astype(x.dtype)
+        attn = ops.astype(ops.softmax(ops.astype(attn, ops.float32), axis=-1), x.dtype)
         attn = self.dropout(attn)
 
-        out = (attn @ v).transpose(0, 2, 1, 3).reshape(B, S, D)
+        out = ops.transpose((attn @ v), (0, 2, 1, 3)).reshape(Bsz, S, D)
         proj = self.o_proj(out)
         if self._sector_delta is not None:
             proj = proj + self._sector_delta(self.layer_idx, "o", out)
@@ -195,8 +164,7 @@ class TransformerBlock(nn.Module):
         self.ffn  = SwiGLU(cfg.d_model, cfg.ffn_dim)
         self.drop = nn.Dropout(cfg.dropout)
 
-    def __call__(self, x: mx.array,
-                 mask: Optional[mx.array] = None) -> mx.array:
+    def __call__(self, x, mask=None):
         x = x + self.drop(self.attn(self.ln1(x), mask))
         x = x + self.drop(self.ffn(self.ln2(x)))
         return x
@@ -218,60 +186,57 @@ class RDMCAFoundational(nn.Module):
         self.cfg    = cfg
         self.embed  = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.drop   = nn.Dropout(cfg.dropout)
-        self.blocks = [TransformerBlock(cfg) for _ in range(cfg.n_layers)]
+        self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
         self.ln_f   = RMSNorm(cfg.d_model)
 
         # Single shared output projection. MRL prefixes reuse a prefix of this
-        # weight matrix (W[:, :d]) instead of one full vocab head per dim —
-        # avoids ~|mrl_dims| × vocab × d_model parameters of head bloat.
+        # weight matrix (W[:, :d]) instead of one full vocab head per dim.
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
-        # Sector state (populated by attach_sectors). Plain attributes so the
-        # MLX parameter tree ignores them; sector adapters live under .sectors.
-        self.sectors = None          # {sector_id: SectorAdapter} once attached
-        self._routing = _Routing()   # holds the currently-active sectors
+        # Sector state (populated by attach_sectors). int-keyed dict for logic;
+        # params are registered for the backend via engine.register_submodules.
+        self.sectors = None
+        self._routing = _Routing()
 
     # ------------------------------------------------------------------
     # Output projection at an MRL prefix dimension
     # ------------------------------------------------------------------
 
-    def head_at_dim(self, h: mx.array, d: int) -> mx.array:
+    def head_at_dim(self, h, d: int):
         """Project the first d hidden dims to vocab using the shared head."""
-        # nn.Linear weight is [vocab, d_model]; prefix columns map prefix dims.
         w_d = self.head.weight[:, :d]            # [vocab, d]
         return h[..., :d] @ w_d.T                # [..., vocab]
 
     # ------------------------------------------------------------------
 
-    def __call__(self, tokens: mx.array,
-                 mask: Optional[mx.array] = None) -> mx.array:
+    def __call__(self, tokens, mask=None):
         """Forward pass. Returns full-dim hidden states [B, S, d_model]."""
         x = self.drop(self.embed(tokens))
         for block in self.blocks:
             x = block(x, mask)
         return self.ln_f(x)
 
-    def logits(self, tokens: mx.array) -> mx.array:
+    def logits(self, tokens):
         """Convenience: returns logits at the largest MRL dim."""
         h = self(tokens)
         return self.head_at_dim(h, self.cfg.mrl_dims[-1])
 
-    def eval_ce(self, tokens: mx.array) -> mx.array:
+    def eval_ce(self, tokens):
         """
         Plain next-token cross-entropy at full dimension — used for validation
         perplexity (exp(eval_ce)). tokens: [B, S+1]. No MRL weighting.
         """
         inputs, targets = tokens[:, :-1], tokens[:, 1:]
         logits = self.head_at_dim(self(inputs), self.cfg.mrl_dims[-1])
-        B, S, V = logits.shape
-        return nn.losses.cross_entropy(
-            logits.reshape(B * S, V), targets.reshape(B * S), reduction="mean")
+        Bsz, S, V = logits.shape
+        return ops.cross_entropy(
+            logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="mean")
 
     # ------------------------------------------------------------------
     # MRL loss (multi-scale Matryoshka)
     # ------------------------------------------------------------------
 
-    def mrl_loss(self, tokens: mx.array) -> mx.array:
+    def mrl_loss(self, tokens):
         """
         tokens: [B, S+1] — input + target shifted by 1.
         Returns scalar loss (weighted sum across MRL dims).
@@ -281,16 +246,16 @@ class RDMCAFoundational(nn.Module):
 
         h = self(inputs)           # [B, S, d_model]
 
-        total = mx.array(0.0)
+        total = ops.array(0.0)
         weights = [1.0 / d for d in self.cfg.mrl_dims]
         w_sum   = sum(weights)
 
         for w, d in zip(weights, self.cfg.mrl_dims):
             logits_d = self.head_at_dim(h, d)              # [B, S, vocab]
-            B, S, V  = logits_d.shape
-            loss_d   = nn.losses.cross_entropy(
-                logits_d.reshape(B * S, V),
-                targets.reshape(B * S),
+            Bsz, S, V = logits_d.shape
+            loss_d   = ops.cross_entropy(
+                logits_d.reshape(Bsz * S, V),
+                targets.reshape(Bsz * S),
                 reduction="mean",
             )
             total = total + (w / w_sum) * loss_d
@@ -302,23 +267,15 @@ class RDMCAFoundational(nn.Module):
     # ------------------------------------------------------------------
 
     def count_params(self, include_sectors: bool = True) -> int:
-        from mlx.utils import tree_flatten
-        params = self.parameters()
-        total = sum(v.size for _, v in tree_flatten(params))
+        total = B.engine.param_count(self)
         if not include_sectors:
-            sector_params = self.sector_param_count()
-            total -= sector_params
+            total -= self.sector_param_count()
         return total
 
     def sector_param_count(self) -> int:
-        from mlx.utils import tree_flatten
         if not self.sectors:
             return 0
-        return sum(
-            v.size
-            for adapter in self.sectors.values()
-            for _, v in tree_flatten(adapter.parameters())
-        )
+        return sum(B.engine.param_count(adapter) for adapter in self.sectors.values())
 
     # ------------------------------------------------------------------
     # Sector integration (post foundational freeze)
@@ -332,6 +289,7 @@ class RDMCAFoundational(nn.Module):
         until they are trained. Call after the foundational core is frozen.
         """
         self.sectors = sectors
+        B.engine.register_submodules(self, "_sector_store", list(sectors.values()))
         for i, block in enumerate(self.blocks):
             block.attn.layer_idx = i
             block.attn._sector_delta = self._compute_delta
@@ -340,20 +298,23 @@ class RDMCAFoundational(nn.Module):
         """Instantiate and register a new adaptive sector at runtime (PGQ new
         sector creation, §10.7.4). It participates in inference immediately
         because _compute_delta reads self.sectors live."""
-        from src.model.lora import SectorAdapter, LoRAConfig
+        from src.model.lora import SectorAdapter
+        from src.model.config import LoRAConfig
         if self.sectors is None:
             self.attach_sectors({})
         adapter = SectorAdapter(LoRAConfig(
             d_model=self.cfg.d_model, n_layers=len(self.blocks),
             sector_id=sector_id, rank=rank))
         self.sectors[sector_id] = adapter
+        # Re-register so the new adapter's params are tracked by the backend.
+        B.engine.register_submodules(self, "_sector_store", list(self.sectors.values()))
         return adapter
 
     def set_active_sectors(self, pairs) -> None:
         """Set which sectors contribute deltas: list of (sector_id, weight)."""
         self._routing.active = list(pairs) if pairs else []
 
-    def _compute_delta(self, layer_idx: int, proj: str, x: mx.array):
+    def _compute_delta(self, layer_idx: int, proj: str, x):
         """Sum of active sector LoRA deltas for one projection in one layer."""
         active = self._routing.active
         if not active or not self.sectors:
@@ -369,7 +330,7 @@ class RDMCAFoundational(nn.Module):
 
 
 class _Routing:
-    """Plain (non-Module) holder for the active-sector list, so the MLX
+    """Plain (non-Module) holder for the active-sector list, so the backend
     parameter tree never tries to traverse it."""
     def __init__(self):
         self.active = []

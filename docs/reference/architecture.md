@@ -15,7 +15,7 @@ FFN 1024, context 2048.
 | FFN | SwiGLU |
 | MRL dims | [64, 128, 256] |
 | Core | freezable foundational (Θ_F) + 7 LoRA sectors |
-| Backend | MLX (PyTorch selectable in config, not implemented yet) |
+| Backend | MLX or PyTorch (`backend:` key) — one model source, both supported |
 | Precision | fp32 / bf16 / fp16 (`training.precision`, default bf16) |
 
 ### LoRA sectors
@@ -31,7 +31,8 @@ FFN 1024, context 2048.
 | S7 | Behavioral | Ethics, BCF — adversarial buffer only | r=4 |
 
 Sectors are updated **one at a time** during consolidation, with real gradient masking
-(MLX freeze/unfreeze): the core and the other sectors stay bit-identical. PGQ can **grow
+(`engine.set_trainable`: MLX freeze/unfreeze, or PyTorch `requires_grad_` toggling): the
+core and the other sectors stay bit-identical. PGQ can **grow
 a sector's rank** (`SectorAdapter.grow_rank`) or **create new sectors**
 (`model.add_sector`) at runtime, preserving the output (new components are zero-output at
 first).
@@ -40,14 +41,31 @@ first).
 
 ## Backend and precision
 
-- **Backend** (`backend:` top-level key, default `mlx`). `mlx` is the only implemented
-  backend. `torch` is accepted but `require_backend()` (`src/config.py`) fails fast with
-  a clear error — no silent fallback. The selector exists so the PyTorch backend can be
-  wired in later without changing configs.
+- **Backend** (`backend:` top-level key, default `mlx`). Two backends are fully
+  supported — **MLX** (Apple Silicon) and **PyTorch** (CUDA/MPS/CPU) — behind a single
+  facade in `src/backend/`. The model is written **once** against the active backend's
+  three namespaces:
+  - `B.nn` — Module + layer factories (`Linear`, `Embedding`, `Conv*`, `Parameter`,
+    `ModuleList`, …); convs use channels-first (NCHW/NCL), MLX wrappers permute internally.
+  - `B.ops` — tensor functions, normalized to MLX-style signatures (`axis=`, `keepdims=`).
+  - `B.engine` — training/runtime glue (`value_and_grad`, optimizer, `set_trainable`,
+    `save_weights`/`load_weights`, precision, memory stats).
+
+  `require_backend(cfg)` (`src/config.py`) calls `backend.select(name)` at startup, so
+  model modules must be imported **after** selection — the entrypoints do this with
+  function-local imports. Adding a third backend = one `Backend` subclass + a line in
+  `src/backend/registry.py`; no model code changes.
+
+  **Checkpoints** use a neutral `.npz` of float32 numpy arrays with identical parameter
+  names, so the text foundational core is **cross-backend** (train on MLX, load on torch,
+  and vice-versa). The image/audio VQ-VAE checkpoints are *not* cross-backend (conv weight
+  layouts differ). On Mac, `bf16` over torch **MPS** is slower/less precise than MLX —
+  prefer MLX there.
 - **Precision** (`training.precision`, default `bf16`). `set_model_precision()`
-  (`src/model/transformer.py`) casts the float params to fp32/bf16/fp16. RoPE and the
-  causal mask are dtype-aware so low precision is not silently promoted to fp32. fp16 has
-  no loss-scaling — use it for quick smoke tests, not for real runs.
+  (`src/model/transformer.py`, a thin shim over `engine.set_precision`) casts the float
+  params to fp32/bf16/fp16 (and, for torch, moves the model to the selected device). RoPE
+  and the causal mask are dtype-aware so low precision is not silently promoted to fp32.
+  fp16 has no loss-scaling — use it for quick smoke tests, not for real runs.
 
 ---
 
@@ -80,8 +98,15 @@ vocab_size (model) = total
 rdmca-llm/
 ├── src/
 │   ├── config.py               Config + languages + backend/precision + tokenizer_info
+│   ├── backend/                Compute-backend facade (one model, many backends)
+│   │   ├── __init__.py          select(name) / current()
+│   │   ├── base.py              Backend interface (nn / ops / engine) + surface check
+│   │   ├── registry.py          name → backend builder (lazy import)
+│   │   ├── mlx_backend.py       MLX implementation (reference)
+│   │   └── torch_backend.py     PyTorch implementation (CUDA / MPS / CPU)
 │   ├── model/
-│   │   ├── transformer.py       RDMCAFoundational + ModelConfig + precision + add_sector
+│   │   ├── config.py            ModelConfig + LoRAConfig (backend-neutral dataclasses)
+│   │   ├── transformer.py       RDMCAFoundational + precision shim + add_sector
 │   │   ├── lora.py              7 LoRA sectors + grad masking + grow_rank
 │   │   └── bcf.py              Behavioral Constraint Function head
 │   ├── memory/
@@ -103,8 +128,8 @@ rdmca-llm/
 │   ├── modalities/
 │   │   ├── vocab.py            Unified vocab layout (offsets)
 │   │   ├── text.py             SentencePiece wrapper (config-driven languages)
-│   │   ├── image.py            ImageVQVAE (conv VQ-VAE in MLX)
-│   │   ├── audio.py            AudioVQVAE (log-mel VQ-VAE in MLX)
+│   │   ├── image.py            ImageVQVAE (conv VQ-VAE, NCHW, backend-neutral)
+│   │   ├── audio.py            AudioVQVAE (log-mel VQ-VAE, NCL, backend-neutral)
 │   │   ├── vq.py               Shared VectorQuantizer
 │   │   └── perception.py       Multimodal Perception Layer (MPL)
 │   ├── data/loader.py          DataLoader (text + pre-tokenized multimodal)
@@ -161,15 +186,15 @@ The model uses MRL: embeddings are trained over nested dims, so a large model ca
 size you will use.
 
 ```python
-import mlx.core as mx
-w = mx.load("dist/checkpoints/<profile>/foundational/theta_f_frozen.npz")
-emb_t3 = w["embed.weight"][:, :512]   # 512-dim prefix
+import numpy as np                       # checkpoints are neutral .npz (numpy)
+w = np.load("dist/checkpoints/<profile>/foundational/theta_f_frozen.npz")
+emb_t3 = w["embed.weight"][:, :512]       # 512-dim prefix
 ```
 
-| Profile | approx d_model | Target hardware |
-|---|---|---|
-| test | 256 (4 layers) | smoke test |
-| nano | 384 | MacBook M2/M3 |
-| m2max | 512 | MacBook M2/M3 Max 64 GB |
-| a100 | 768 | 1× A100 (needs the torch/CUDA backend) |
-| cluster | 1024 | multi-GPU (needs the torch/CUDA backend) |
+| Profile | approx d_model | Target hardware | Default backend |
+|---|---|---|---|
+| test | 256 (4 layers) | smoke test | mlx |
+| nano | 384 | MacBook M2/M3 | mlx |
+| m2max | 512 | MacBook M2/M3 Max 64 GB | mlx |
+| a100 | 768 | 1× A100 (CUDA) | torch |
+| cluster | 1024 | multi-GPU (CUDA, single device) | torch |
