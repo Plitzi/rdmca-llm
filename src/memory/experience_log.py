@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import List
 
-EXPERIENCE_LOG = "data/experiences.jsonl"
+EXPERIENCE_LOG = "data/runtime/experiences.jsonl"
 
 
 def log_experience(text: str, lang: str = "en", modality: str = "text",

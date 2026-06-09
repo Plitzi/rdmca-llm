@@ -187,7 +187,7 @@ With `--image`/`--audio`, the **perception layer** converts the file to unified-
 tokens and prepends them to the context (text output, Era 3a). It requires the matching
 modality tokenizer (step 6.2).
 
-Each turn is recorded as an **experience** in `data/experiences.jsonl` for daily
+Each turn is recorded as an **experience** in `data/runtime/experiences.jsonl` for daily
 consolidation.
 
 ## 10. Daily consolidation
@@ -204,7 +204,7 @@ python consolidation_daemon.py --profile m2max           # daemon (waits for idl
 ```
 
 Updated sectors are saved to `dist/checkpoints/<profile>/sectors.npz`; long-term memory
-to `data/ltss.db`.
+to `data/runtime/ltss.db`.
 
 ## 11. Quick test (the `test` profile)
 
@@ -235,7 +235,7 @@ rm -rf dist/checkpoints/
 # Tokenizers (text + VQ-VAE)
 rm -rf dist/tokenizer/
 # Sector snapshots, logs and memory
-rm -rf snapshots/* logs/* data/ltss.db data/experiences.jsonl
+rm -rf snapshots/* logs/* data/runtime/ltss.db data/runtime/experiences.jsonl
 ```
 
 ## 13. Scaling up (T3/T4)

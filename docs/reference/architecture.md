@@ -131,7 +131,7 @@ rdmca-llm/
 
 Checkpoints: `dist/checkpoints/<profile>/stage<N>/`, frozen core at
 `.../foundational/theta_f_frozen.npz`, sectors at `.../sectors.npz`. Tokenizers in
-`dist/tokenizer/`. Long-term memory in `data/ltss.db`.
+`dist/tokenizer/`. Long-term memory in `data/runtime/ltss.db`.
 
 ---
 
@@ -147,7 +147,7 @@ It is only for verifying the pipeline; the weights are not production-quality.
 ## Consolidation (daemon)
 
 `consolidation_daemon.py` loads the frozen core + sectors, drains
-`data/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
+`data/runtime/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
 filter (R⁺<0) → LTSS consistency → MRF → sector assignment (STR + SectorRouter) → masked
 per-sector update → PGQ → snapshot/rollback → audit log in `logs/cycle_*.json`. It saves
 the sectors to `dist/checkpoints/<profile>/sectors.npz`.

@@ -447,6 +447,15 @@ def main():
         raise   # anything else: show full traceback
 
     print("\nDone. Next: python scripts/train_tokenizer.py")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # The HuggingFace datasets streaming iterators leave multiprocessing
+    # SemLock objects dangling when a stream is closed early (e.g. on the MB
+    # limit). Force a GC pass so their finalizers run and unregister from the
+    # resource_tracker — otherwise the forced os._exit() below skips that
+    # cleanup and the tracker prints a spurious "leaked semaphore" warning.
+    import gc
+    gc.collect()
     # Force exit — the HuggingFace datasets library leaves background
     # threads running after streaming ends, which blocks normal exit.
     os._exit(0)

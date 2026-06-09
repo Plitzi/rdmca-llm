@@ -59,7 +59,7 @@ class LTSS:
     emb_dim:    embedding dimension (must match foundational model d_model)
     """
 
-    def __init__(self, db_path: str = "data/ltss.db", emb_dim: int = 256):
+    def __init__(self, db_path: str = "data/runtime/ltss.db", emb_dim: int = 256):
         self.db_path = db_path
         self.emb_dim = emb_dim
         self._embeddings: List[np.ndarray] = []
