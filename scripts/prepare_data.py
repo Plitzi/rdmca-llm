@@ -465,6 +465,20 @@ def main():
     # cleanup and the tracker prints a spurious "leaked semaphore" warning.
     import gc
     gc.collect()
+    # os._exit() below skips normal cleanup, so any SemLock still registered
+    # with the resource_tracker triggers a spurious "leaked semaphore" warning
+    # when the tracker process detects our pipe closing. The tracker's resource
+    # registry lives in *its* subprocess (not reachable from here), so the only
+    # way to stop the warning is to kill that subprocess before it runs its
+    # end-of-life check. The OS reclaims the leftover semaphores on exit anyway.
+    try:
+        import signal
+        from multiprocessing import resource_tracker
+        pid = getattr(resource_tracker._resource_tracker, "_pid", None)
+        if pid is not None:
+            os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
     # Force exit — the HuggingFace datasets library leaves background
     # threads running after streaming ends, which blocks normal exit.
     os._exit(0)
