@@ -20,6 +20,9 @@ Targets (pick any combination, or --all):
 Scope with --level N to limit --checkpoints and --data to one level
 (tokenizer/runtime/logs/hf-cache are global and always purged in full when selected).
 
+Tracked `.gitkeep` markers are preserved: a purged folder that has one stays as
+an empty, tracked folder (the repo keeps its directory skeleton in git).
+
 Safety: prints exactly what will be deleted (with sizes) and asks for
 confirmation. Use --dry-run to only preview, or --yes to skip the prompt.
 
@@ -34,7 +37,6 @@ Examples:
 from __future__ import annotations
 import argparse
 import os
-import shutil
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -75,6 +77,25 @@ def _paths_for(target: str, level: int | None) -> list[Path]:
     if target == "hf_cache":                         # shared, outside the repo
         return _hf_cache_paths()
     return []
+
+
+def _remove(path: Path) -> None:
+    """Delete `path`, but preserve any `.gitkeep` marker (and the directory that
+    holds it) so the repo's tracked directory skeleton survives a purge.
+
+    Files are unlinked; a `.gitkeep` is never removed. A directory is emptied
+    recursively and then removed only if nothing was kept inside it — so a folder
+    containing a `.gitkeep` stays as an empty, tracked folder."""
+    if path.is_symlink() or path.is_file():
+        if path.name != ".gitkeep":
+            path.unlink()
+        return
+    for child in path.iterdir():
+        _remove(child)
+    try:
+        path.rmdir()            # succeeds only if now empty (no .gitkeep kept)
+    except OSError:
+        pass                    # a .gitkeep (or kept subdir) remains → keep the folder
 
 
 def _display(p: Path) -> str:
@@ -180,15 +201,14 @@ def main() -> None:
     removed = 0
     for _, p, _sz in plan:
         try:
-            if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            _remove(p)
             removed += 1
-            print(f"  removed {_display(p)}")
+            kept = " (kept .gitkeep)" if p.exists() else ""
+            print(f"  removed {_display(p)}{kept}")
         except OSError as e:
             print(f"  [error] could not remove {_display(p)}: {e}")
     print(f"\nDone — removed {removed}/{len(plan)} path(s), freed ~{_human(total)}.")
+    print("Tracked .gitkeep markers are preserved (empty folders stay).")
     print("Fresh start: prepare_data → train_tokenizer → train_stage.")
 
 
