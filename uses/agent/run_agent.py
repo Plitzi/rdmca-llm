@@ -7,8 +7,11 @@ example tool (calculator) and one example skill (arithmetic-helper SKILL.md) are
 wired in; add more under tools/ and skills/.
 
 Usage:
-  python uses/agent/run_agent.py --level 1 --stage 8 --query "What time is it?"
+  python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
   python uses/agent/run_agent.py --dummy --query "hello"     # plumbing only (random weights)
+
+Reasoning (default medium) and live streaming (default on) are inherited from
+the chat runner; the loop runs several think→act→observe rounds until it answers.
 
 Note: tool-call quality depends on model scale/training. Small levels may not
 emit valid Actions yet; the loop degrades gracefully to a direct answer.
