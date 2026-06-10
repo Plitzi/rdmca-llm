@@ -18,7 +18,8 @@ information:
     2: "Patrones: razonamiento abstracto exigente (ARC-Challenge)."
     3: "Matemáticas: problemas de palabra y aritmética avanzada (GSM8K)."
     4: "Causal/Procedural: cadenas causa→efecto y procedimientos paso a paso."
-    5: "Ética: principios morales y restricciones de comportamiento (BCF)."
+    5: "Razonamiento: cadena de pensamiento que orquesta lenguaje, aritmética y causalidad."
+    6: "Ética: principios morales y restricciones de comportamiento (BCF) — aquí se congela la base."
 
 model:
   d_model: 512
@@ -92,43 +93,43 @@ curriculum:
       filter:
         max_grade: 13
         max_word_len: 28
-  stage5:
+  stage6:
     name: "Cognitive ethics and BCF"
     entry_level: 4                     # ethics enters here.
     n_tokens: 100_000_000
-    data_dir: "data/level4/stage5"
+    data_dir: "data/level4/stage6"
     data:
       sources: [ethics]
       filter: null
-  stage6:
-    name: "Action and tool use"
-    entry_level: 0
-    n_tokens: 50_000_000
-    data_dir: "data/level4/stage6"
-    data:
-      sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
-      filter: null
   stage7:
-    name: "Model Context Protocol (MCP)"
+    name: "Action and tool use"
     entry_level: 0
     n_tokens: 50_000_000
     data_dir: "data/level4/stage7"
     data:
-      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
+      sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null
   stage8:
-    name: "Skills"
+    name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 50_000_000
     data_dir: "data/level4/stage8"
     data:
-      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
   stage9:
+    name: "Skills"
+    entry_level: 0
+    n_tokens: 50_000_000
+    data_dir: "data/level4/stage9"
+    data:
+      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      filter: null
+  stage5:
     name: "Reasoning"
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 50_000_000
-    data_dir: "data/level4/stage9"
+    data_dir: "data/level4/stage5"
     data:
       sources: [reasoning]     # CoT real (GSM8K) como <think>…</think> + respuesta.
       filter: null

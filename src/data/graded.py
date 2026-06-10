@@ -205,8 +205,8 @@ def _hermes_tools(raw) -> Optional[str]:
 
 def _hermes_events(ex: dict):
     """Parse one hermes example into (tools_json, events). `events` is a list of
-    ('user'|'assistant'|'call'|'result', payload) — shared by the agentic (stage 6)
-    and MCP (stage 7) serializers below."""
+    ('user'|'assistant'|'call'|'result', payload) — shared by the agentic (stage 7)
+    and MCP (stage 8) serializers below."""
     tools = _hermes_tools(ex.get("tools"))
     events: list = []
     for turn in ex.get("conversations") or []:
@@ -277,7 +277,8 @@ def stream_agentic(langs: List[str], limit_mb: Optional[int] = None) -> Iterator
 
 
 # ──────────────────────────── reasoning / CoT (real, EN) ────────────────────
-# Stage 9: chain-of-thought traces. GSM8K answers already contain step-by-step
+# Stage 5: chain-of-thought traces (capstone of the frozen cognitive base). GSM8K
+# answers already contain step-by-step
 # working ending in "#### <final>"; we reframe each into the canonical thinking
 # transcript — a <think>…</think> scratchpad followed by the answer — so the
 # model learns to reason before answering (mirrors Claude's thinking blocks).
@@ -320,7 +321,7 @@ def stream_reasoning(langs: List[str], limit_mb: Optional[int] = None) -> Iterat
 
 
 # ──────────────────────────── MCP protocol (real, EN) ───────────────────────
-# Stage 7: the SAME real tool interactions, re-serialized into the Model Context
+# Stage 8: the SAME real tool interactions, re-serialized into the Model Context
 # Protocol wire format (JSON-RPC 2.0): a tools/list result, then tools/call
 # requests and their result messages. Real underlying data (no synthetic), just
 # in MCP's envelope — so the model learns the protocol Claude/MCP servers speak.
@@ -381,7 +382,7 @@ def stream_mcp(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dic
 
 
 # ──────────────────────────── skills (real, EN) ─────────────────────────────
-# Stage 8: skills work like Claude Code's — a SKILL.md with YAML frontmatter
+# Stage 9: skills work like Claude Code's — a SKILL.md with YAML frontmatter
 # (name, description = when to use it) plus instructions. When a request matches
 # a skill's description, the agent follows its instructions. Real procedures from
 # Super-NaturalInstructions: each task's `definition` is the instruction body,

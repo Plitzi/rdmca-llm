@@ -24,7 +24,8 @@ Usage:
   python train_stage.py --level 1 --stage 2
 
 Each stage must pass its graduation gate before the next can begin.
-Foundational core is frozen permanently after Stage 5.
+Foundational core (stages 1-6: cognition + values) is frozen permanently after
+the ethics/BCF stage (stage 6); behavioral stages 7-9 train on top as sectors.
 """
 import os
 import sys
@@ -48,12 +49,14 @@ from src.config import require_backend, get_precision, SUPPORTED_PRECISIONS
 # ---------------------------------------------------------------------------
 # Stage gates: metric name, threshold, human description
 # ---------------------------------------------------------------------------
+# Natural order: cognition (1-5) → values (6, freeze) → behavioral interfaces (7-9).
 STAGE_GATES = {
-    1: ("blim_accuracy",     0.70, "Language — BLiMP grammaticality"),
-    2: ("arc_easy_accuracy", 0.60, "Patterns — ARC easy"),
-    3: ("gsm8k_accuracy",    0.15, "Abstraction — GSM8K"),
-    4: ("causal_accuracy",   0.65, "Causal reasoning"),
-    5: ("bcf_accuracy",      0.90, "Cognitive ethics — BCF probe"),
+    1: ("blim_accuracy",      0.70, "Language — BLiMP grammaticality"),
+    2: ("arc_easy_accuracy",  0.60, "Patterns — ARC easy"),
+    3: ("gsm8k_accuracy",     0.15, "Abstraction — GSM8K"),
+    4: ("causal_accuracy",    0.65, "Causal and procedural reasoning"),
+    5: ("reasoning_accuracy", 0.20, "Reasoning — chain-of-thought (GSM8K)"),
+    6: ("bcf_accuracy",       0.90, "Cognitive ethics — BCF probe"),
 }
 
 STAGE_NAMES = {
@@ -61,12 +64,18 @@ STAGE_NAMES = {
     2: "Perception and pattern recognition",
     3: "Abstraction and symbolic composition",
     4: "Causal and procedural reasoning",
-    5: "Cognitive ethics and BCF",
-    6: "Action and tool use",
-    7: "Model Context Protocol (MCP)",
-    8: "Skills",
-    9: "Reasoning",
+    5: "Reasoning",
+    6: "Cognitive ethics and BCF",
+    7: "Action and tool use",
+    8: "Model Context Protocol (MCP)",
+    9: "Skills",
 }
+
+# The foundational core (stages 1-6: cognition + values) is frozen permanently
+# after the BCF/ethics stage. Behavioral stages (7-9: tool use / MCP / skills)
+# train on top of the frozen base as sectors. This is the only place the freeze
+# point is defined — change it here if the curriculum order changes.
+BCF_STAGE = 6
 
 
 def stage_name(stage: int, cfg: dict | None = None) -> str:
@@ -176,7 +185,7 @@ def validation_perplexity(model, data_loader, n_batches: int = 8) -> float:
 # Proxy perplexity gates per stage until task-specific benchmarks
 # (BLiMP / ARC / GSM8K / COPA / BCF probes) are wired in. Overridable via
 # cfg["gate"]["max_perplexity"][stage].
-DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 35.0}
+DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0, 6: 35.0}
 
 
 def evaluate_gate(model, stage: int,
@@ -185,7 +194,7 @@ def evaluate_gate(model, stage: int,
     Graduation gate. Operative metric is real validation perplexity (a proxy
     that actually measures the model); task-specific benchmarks (BLiMP, ARC,
     GSM8K, COPA, BCF probes) should replace the per-stage threshold as they
-    are wired in. Stage 5 additionally checks BCF probe accuracy when a probe
+    are wired in. The ethics/BCF stage additionally checks BCF probe accuracy when a probe
     set is available. Returns (score, passed).
     """
     # Post-base behavioral stages (tool use / MCP / skills / reasoning) have no
@@ -201,7 +210,7 @@ def evaluate_gate(model, stage: int,
     print(f"  [gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "
           f"-> {'PASS' if passed else 'fail'}")
 
-    if stage == 5:
+    if stage == BCF_STAGE:
         passed = passed and _bcf_gate(model, cfg)
     return ppl, passed
 
@@ -267,7 +276,7 @@ def train_bcf_head(model, ckpt_dir: Path, precision: str = "fp32",
 
 
 def freeze_model(model, ckpt_dir: Path):
-    """Permanently freeze the foundational core after Stage 5."""
+    """Permanently freeze the foundational core after the ethics/BCF stage."""
     print("\n" + "=" * 60)
     print("  FREEZING FOUNDATIONAL CORE — Theta_F locked forever")
     backend.current().engine.freeze_all(model)   # excludes params from trainable set
@@ -447,7 +456,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                         }, f, indent=2)
                     dash.print(f"[bold green]Stage {stage} COMPLETE — "
                                f"gate {score:.4f}[/bold green]")
-                    if stage == 5:
+                    if stage == BCF_STAGE:
                         train_bcf_head(model, ckpt_dir, precision)
                         freeze_model(model, root / "foundational")
                     return True
@@ -468,7 +477,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                            "checkpoint": ckpt_file,
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
             dash.print(f"[bold green]Stage {stage} COMPLETE (gate skipped)[/bold green]")
-            if stage == 5:
+            if stage == BCF_STAGE:
                 train_bcf_head(model, ckpt_dir, precision)
                 freeze_model(model, root / "foundational")
             return True
@@ -477,7 +486,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
         dash.set_gate_result(score, passed)
         if passed:
             dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")
-            if stage == 5:
+            if stage == BCF_STAGE:
                 train_bcf_head(model, ckpt_dir, precision)
                 freeze_model(model, root / "foundational")
         else:
@@ -566,13 +575,16 @@ Examples:
 
     skip_gate = cfg.get("skip_gate", False)
     lvl_flag = f" --level {level}" if isinstance(level, int) else f" --config {cfg_path}"
+    # Suggest the next active stage (curriculum may be non-contiguous, e.g. a
+    # level that skips causal/ethics still trains reasoning + the behavioral stages).
+    active = sorted(int(k.replace("stage", "")) for k in (cfg.get("curriculum", {}) or {}))
+    later = [s for s in active if s > args.stage]
     if passed:
         if skip_gate:
             print(f"\nStage {args.stage} complete (smoke test). Pipeline verified.")
-            print(f"Next: python uses/chat/run_chat.py{lvl_flag} --stage {args.stage}")
-        elif args.stage < 5:
-            nxt = args.stage + 1
-            print(f"\nNext: python train_stage.py{lvl_flag} --stage {nxt}")
+            print(f"Next: python uses/chat/run_chat.py{lvl_flag} --stage {active[-1]}")
+        elif later:
+            print(f"\nNext: python train_stage.py{lvl_flag} --stage {later[0]}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
             print(f"Next: python consolidation_daemon.py{lvl_flag} --once")

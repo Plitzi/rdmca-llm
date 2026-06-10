@@ -39,15 +39,16 @@ python scripts/prepare_data.py --level 1 --stage all
 # 2. Train the tokenizer for the level
 python scripts/train_tokenizer.py --level 1
 
-# 3. Train the stages — IN ORDER (each stage starts from the previous one's
-#    weights). Level 1's active stages are: 1, 2, 3, 6, 7, 8, 9.
+# 3. Train the stages — IN ORDER (each starts from the previous one's weights).
+#    Natural order: cognition (1-5) → values (6, freeze) → behavioral (7-9).
+#    Level 1's active stages are: 1, 2, 3, 5, 7, 8, 9 (causal/ethics enter at L3/L4).
 python train_stage.py --level 1 --stage 1     # language
 python train_stage.py --level 1 --stage 2     # patterns
 python train_stage.py --level 1 --stage 3     # arithmetic
-python train_stage.py --level 1 --stage 6     # tool use
-python train_stage.py --level 1 --stage 7     # MCP
-python train_stage.py --level 1 --stage 8     # skills
-python train_stage.py --level 1 --stage 9     # reasoning (chain-of-thought)
+python train_stage.py --level 1 --stage 5     # reasoning (chain-of-thought) — capstone of the base
+python train_stage.py --level 1 --stage 7     # tool use
+python train_stage.py --level 1 --stage 8     # MCP
+python train_stage.py --level 1 --stage 9     # skills
 
 # 4. Chat — streamed live, reasoning=medium by default
 python uses/chat/run_chat.py --level 1 --stage 9

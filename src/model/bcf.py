@@ -2,7 +2,7 @@
 Behavioral Constraint Function (BCF) — RDMCA §15
 A trained safety head that classifies every candidate action/experience.
 B(a, s) = 1 if the action is permissible, 0 if it violates constraints.
-Trained on the BCF probe set during Stage 5 and frozen permanently.
+Trained on the BCF probe set during the ethics stage (stage 6) and frozen permanently.
 Sector S7 (Behavioral) receives gradient ONLY from the adversarial buffer,
 never from the standard consolidation buffer.
 

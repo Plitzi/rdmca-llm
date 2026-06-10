@@ -27,8 +27,8 @@ The level sets the model size, the data complexity and the resource use — pick
 highest your hardware can run (a startup guard refuses a level that won't fit).
 
 ➡️ **Full step-by-step guide: [docs/GUIDE.md](docs/GUIDE.md)** (setup → backend/precision
-→ languages → data → tokenizers → 5 stages → freeze/BCF → chat text/image/audio → daily
-consolidation).
+→ languages → data → tokenizers → cognitive base (stages 1-6) → freeze/BCF →
+behavioral stages (tool/MCP/skills) → chat text/image/audio → daily consolidation).
 
 ---
 
@@ -42,7 +42,7 @@ consolidation).
 | Precision | `fp32 / bf16 / fp16` (`training.precision`, default bf16) |
 | Languages | **configurable** (`model.languages`), EN+ES by default |
 | Multimodal | text ∪ image (VQ-VAE) ∪ audio (log-mel VQ-VAE), unified vocab |
-| Curriculum | 5 stages → frozen core → daily consolidation |
+| Curriculum | cognitive base (6 stages, freeze at ethics) → behavioral (tool/MCP/skills) → daily consolidation |
 | Safety | BCF + attack taxonomy (adversarial filter in consolidation) |
 | Hardware | Apple Silicon (MLX) · NVIDIA/CUDA & CPU/MPS (PyTorch) |
 

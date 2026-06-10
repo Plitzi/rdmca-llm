@@ -89,7 +89,7 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
 def main() -> None:
     ap = argparse.ArgumentParser(description="RDMCA agent (tool loop)")
     ap.add_argument("--level", type=int, default=1, help="Educational level (default: 1)")
-    ap.add_argument("--stage", type=int, default=9, help="Checkpoint stage (default: 9 = Reasoning)")
+    ap.add_argument("--stage", type=int, default=9, help="Checkpoint stage (default: 9 = Skills, the most complete)")
     ap.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint .npz")
     ap.add_argument("--dummy", action="store_true", help="Random weights (plumbing test)")
     ap.add_argument("--query", required=True, help="The user message")

@@ -3,10 +3,11 @@
 Drives the model through a Claude Code / Anthropic SDK-style loop: the model
 emits `Action: {"name","input"}`, the runner executes the matching tool, feeds
 back an `Observation`, and repeats until the model answers without an Action.
-The loop itself lives in [`src/agent.py`](../../src/agent.py) (`run_agent`).
+The loop itself lives in [`src/agent.py`](../../src/agent.py) (`run_agent`) and
+runs several think→act→observe rounds (reasoning on by default) until it answers.
 
 ```bash
-python uses/agent/run_agent.py --level 1 --stage 8 --query "What time is it?"
+python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
 python uses/agent/run_agent.py --dummy --query "hi"        # plumbing only
 ```
 

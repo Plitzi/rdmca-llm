@@ -19,6 +19,7 @@ information:
     1: "Lenguaje: diálogo y frases muy simples."
     2: "Patrones: analogías sintéticas."
     3: "Aritmética: sumas/restas de un dígito."
+    5: "Razonamiento: pensar paso a paso (cadena de pensamiento)."
 
 # Tiny model — just enough to run the full code path quickly.
 model:
@@ -79,35 +80,35 @@ curriculum:
     data:
       sources: [arithmetic]
       filter: {arithmetic_level: 1}
-  stage6:
+  stage7:
     name: "Action and tool use"
     entry_level: 0               # agentic from the very start; ramps up with the model.
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage6"
+    data_dir: "data/level0/stage7"
     data:
       sources: [agentic]         # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null               # JSON tool transcripts — appropriate by construction.
-  stage7:
+  stage8:
     name: "Model Context Protocol (MCP)"
     entry_level: 0               # MCP from the start; same real tools, JSON-RPC envelope.
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage7"
+    data_dir: "data/level0/stage8"
     data:
       sources: [mcp]             # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
-  stage8:
+  stage9:
     name: "Skills"
     entry_level: 0               # skills from the start (Claude-style SKILL.md procedures).
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage8"
+    data_dir: "data/level0/stage9"
     data:
       sources: [skills]          # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
-  stage9:
+  stage5:
     name: "Reasoning"
     entry_level: 0               # chain-of-thought from the start (mejora con el tamaño).
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage9"
+    data_dir: "data/level0/stage5"
     data:
       sources: [reasoning]       # real CoT (GSM8K) as <think>…</think> + answer.
       filter: null

@@ -187,7 +187,7 @@ class RDMCAFoundational(nn.Module):
     """
     Foundational decoder-only transformer for RDMCA T2 Edge.
     Supports MRL (Matryoshka) training loss over nested prefix dimensions.
-    After Stage 5 all parameters are frozen — LoRA sectors build on top.
+    After the ethics/BCF stage (stage 6) all parameters are frozen — LoRA sectors build on top.
     """
 
     def __init__(self, cfg: ModelConfig):

@@ -23,6 +23,7 @@ information:
     1: "Lenguaje: palabras y frases cortas, diálogo simple — puede conversar."
     2: "Patrones: secuencias y analogías muy simples (esto va con esto)."
     3: "Aritmética: contar y sumar/restar números de un solo dígito."
+    5: "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder."
 
 # ── Model — dimensioned to the information above (tiny). ──────────────────────
 model:
@@ -95,35 +96,35 @@ curriculum:
       sources: [arithmetic]
       filter:
         arithmetic_level: 1        # 1 = single-digit + / − only (e.g. "3 + 4 = 7").
-  stage6:
+  stage7:
     name: "Action and tool use"
     entry_level: 0             # agentic from the start; improves as the model grows.
     n_tokens: 30_000_000
-    data_dir: "data/level1/stage6"
+    data_dir: "data/level1/stage7"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null             # JSON tool transcripts — appropriate by construction.
-  stage7:
-    name: "Model Context Protocol (MCP)"
-    entry_level: 0
-    n_tokens: 30_000_000
-    data_dir: "data/level1/stage7"
-    data:
-      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
-      filter: null
   stage8:
-    name: "Skills"
+    name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 30_000_000
     data_dir: "data/level1/stage8"
     data:
-      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
   stage9:
+    name: "Skills"
+    entry_level: 0
+    n_tokens: 30_000_000
+    data_dir: "data/level1/stage9"
+    data:
+      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      filter: null
+  stage5:
     name: "Reasoning"
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 30_000_000
-    data_dir: "data/level1/stage9"
+    data_dir: "data/level1/stage5"
     data:
       sources: [reasoning]     # CoT real (GSM8K) como <think>…</think> + respuesta.
       filter: null

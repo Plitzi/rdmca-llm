@@ -29,7 +29,8 @@ Runtime commands inside the chat:
 
 ### Thinking / reasoning
 
-The model learned a reasoning register in **stage 9**: it can write a
+The model learned a reasoning register in **stage 5** (the capstone of the frozen
+cognitive base): it can write a
 `<think>…</think>` scratchpad before the answer (mirrors Claude's thinking
 blocks). The `--think` flag / `/think` command is an effort dial — whether to
 think at all and how big a token budget the scratchpad gets (a fraction of

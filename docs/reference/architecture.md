@@ -191,19 +191,23 @@ Checkpoints: `dist/checkpoints/level<N>/stage<N>/`, frozen core at
 Levels replace the old hardware profiles. A level (`configs/levels/level{1..5}.yaml`,
 selected with `--level N`) sets the model size, the graded data complexity and the
 resource budget — the **information** drives the size, the **hardware** only caps how high
-a level you can run. The 5 cognitive **stages** (Language, Patterns, Arithmetic, Causal,
-Ethics) each declare an `entry_level`: language/patterns/arithmetic from level 1, causal at
-3, ethics at 4. Data is graded per level via `src/data/graded.py` (a Flesch-Kincaid
-readability gate + synthetic arithmetic/dialogue/analogy/causal generators + simple
-graded corpora like TinyStories / Simple-English-Wikipedia); **level 5 applies no filter**
-and reuses the full `data/stage*_*` corpora.
+a level you can run. The **frozen cognitive base** is six **stages** in natural
+developmental order — **1 Language, 2 Patterns, 3 Abstraction/Arithmetic, 4 Causal,
+5 Reasoning (chain-of-thought), 6 Ethics+BCF** — each with an `entry_level`:
+language/patterns/arithmetic and reasoning from level 1, causal at 3, ethics at 4.
+Reasoning (5) is the capstone cognition (it orchestrates the lower faculties), and the
+base **freezes at stage 6** (Ethics+BCF) so neither competence nor values drift in
+consolidation. Data is graded per level via `src/data/graded.py` (a Flesch-Kincaid
+readability gate + synthetic arithmetic/dialogue/analogy/causal generators, GSM8K CoT for
+reasoning, and graded corpora like TinyStories / Simple-English-Wikipedia); **level 5
+applies no filter** and reuses the full corpora.
 
-Beyond the 5 cognitive stages, four post-base **behavioral** stages (`entry_level: 0`,
-present from level 1) teach Claude-style registers the consumers reuse: tool use (6),
-MCP (7), skills (8) and **reasoning (9)** — chain-of-thought as a `<think>…</think>`
-scratchpad (real GSM8K traces via `graded.stream_reasoning`). The reasoning *effort* is a
-runtime dial (`--think off|low|medium|high`) centralized in `src/agent.py`; see
-[uses/chat/](../../uses/chat/).
+On top of the frozen base, three **behavioral** stages (`entry_level: 0`, present from
+level 1, trained as post-freeze sectors) teach Claude-style interface registers the
+consumers reuse: **7 tool use, 8 MCP, 9 skills**. These live outside the base on purpose —
+tools, protocols and skills evolve and can be swapped without retraining the core. The
+reasoning *effort* is a runtime dial (`--think off|low|medium|high`) centralized in
+`src/agent.py`; see [uses/chat/](../../uses/chat/).
 
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to

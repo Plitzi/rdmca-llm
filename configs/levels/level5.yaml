@@ -21,7 +21,8 @@ information:
     2: "Patrones: ARC completo (Easy + Challenge)."
     3: "Matemáticas: aritmética + GSM8K + matemáticas de competición (MATH)."
     4: "Causal/Procedural: corpus causal completo."
-    5: "Ética: corpus de ética + sondas BCF completas."
+    5: "Razonamiento: cadena de pensamiento sobre todo el conocimiento adquirido."
+    6: "Ética: corpus de ética + sondas BCF completas — aquí se congela la base."
 
 model:
   d_model: 768
@@ -84,35 +85,35 @@ curriculum:
     n_tokens: 1_000_000_000
     data_dir: "data/level5/stage4"
     data: {sources: [wikipedia, causal_synth], filter: null}
-  stage5:
+  stage6:
     name: "Cognitive ethics and BCF"
     entry_level: 4
     n_tokens: 500_000_000
-    data_dir: "data/level5/stage5"
+    data_dir: "data/level5/stage6"
     data: {sources: [wikipedia, ethics], filter: null}
-  stage6:
+  stage7:
     name: "Action and tool use"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage6"
+    data_dir: "data/level5/stage7"
     data: {sources: [agentic], filter: null}   # real tool-use loop (Claude-style JSON)
-  stage7:
+  stage8:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage7"
+    data_dir: "data/level5/stage8"
     data: {sources: [mcp], filter: null}       # real tool use over MCP (JSON-RPC 2.0)
-  stage8:
+  stage9:
     name: "Skills"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage8"
+    data_dir: "data/level5/stage9"
     data: {sources: [skills], filter: null}    # real procedures as Claude-style SKILL.md
-  stage9:
+  stage5:
     name: "Reasoning"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage9"
+    data_dir: "data/level5/stage5"
     data: {sources: [reasoning], filter: null}  # real CoT (GSM8K) as <think>…</think> + answer
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────

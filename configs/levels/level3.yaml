@@ -18,6 +18,7 @@ information:
     2: "Patrones: razonamiento por analogía más exigente (ARC-Easy)."
     3: "Matemáticas: multidígito, fracciones y álgebra simple."
     4: "Causal: relaciones causa→efecto básicas."
+    5: "Razonamiento: cadena de pensamiento paso a paso sobre lo aprendido."
 
 model:
   d_model: 384
@@ -89,35 +90,35 @@ curriculum:
     data:
       sources: [causal_synth]          # synthetic cause→effect statements.
       filter: null
-  stage6:
-    name: "Action and tool use"
-    entry_level: 0
-    n_tokens: 50_000_000
-    data_dir: "data/level3/stage6"
-    data:
-      sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
-      filter: null
   stage7:
-    name: "Model Context Protocol (MCP)"
+    name: "Action and tool use"
     entry_level: 0
     n_tokens: 50_000_000
     data_dir: "data/level3/stage7"
     data:
-      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
+      sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null
   stage8:
-    name: "Skills"
+    name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 50_000_000
     data_dir: "data/level3/stage8"
     data:
-      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
   stage9:
+    name: "Skills"
+    entry_level: 0
+    n_tokens: 50_000_000
+    data_dir: "data/level3/stage9"
+    data:
+      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      filter: null
+  stage5:
     name: "Reasoning"
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 50_000_000
-    data_dir: "data/level3/stage9"
+    data_dir: "data/level3/stage5"
     data:
       sources: [reasoning]     # CoT real (GSM8K) como <think>…</think> + respuesta.
       filter: null

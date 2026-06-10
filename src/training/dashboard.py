@@ -25,11 +25,12 @@ from rich import box
 _SPARKS = " ▁▂▃▄▅▆▇█"
 
 STAGE_GATES = {
-    1: ("BLiMP grammaticality", 0.70),
-    2: ("ARC Easy accuracy",    0.60),
-    3: ("GSM8K accuracy",       0.15),
-    4: ("Causal reasoning",     0.65),
-    5: ("BCF probe set",        0.90),
+    1: ("BLiMP grammaticality",   0.70),
+    2: ("ARC Easy accuracy",      0.60),
+    3: ("GSM8K accuracy",         0.15),
+    4: ("Causal reasoning",       0.65),
+    5: ("Chain-of-thought (CoT)", 0.20),
+    6: ("BCF probe set",          0.90),
 }
 
 STAGE_NAMES = {
@@ -37,11 +38,11 @@ STAGE_NAMES = {
     2: "Perception and pattern recognition",
     3: "Abstraction and symbolic composition",
     4: "Causal and procedural reasoning",
-    5: "Cognitive ethics and BCF",
-    6: "Action and tool use",
-    7: "Model Context Protocol (MCP)",
-    8: "Skills",
-    9: "Reasoning",
+    5: "Reasoning",
+    6: "Cognitive ethics and BCF",
+    7: "Action and tool use",
+    8: "Model Context Protocol (MCP)",
+    9: "Skills",
 }
 
 

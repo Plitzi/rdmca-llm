@@ -4,7 +4,7 @@ command); a serving API would expose the same as a request field. Centralized
 here so every consumer stays in sync.
 
 The base model learned both registers: natural language (stages 1-5) and JSON
-tool-use transcripts (stage 6, "Action and tool use"). `text` mode leaves
+tool-use transcripts (stage 7, "Action and tool use"). `text` mode leaves
 generation untouched; `json` mode primes the model toward a JSON object and
 parses the result into a structured payload.
 """
@@ -61,7 +61,8 @@ def parse_output(text: str, fmt: str) -> dict:
 
 
 # ─────────────────────────── thinking / reasoning ───────────────────────────
-# A reasoning register the model learns in the Reasoning stage (stage 9): it
+# A reasoning register the model learns in the Reasoning stage (stage 5, the
+# capstone of the frozen cognitive base): it
 # emits a <think>…</think> scratchpad and then the answer (mirrors Claude's
 # thinking blocks). The "thinking level" is an effort dial — whether to think at
 # all and how large a token budget the scratchpad gets — analogous to Claude's

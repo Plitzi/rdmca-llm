@@ -8,7 +8,7 @@ if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(
 """
 RDMCA Data Preparation Script — config-driven language set
 ===========================================================
-Downloads and processes all 5 curriculum stage datasets for the languages in
+Downloads and processes all curriculum stage datasets for the languages in
 the config (`model.languages`), or a `--lang` override.
 Output: data/level{L}/stage{N}/  in .jsonl format  {"text": "...", "lang": "<code>"}
 
@@ -118,7 +118,9 @@ STAGE_KEYWORDS = {
     4: ["cause", "causa", "causal", "effect", "efecto", "mechanism", "mecanismo",
         "engineering", "ingeniería", "medicine", "medicina", "physics", "física",
         "chemistry", "química", "procedure", "procedimiento", "process", "proceso"],
-    5: ["ethics", "ética", "moral", "philosophy", "filosofía", "rights", "derechos",
+    # 5 = Reasoning (chain-of-thought) — sourced from GSM8K, not Wikipedia, so no
+    # keyword gate (article_matches_stage returns True for stages absent here).
+    6: ["ethics", "ética", "moral", "philosophy", "filosofía", "rights", "derechos",
         "justice", "justicia", "law", "derecho", "harm", "daño", "value", "valor",
         "norm", "norma", "social"],
 }
@@ -266,7 +268,7 @@ def stream_math(split: str = "train") -> Iterator[dict]:
 
 
 def stream_ethics_bilingual() -> Iterator[dict]:
-    """Public-domain ethics snippets — bilingual — Stage 5."""
+    """Public-domain ethics snippets — bilingual — ethics/BCF stage (stage 6)."""
     snippets = [
         ("The categorical imperative: Act only according to that maxim by which you can at the same time will that it should become a universal law.", "en"),
         ("El imperativo categórico: actúa solo según aquella máxima que puedas querer que se convierta en ley universal.", "es"),
