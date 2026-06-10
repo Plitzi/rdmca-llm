@@ -170,7 +170,9 @@ rdmca-llm/
 ├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
 ├── experiments/continual_learning.py   Hypothesis validation (no-forgetting)
 ├── train_stage.py              Stage training + freeze + BCF
-├── chat.py                     Interactive chat (text / --image / --audio)
+├── uses/                       Ways to consume a trained model
+│   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)
+│   └── agent/run_agent.py      Agentic tool loop (Action/Observation)
 ├── consolidation_daemon.py     Daily consolidation daemon (wired)
 └── docs/
     ├── GUIDE.md                Single step-by-step guide

@@ -1,7 +1,7 @@
 """
 Experience queue — the bridge between live interaction and consolidation.
 
-Active interaction (chat.py) appends each turn here; the consolidation daemon
+Active interaction (uses/chat/run_chat.py) appends each turn here; the consolidation daemon
 drains the queue, scores/filters/consolidates it, then clears it. This is the
 "experience and memory as the true training signal" loop of RDMCA §6.5.2 — the
 model evolves only from what it actually experienced.

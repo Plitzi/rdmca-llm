@@ -49,7 +49,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_
 ```
 
 `pillow`/`soundfile` are only needed for the multimodal parts (loading images/audio).
-The main scripts (`train_stage.py`, `chat.py`, `consolidation_daemon.py`) re-exec
+The main scripts (`train_stage.py`, `uses/chat/run_chat.py`, `consolidation_daemon.py`) re-exec
 themselves with the venv's Python if you run them without activating it.
 
 ## 3. Backend & precision
@@ -189,10 +189,10 @@ From here the core is never touched again: all learning is through consolidation
 ## 9. Chat
 
 ```bash
-python chat.py --level 3 --stage 5                 # core + sectors
-python chat.py --level 3 --stage 1 --lang es       # Spanish session
-python chat.py --level 3 --stage 5 --image foto.png   # visual grounding
-python chat.py --level 3 --stage 5 --audio clip.wav   # audio grounding
+python uses/chat/run_chat.py --level 3 --stage 5                 # core + sectors
+python uses/chat/run_chat.py --level 3 --stage 1 --lang es       # Spanish session
+python uses/chat/run_chat.py --level 3 --stage 5 --image foto.png   # visual grounding
+python uses/chat/run_chat.py --level 3 --stage 5 --audio clip.wav   # audio grounding
 ```
 
 In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512` · `/stats`
@@ -246,7 +246,7 @@ python train_stage.py --level 1 --stage 2      # Patterns
 python train_stage.py --level 1 --stage 3      # Arithmetic
 
 # 4) Chat with it
-python chat.py --level 1 --stage 3
+python uses/chat/run_chat.py --level 1 --stage 3
 ```
 
 On start each command prints the **announce** (what the model is learning + estimated

@@ -5,8 +5,8 @@ import sys, os
 try:
     import numpy  # noqa: F401 — just checking the venv is active
 except ModuleNotFoundError:
-    venv_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           ".venv", "bin", "python")
+    _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    venv_py = os.path.join(_repo, ".venv", "bin", "python")
     if os.path.exists(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
         os.execv(venv_py, [venv_py] + sys.argv)
     print("ERROR: dependencies not found and .venv/bin/python not available.")
@@ -21,11 +21,11 @@ coherencia, gramática, razonamiento, etc.
 
 Uso:
   # Con checkpoint entrenado (Stage N completado)
-  python chat.py --stage 1
-  python chat.py --checkpoint dist/checkpoints/stage1/final.npz
+  python uses/chat/run_chat.py --level 1 --stage 1
+  python uses/chat/run_chat.py --checkpoint dist/checkpoints/level1/stage1/final.npz
 
   # Sin datos entrenados — pesos random, solo verifica que el pipeline funciona
-  python chat.py --dummy
+  python uses/chat/run_chat.py --dummy
 
 Comandos especiales durante el chat:
   /lang es          cambia el idioma de la sesión (en|es)
@@ -43,7 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root on path
 
 import src.backend as backend
 from src import agent
@@ -197,7 +197,7 @@ def load_model(args):
         stage_hint = args.stage or 1
         print(f"No checkpoint found. Options:")
         print(f"  Train first:  python train_stage.py --stage {stage_hint} --config {args.config}")
-        print(f"  Or test now:  python chat.py --dummy")
+        print(f"  Or test now:  python uses/chat/run_chat.py --dummy")
         sys.exit(1)
 
     print(f"  Loading checkpoint: {ckpt_path}")
@@ -374,10 +374,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python chat.py --dummy                         # test pipeline (random weights)
-  python chat.py --stage 1                       # load Stage 1 checkpoint
-  python chat.py --checkpoint dist/checkpoints/stage3/final.npz
-  python chat.py --stage 1 --lang es --temp 0.8
+  python uses/chat/run_chat.py --dummy                     # test pipeline (random weights)
+  python uses/chat/run_chat.py --level 1 --stage 1         # load Stage 1 checkpoint
+  python uses/chat/run_chat.py --checkpoint dist/checkpoints/level1/stage3/final.npz
+  python uses/chat/run_chat.py --level 1 --stage 1 --lang es --temp 0.8
         """,
     )
     parser.add_argument("--config",     default=None,
@@ -413,7 +413,7 @@ Examples:
 
     if not args.dummy and args.stage is None and args.checkpoint is None:
         print("Specify --stage N, --checkpoint PATH, or --dummy")
-        print("Example: python chat.py --dummy")
+        print("Example: python uses/chat/run_chat.py --dummy")
         sys.exit(1)
 
     print("Loading model…")

@@ -48,17 +48,17 @@ python train_stage.py --level 1 --stage 7     # MCP
 python train_stage.py --level 1 --stage 8     # skills
 
 # 4. Chat (text or JSON output)
-python chat.py --level 1 --stage 8
-python chat.py --level 1 --stage 8 --format json
+python uses/chat/run_chat.py --level 1 --stage 8
+python uses/chat/run_chat.py --level 1 --stage 8 --format json
 
 # 5. Agent (tool loop with the example tool + skill)
 python uses/agent/run_agent.py --level 1 --stage 8 --query "What time is it?"
 ```
 
 ### What to test
-- **Conversation / arithmetic**: `chat.py` — ask simple questions and sums
+- **Conversation / arithmetic**: `run_chat.py` — ask simple questions and sums
   (the model should do arithmetic itself; that's the stage-3 skill).
-- **Output format**: `chat.py --format json` (or `/format json` at runtime).
+- **Output format**: `run_chat.py --format json` (or `/format json` at runtime).
 - **Tool use**: `run_agent.py` with a date/time question → the model should emit
   an `Action` calling `get_current_time`; the runner executes it and feeds back
   the `Observation`. (The example tool is deliberately *not* a calculator, so it

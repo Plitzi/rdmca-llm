@@ -22,7 +22,7 @@ from types import SimpleNamespace
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-import chat                                   # reuse model loading + generation
+from uses.chat import run_chat as chat        # reuse model loading + generation
 from src import agent
 from src.config import resolve_config_path
 from uses.agent.tools.current_time import TOOL as CURRENT_TIME

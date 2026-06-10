@@ -553,7 +553,7 @@ Examples:
     if passed:
         if skip_gate:
             print(f"\nStage {args.stage} complete (smoke test). Pipeline verified.")
-            print(f"Next: python chat.py{lvl_flag} --stage {args.stage}")
+            print(f"Next: python uses/chat/run_chat.py{lvl_flag} --stage {args.stage}")
         elif args.stage < 5:
             nxt = args.stage + 1
             print(f"\nNext: python train_stage.py{lvl_flag} --stage {nxt}")
