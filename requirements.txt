@@ -13,6 +13,7 @@ sentencepiece>=0.2          # text tokenizer
 rich>=13.0                  # training dashboard / console UI
 datasets>=2.18              # HuggingFace dataset streaming (data preparation)
 psutil>=5.9                 # available-memory probe for the level resource guard
+python-dotenv>=1.0          # load .env into the environment (HF_TOKEN, etc.)
 
 # Multimodal (image/audio tokenizers + perception). `soundfile` needs the
 # system libsndfile library.

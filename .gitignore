@@ -50,6 +50,10 @@ data/runtime/experiences.jsonl
 # ── Test ───────────────────────────────────────────────────────────────────────
 .pytest_cache/
 
+# ── Secrets / local env ──────────────────────────────────────────────────────
+# Local environment (secrets like HF_TOKEN). .env.example is the tracked template.
+.env
+
 # ── Misc ───────────────────────────────────────────────────────────────────────
 *.log
 nohup.out

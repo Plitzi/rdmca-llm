@@ -15,6 +15,10 @@ from typing import List, Optional
 
 import yaml
 
+from .env import load_env
+
+load_env()                              # populate os.environ from the project .env
+
 
 TOKENIZER_INFO = "dist/tokenizer/tokenizer_info.json"
 

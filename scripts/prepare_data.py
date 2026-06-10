@@ -48,39 +48,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 TOKEN_BUDGET_M = {1: 1500, 2: 500, 3: 1000, 4: 1000, 5: 500}
 
 # HuggingFace token — optional but raises rate limits significantly.
-# Set via env var or prompted once at startup.
+# Supplied via the HF_TOKEN environment variable (set it in .env — see
+# .env.example). Never prompted: missing just means slower downloads.
 _HF_TOKEN: Optional[str] = None
 
 
 def _setup_hf_token() -> None:
-    """Check env var, prompt once if not set. Token is always optional."""
+    """Read the HF token from the environment (loaded from .env). Always optional;
+    never prompts. Set HF_TOKEN in .env to raise download rate limits."""
     global _HF_TOKEN
+    from src.env import load_env
+    load_env()                                  # ensure .env is loaded before reading
     _HF_TOKEN = os.environ.get("HF_TOKEN", "").strip() or None
     if _HF_TOKEN:
-        print(f"  HF token: found in environment (rate limits enabled)")
-        return
-
-    print()
-    print("  HuggingFace token (optional — press Enter to skip)")
-    print("  ───────────────────────────────────────────────────")
-    print("  How to get one (free):")
-    print("    1. Create a free account at huggingface.co")
-    print("    2. Go to huggingface.co/settings/tokens")
-    print("    3. New token → type Read → copy it here")
-    print("  Benefit: higher rate limits and faster downloads.")
-    print("  Without a token the download still works, just slower.")
-    print()
-    try:
-        token = input("  HF_TOKEN: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        token = ""
-
-    if token:
-        _HF_TOKEN = token
-        os.environ["HF_TOKEN"] = token
-        print("  Token set for this session.")
+        print("  HF token: found in environment (rate limits enabled)")
     else:
-        print("  Continuing without token.\n")
+        print("  HF token: not set — continuing without (slower). "
+              "Set HF_TOKEN in .env to enable.")
 
 def _validate_jsonl(path: Path, token_budget_m: int) -> tuple[bool, str]:
     """
