@@ -224,22 +224,43 @@ python consolidation_daemon.py --level 3           # daemon (waits for idle)
 Updated sectors are saved to `dist/checkpoints/level<N>/sectors.npz`; long-term memory
 to `data/runtime/ltss.db`.
 
-## 11. Quick test (level 1)
+## 11. Start here — the Level 1 experiment
 
-The same real flow, with **less data and a small model** (no "toy", no synthetic data).
-Ideal to verify everything runs end-to-end in ~10 min.
+Level 1 (`configs/levels/level1.yaml`) is the smallest base (~2M params, `skip_gate: true`):
+a child-sized vocabulary on simple graded data (TinyStories + synthetic dialogue +
+single-digit arithmetic). It trains fast on a laptop and already **holds a basic
+conversation and does simple arithmetic**. The active cognitive stages at L1 are
+**1 (Language), 2 (Patterns) and 3 (Arithmetic)** — trained **in order** (each starts from
+the previous one's weights):
 
 ```bash
-python scripts/prepare_data.py    --level 1 --stage 1
+# 1) Graded data → data/level1/stage{1,2,3}/   (stages 4-5 are skipped at L1)
+python scripts/prepare_data.py    --level 1 --stage all
+
+# 2) Child-sized tokenizer (vocab auto-caps to the corpus size)
 python scripts/train_tokenizer.py --level 1
-python train_stage.py             --level 1 --stage 1
-python chat.py                    --level 1 --stage 1
+
+# 3) Train the base, in order
+python train_stage.py --level 1 --stage 1      # Language / conversation
+python train_stage.py --level 1 --stage 2      # Patterns
+python train_stage.py --level 1 --stage 3      # Arithmetic
+
+# 4) Chat with it
+python chat.py --level 1 --stage 3
 ```
 
-Level 1 (`configs/levels/level1.yaml`) uses `skip_gate: true`, a tiny model and simple
-graded data (TinyStories + synthetic dialogue + single-digit arithmetic), so it trains
-fast on a laptop and the model can already **hold a basic conversation and do simple
-arithmetic**. Higher levels add complexity and need more resources.
+On start each command prints the **announce** (what the model is learning + estimated
+memory) and runs the **resource guard** (aborts a level that won't fit; `--force` to
+override). Data lands in `data/level1/...`, checkpoints in `dist/checkpoints/level1/...`.
+
+**Faster first pass:** the `n_tokens` budgets in `level1.yaml` control run length — lower
+them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a fuller model.
+
+**Where MoE / continual learning fits (heads-up):** the cognitive *sectors* and the MoE
+gate are attached only **after the base is frozen**, which happens at **stage 5** — i.e.
+levels **4–5**. At L1 you chat with the pure **dense base** (language + arithmetic); there
+are no sectors yet. To experiment with the per-token MoE routing + consolidation, train a
+level that reaches stage 5 and then run `consolidation_daemon.py --level N --once`.
 
 ## 12. Cleanup
 
