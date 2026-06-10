@@ -387,22 +387,50 @@ class RDMCAFoundational(nn.Module):
         safety sectors. Explicit mode: sum the `set_active_sectors` list."""
         if not self.sectors:
             return 0.0
-        total = None
         if self._routing.mode == "moe" and self.gate is not None and route is not None:
-            for pos, sid in enumerate(self._expert_ids):       # gated experts
-                d = self.sectors[sid].delta(layer_idx, proj, x) * route[..., pos:pos+1]
-                total = d if total is None else total + d
-            for sid in self._safety_ids:                       # safety, always on
-                d = self.sectors[sid].delta(layer_idx, proj, x)
-                total = d if total is None else total + d
-        else:                                                  # explicit/legacy
-            for sid, weight in self._routing.active:
-                adapter = self.sectors.get(sid)
-                if adapter is None:
-                    continue
-                d = adapter.delta(layer_idx, proj, x) * weight
-                total = d if total is None else total + d
+            return self._moe_combine(layer_idx, proj, x, route)
+        # explicit/legacy: sum the listed (sector, weight) pairs
+        total = None
+        for sid, weight in self._routing.active:
+            adapter = self.sectors.get(sid)
+            if adapter is None:
+                continue
+            d = adapter.delta(layer_idx, proj, x) * weight
+            total = d if total is None else total + d
         return total if total is not None else 0.0
+
+    def _moe_combine(self, layer_idx: int, proj: str, x, route):
+        """Combine the routed expert deltas (S1..S6) + always-on safety (S7).
+
+        Two dispatch paths give the SAME result:
+          • sparse (when the backend has `nonzero`, e.g. PyTorch): each expert
+            runs ONLY on the tokens routed to it → O(top_k·T) expert compute, the
+            real saving as the expert pool grows.
+          • masked (e.g. MLX, which needs static shapes): every expert runs on all
+            tokens, weighted by the gate (0 outside its top-k). Correct and cheap
+            while the expert count is small (LoRA experts ≪ the dense base)."""
+        Bsz, S, D = x.shape
+        flat  = x.reshape(-1, D)                                # [T, D]
+        n_exp = len(self._expert_ids)
+        w     = route.reshape(-1, n_exp)                        # [T, E]
+        sparse = getattr(ops, "nonzero", None) is not None
+
+        out = ops.zeros((flat.shape[0], D), dtype=flat.dtype)
+        for pos, sid in enumerate(self._expert_ids):
+            we = w[:, pos]                                      # [T] gate weight for expert
+            if sparse:
+                nz = ops.nonzero(we > 0.0)                      # tokens routed to this expert
+                if nz.shape[0] == 0:
+                    continue
+                xe = ops.index_select(flat, nz, 0)             # [m, D] only those tokens
+                de = self.sectors[sid].delta(layer_idx, proj, xe)
+                out = ops.index_add(out, nz, de * we[nz][:, None])
+            else:
+                de = self.sectors[sid].delta(layer_idx, proj, flat)   # [T, D]
+                out = out + de * we[:, None]
+        for sid in self._safety_ids:                            # safety: always on, full weight
+            out = out + self.sectors[sid].delta(layer_idx, proj, flat)
+        return out.reshape(Bsz, S, D)
 
 
 class _Routing:

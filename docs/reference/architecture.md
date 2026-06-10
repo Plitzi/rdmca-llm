@@ -41,10 +41,14 @@ loss; because routing is per token, **one experience updates several sectors**
 
 **S7 (Behavioral/BCF) is excluded from the MoE** — it is always-on and isolated, never in
 the consolidation trainable set, shaped only by the BCF probe training. This preserves the
-safety guarantee. The current dispatch computes each expert then weights by the gate (only
-top-k contribute to the output); true sparse compute (capacity-based dispatch) is the
-documented scaling optimization — at the default 6 sectors the LoRA-expert cost is
-negligible next to the dense frozen base.
+safety guarantee.
+
+**Dispatch** (`RDMCAFoundational._moe_combine`) has two paths giving identical results:
+on PyTorch it is **truly sparse** — each expert runs only on the tokens routed to it via
+`nonzero`/`index_select`/`index_add`, so expert compute is O(top_k·T) and stays bounded as
+the pool grows; on MLX (which needs static shapes) it falls back to a masked combine (every
+expert on all tokens, weighted; cheap while the expert count is small). Parity between the
+two is part of the test suite.
 
 PGQ can **grow a sector's rank** (`SectorAdapter.grow_rank`) or **create new experts**
 (`model.add_sector`, which grows the gate by a zero-init column) at runtime, preserving the
