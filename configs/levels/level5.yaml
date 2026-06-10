@@ -5,8 +5,8 @@
 # ║  (MATH), full causal + procedural reasoning, and ethics. Specialized       ║
 # ║  hardware (multi-GPU / large VRAM). Defaults to the torch/CUDA backend.    ║
 # ║                                                                            ║
-# ║  This level REUSES the existing full-corpus dirs (data/stageN_*) — the     ║
-# ║  unfiltered data already downloaded — so no re-download is needed.         ║
+# ║  Data lives under data/level5/stageN (same per-level layout as L0-L4),     ║
+# ║  holding the FULL unfiltered corpora. Run prepare_data.py --level 5.        ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 level: 5
@@ -57,38 +57,38 @@ skip_gate: false
 gate:
   max_perplexity: {1: 40.0, 2: 38.0, 3: 36.0, 4: 34.0, 5: 32.0}
 
-# At level 5 every stage is active, data is the FULL unfiltered corpus, and the
-# data dirs are the existing data/stageN_* (no graded subdir, no re-download).
+# At level 5 every stage is active and data is the FULL unfiltered corpus
+# (filter: null), under the per-level data/level5/stageN dirs like every level.
 curriculum:
   stage1:
     name: "Language and communication"
     entry_level: 1
     n_tokens: 1_500_000_000
-    data_dir: "data/stage1_language"
+    data_dir: "data/level5/stage1"
     data: {sources: [wikipedia], filter: null}        # null filter = everything.
   stage2:
     name: "Perception and pattern recognition"
     entry_level: 1
     n_tokens: 500_000_000
-    data_dir: "data/stage2_patterns"
+    data_dir: "data/level5/stage2"
     data: {sources: [wikipedia, arc_easy, arc_challenge], filter: null}
   stage3:
     name: "Abstraction and symbolic composition"
     entry_level: 1
     n_tokens: 1_000_000_000
-    data_dir: "data/stage3_abstraction"
+    data_dir: "data/level5/stage3"
     data: {sources: [wikipedia, arithmetic, gsm8k, math], filter: null}
   stage4:
     name: "Causal and procedural reasoning"
     entry_level: 3
     n_tokens: 1_000_000_000
-    data_dir: "data/stage4_causal"
+    data_dir: "data/level5/stage4"
     data: {sources: [wikipedia, causal_synth], filter: null}
   stage5:
     name: "Cognitive ethics and BCF"
     entry_level: 4
     n_tokens: 500_000_000
-    data_dir: "data/stage5_ethics"
+    data_dir: "data/level5/stage5"
     data: {sources: [wikipedia, ethics], filter: null}
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────

@@ -248,7 +248,9 @@ def main():
         data_dir = Path(args.data_dir)
     else:
         s1 = (cfg.get("curriculum", {}) or {}).get("stage1", {}) or {}
-        data_dir = Path(s1.get("data_dir", "data/stage1_language"))
+        lvl = cfg.get("level")                           # per-level layout: data/level{N}/stage1
+        default_dir = f"data/level{lvl}/stage1" if lvl is not None else "data/stage1"
+        data_dir = Path(s1.get("data_dir", default_dir))
     if not any(data_dir.glob("*.jsonl")):
         console.print(f"[red]ERROR:[/red] No .jsonl files in {data_dir}")
         lvl = cfg.get("level", 1)

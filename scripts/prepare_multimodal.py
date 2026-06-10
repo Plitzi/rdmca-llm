@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.modalities.perception import MultimodalPerception, load_audio
 from src.modalities.text import TextTokenizer
 
-OUT_DIR = Path("data/stage2_patterns")
+OUT_DIR = Path("data/level5/stage2")
 
 
 def write(records, name):

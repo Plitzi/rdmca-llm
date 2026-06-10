@@ -10,7 +10,7 @@ RDMCA Data Preparation Script — config-driven language set
 ===========================================================
 Downloads and processes all 5 curriculum stage datasets for the languages in
 the config (`model.languages`), or a `--lang` override.
-Output: data/stage{N}_*/  in .jsonl format  {"text": "...", "lang": "<code>"}
+Output: data/level{L}/stage{N}/  in .jsonl format  {"text": "...", "lang": "<code>"}
 
 Strategy
 --------

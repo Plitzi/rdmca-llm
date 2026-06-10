@@ -124,7 +124,9 @@ class DataLoader:
         mcfg    = cfg["model"]
         tcfg    = cfg["training"]
         stage_cfg = cfg["curriculum"][f"stage{stage}"]   # key-based (levels may omit stages)
-        data_dir  = stage_cfg.get("data_dir", f"data/stage{stage}_language")
+        lvl       = cfg.get("level")                      # per-level layout: data/level{N}/stage{S}
+        default_dir = f"data/level{lvl}/stage{stage}" if lvl is not None else f"data/stage{stage}"
+        data_dir  = stage_cfg.get("data_dir", default_dir)
 
         ds = TextDataset(
             data_dir=data_dir,
