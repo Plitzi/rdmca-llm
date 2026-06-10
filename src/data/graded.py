@@ -5,11 +5,11 @@ Each level teaches information of increasing complexity. This module provides:
 
   - `flesch_kincaid_grade` / `passes_filter` — a readability gate (US grade level)
     used to keep text at/below a level's reading difficulty (level 5 = no gate).
-  - synthetic generators (`gen_arithmetic`, `gen_analogies`, `gen_causal`) whose
-    difficulty is parameterized by level — so basic arithmetic exists from
-    level 1 and ramps up.
-  - thin wrappers over simple/graded HuggingFace corpora (TinyStories, simple
-    dialogue, Simple-English Wikipedia) for the lower levels.
+  - streamers over real HuggingFace corpora for the lower levels: TinyStories,
+    conversation (`stream_dialogue`), arithmetic (`stream_arithmetic`), causal
+    reasoning (`stream_causal`) and Simple-English Wikipedia.
+  - `gen_analogies` is the one remaining TEMPORARY synthetic generator (no real
+    graded analogy corpus loads on datasets>=3 yet); see its TODO.
 
 `stream_source(key, ...)` dispatches a source name (as listed in a level's
 `curriculum.stageN.data.sources`) to the right generator/streamer. The full
@@ -63,48 +63,54 @@ def passes_filter(text: str, spec: Optional[dict]) -> bool:
     return True
 
 
-# ──────────────────────────── synthetic: arithmetic ─────────────────────────
-# arithmetic_level: 1 single-digit +/−, 2 two-digit +/−/×, 3 multi-digit +
-# fractions + simple algebra, 4+ larger mixed problems. Templated in words too,
-# so the model couples language with arithmetic (you need words to "ask" sums).
-_ARITH_TEMPLATES = [
-    "{a} {op} {b} = {r}",
-    "What is {a} {opw} {b}? The answer is {r}.",
-    "{a} {opw} {b} equals {r}.",
-    "Q: {a} {op} {b} = ?  A: {r}",
-]
-_OPW = {"+": "plus", "-": "minus", "*": "times"}
+# ──────────────────────────── arithmetic (real) ─────────────────────────────
+# Real symbolic arithmetic from AtlasUnified/atlas-math-sets ("a op b = c").
+# Language-agnostic (only digits/operators) and graded by operand magnitude:
+#   level 1 single-digit +/−, 2 two-digit +/−/×/÷, 3+ larger / all operators.
+_ARITH_RE = re.compile(r"\s*(\d+)\s*([+\-x×*/])\s*(\d+)\s*=")
+# atlas-math has ~17.8M rows; the graded subset (esp. single-digit at level 1) is
+# a tiny, finite space, so scanning a bounded prefix covers it many times over
+# without churning the whole dataset every run.
+_ARITH_SCAN_CAP = 400_000
 
 
-def gen_arithmetic(level: int, n: int, seed: int = 0) -> Iterator[dict]:
-    rng = random.Random(seed)
-    for _ in range(n):
-        if level <= 1:
-            a, b = rng.randint(0, 9), rng.randint(0, 9)
-            op = rng.choice(["+", "-"])
-            if op == "-" and b > a:
-                a, b = b, a               # keep results non-negative for kids
-        elif level == 2:
-            a, b = rng.randint(0, 99), rng.randint(0, 99)
-            op = rng.choice(["+", "-", "*"])
-            if op == "-" and b > a:
-                a, b = b, a
-        else:  # level >= 3 — multi-digit / algebra
-            if level >= 3 and rng.random() < 0.3:
-                # simple linear equation: x + b = c  →  x = c-b
-                x = rng.randint(1, 50); b = rng.randint(1, 50)
-                yield {"text": f"Solve for x: x + {b} = {x + b}. x = {x}.", "lang": "en"}
-                continue
-            a, b = rng.randint(0, 999), rng.randint(0, 999)
-            op = rng.choice(["+", "-", "*"])
-            if op == "-" and b > a:
-                a, b = b, a
-        r = {"+": a + b, "-": a - b, "*": a * b}[op]
-        tmpl = rng.choice(_ARITH_TEMPLATES)
-        yield {"text": tmpl.format(a=a, b=b, r=r, op=op, opw=_OPW[op]), "lang": "en"}
+def _arith_difficulty(a: int, b: int, op: str) -> int:
+    """Coarse difficulty from operand magnitude + operation type."""
+    mx = max(a, b)
+    if op in "+-":
+        return 1 if mx < 10 else (2 if mx < 100 else 3)
+    return 2 if mx < 100 else 3                     # ×/÷ never count as level 1
 
 
-# ──────────────────────────── synthetic: analogies / sequences ──────────────
+def stream_arithmetic(langs: List[str], level: int,
+                      limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real arithmetic equations graded to `level`. Symbolic content, so
+    tagged with the primary configured language (it is language-agnostic). Scans
+    a bounded prefix of the dataset (the graded space is small and finite)."""
+    from datasets import load_dataset
+    lang = langs[0] if langs else "en"
+    try:
+        ds = load_dataset("AtlasUnified/atlas-math-sets", split="train", streaming=True)
+    except Exception as e:
+        print(f"    [arithmetic] {e}")
+        return
+    for scanned, ex in enumerate(ds):
+        if scanned >= _ARITH_SCAN_CAP:
+            break
+        out = (ex.get("output") or "").strip()
+        m = _ARITH_RE.match(out)
+        if not m:
+            continue                                # skip roots/powers/word problems
+        a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
+        if _arith_difficulty(a, b, op) <= level:
+            yield {"text": out, "lang": lang}
+
+
+# ──────────────────────────── analogies (TEMPORARY synthetic) ───────────────
+# TODO: replace with a real graded analogy corpus once one is available in a
+# loadable (parquet) form — current public analogy datasets are script-based and
+# no longer load on datasets>=3. Kept synthetic for now so stage 2 (perception /
+# pattern recognition) still has data at the lower levels.
 _ANALOGY_PAIRS = [
     ("dog", "puppy", "cat", "kitten"), ("big", "small", "tall", "short"),
     ("hot", "cold", "up", "down"), ("day", "night", "sun", "moon"),
@@ -125,49 +131,37 @@ def gen_analogies(n: int, seed: int = 1) -> Iterator[dict]:
             yield {"text": f"Pattern: {seq[0]} {seq[1]} {seq[2]} {seq[3]} -> {seq[3]+step}", "lang": "en"}
 
 
-# ──────────────────────────── synthetic: simple dialogue ────────────────────
-# Gives level 1 a basic conversational ability with a child-sized vocabulary,
-# fully offline (no fragile external dialogue dataset). A few templates also
-# fold basic arithmetic into conversation, coupling language with counting.
-_NAMES = ["Sam", "Mia", "Ben", "Ana", "Leo", "Eva", "Tom", "Lucy"]
-_THINGS = ["apples", "dogs", "books", "cats", "balls", "cars", "stars", "cookies"]
-_NUMWORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+# ──────────────────────────── causal (real, EN) ─────────────────────────────
+# Real cause→effect statements from the e-CARE dataset. English only — no real
+# multilingual causal corpus yet — so emitted only when English is requested.
+def _causal_statement(cause: str, effect: str) -> str:
+    cause = cause.strip().rstrip(".")
+    effect = effect.strip()
+    if effect:
+        effect = effect[0].lower() + effect[1:]
+    return f"{cause}, so {effect}"
 
 
-def gen_dialogue(n: int, seed: int = 3) -> Iterator[dict]:
-    rng = random.Random(seed)
-    for _ in range(n):
-        kind = rng.randint(0, 4)
-        if kind == 0:
-            yield {"text": "A: Hi! How are you?\nB: I am good, thank you. And you?\nA: I am happy today.", "lang": "en"}
-        elif kind == 1:
-            name = rng.choice(_NAMES)
-            yield {"text": f"A: What is your name?\nB: My name is {name}.\nA: Nice to meet you, {name}!", "lang": "en"}
-        elif kind == 2:
-            a, b = rng.randint(1, 5), rng.randint(1, 4)
-            yield {"text": f"A: What is {_NUMWORDS[a]} plus {_NUMWORDS[b]}?\nB: {_NUMWORDS[a]} plus {_NUMWORDS[b]} is {_NUMWORDS[a+b]}.", "lang": "en"}
-        elif kind == 3:
-            c = rng.randint(1, 5); thing = rng.choice(_THINGS)
-            yield {"text": f"A: How many {thing} are there?\nB: There are {_NUMWORDS[c]} {thing}.", "lang": "en"}
-        else:
-            yield {"text": "A: What do you like?\nB: I like to play and read.\nA: Me too! Let's play.", "lang": "en"}
-
-
-# ──────────────────────────── synthetic: causal ─────────────────────────────
-_CAUSES = [
-    ("it rained", "the ground got wet"), ("she studied hard", "she passed the exam"),
-    ("the sun set", "it became dark"), ("he dropped the glass", "it broke"),
-    ("they watered the plant", "it grew"), ("the fire spread", "the alarm rang"),
-    ("we turned off the light", "the room went dark"), ("the ice melted", "the water rose"),
-]
-
-
-def gen_causal(n: int, seed: int = 2) -> Iterator[dict]:
-    rng = random.Random(seed)
-    tmpl = ["Because {c}, {e}.", "{c}, so {e}.", "Since {c}, {e}.", "{e} because {c}."]
-    for _ in range(n):
-        c, e = rng.choice(_CAUSES)
-        yield {"text": rng.choice(tmpl).format(c=c, e=e), "lang": "en"}
+def stream_causal(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real cause→effect statements (EN) reconstructed from e-CARE."""
+    if "en" not in {l.lower() for l in langs}:
+        return
+    from datasets import load_dataset
+    try:
+        ds = load_dataset("12ml/e-CARE", split="train", streaming=True)
+    except Exception as e:
+        print(f"    [causal] {e}")
+        return
+    for ex in ds:
+        correct = ex.get("choice1") if str(ex.get("label")) == "0" else ex.get("choice2")
+        premise = ex.get("premise") or ""
+        if not (correct and premise):
+            continue
+        if ex.get("question") == "cause":           # premise is the effect
+            cause, effect = correct, premise
+        else:                                        # premise is the cause
+            cause, effect = premise, correct
+        yield {"text": _causal_statement(cause, effect), "lang": "en"}
 
 
 # ──────────────────────────── HF graded corpora ─────────────────────────────
@@ -184,9 +178,119 @@ def stream_tinystories(limit_mb: Optional[int] = None) -> Iterator[dict]:
         print(f"    [tinystories] {e}")
 
 
-# NOTE: the public `daily_dialog` HF dataset is script-based and no longer loads
-# on datasets>=3; L1 conversation is provided by the synthetic `gen_dialogue`
-# generator instead (offline, child-sized vocabulary). See `dialogue` source.
+# ── real conversation corpora ───────────────────────────────────────────────
+# Conversational ability is learned from REAL dialogue (no synthetic templates):
+# the model picks up greetings, small talk, world facts, etc. from human chats.
+# At low levels the readability filter (passes_filter) keeps only the simplest
+# conversations; higher levels admit more. Each conversation is normalized to a
+# two-party A:/B: transcript. The legacy `daily_dialog` is script-based and no
+# longer loads on datasets>=3, so we use parquet-native everyday-chat corpora.
+def _format_dialogue(turns: List[tuple]) -> Optional[str]:
+    """Normalize (speaker, text) turns to a two-party "A:/B:" transcript.
+    Returns None for empty or 3+ speaker conversations (kept strictly dyadic)."""
+    label: Dict[str, str] = {}
+    lines: List[str] = []
+    for spk, txt in turns:
+        txt = " ".join(str(txt).split())
+        if not txt:
+            continue
+        if spk not in label:
+            if len(label) >= 2:                    # third speaker → drop conversation
+                return None
+            label[spk] = "A" if not label else "B"
+        lines.append(f"{label[spk]}: {txt}")
+    return "\n".join(lines) if len(lines) >= 2 else None
+
+
+def _parse_person_dialogue(raw: str) -> List[tuple]:
+    """Parse DialogSum '#Person1#: ...' transcripts into (speaker, text) turns."""
+    turns: List[tuple] = []
+    for line in raw.splitlines():
+        m = re.match(r"\s*#(Person\d+)#\s*:\s*(.*)", line)
+        if m:
+            turns.append((m.group(1), m.group(2)))
+        elif turns and line.strip():               # wrapped continuation line
+            turns[-1] = (turns[-1][0], turns[-1][1] + " " + line.strip())
+    return turns
+
+
+# Per-language everyday-conversation corpora: {lang: [(HF id, extractor → turns)]}.
+# Language-agnostic by design — add a language by listing corpora here; the
+# multilingual OpenAssistant backbone below already covers many languages.
+_DIALOGUE_CORPORA: Dict[str, List[tuple]] = {
+    "en": [
+        ("Estwld/empathetic_dialogues_llm",
+         lambda ex: [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]),
+        ("knkarthick/dialogsum",
+         lambda ex: _parse_person_dialogue(ex.get("dialogue", ""))),
+    ],
+}
+
+# Multilingual backbone: real human assistant conversations tagged by language.
+# Covers any requested language present in the data (en, es, de, fr, ru, zh, …),
+# so adding a language to a level's `model.languages` needs no code change.
+_OASST_REPOS = ("OpenAssistant/oasst1", "OpenAssistant/oasst2")
+
+
+def _stream_oasst(langs: set) -> Iterator[dict]:
+    """Reconstruct OpenAssistant message trees into A:/B: transcripts, one per
+    leaf path, keeping monolingual paths whose language is requested."""
+    from datasets import load_dataset
+    for repo in _OASST_REPOS:
+        try:
+            ds = load_dataset(repo, split="train")          # small; full load to chain trees
+        except Exception as e:
+            print(f"    [dialogue/{repo}] {e}")
+            continue
+        by_id = {m["message_id"]: m for m in ds}
+        parents = {m["parent_id"] for m in ds if m.get("parent_id")}
+        for m in ds:                                        # start from leaves (no children)
+            if m["message_id"] in parents:
+                continue
+            lang = m.get("lang")
+            if lang not in langs:
+                continue
+            chain, cur = [], m
+            while cur is not None:
+                chain.append(cur)
+                cur = by_id.get(cur.get("parent_id")) if cur.get("parent_id") else None
+            if any(c.get("lang") != lang for c in chain):   # keep paths in a single language
+                continue
+            chain.reverse()
+            text = _format_dialogue([(c["role"], c["text"]) for c in chain])
+            if text:
+                yield {"text": text, "lang": lang}
+
+
+def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real human conversations as A:/B: transcripts in the requested
+    languages. Exact duplicates are dropped (e.g. OpenAssistant sibling answers
+    sharing a prompt). No synthetic fallback — if the corpora are unreachable the
+    source simply yields nothing (the readability filter then grades what remains)."""
+    from datasets import load_dataset
+    langs_set = set(langs)
+    seen: set = set()
+
+    def _fresh(rec: dict) -> bool:
+        h = hash(rec["text"])
+        if h in seen:
+            return False
+        seen.add(h)
+        return True
+
+    for lang in langs:                                      # language-specific corpora
+        for name, extract in _DIALOGUE_CORPORA.get(lang, []):
+            try:
+                ds = load_dataset(name, split="train", streaming=True)
+                for ex in ds:
+                    text = _format_dialogue(extract(ex))
+                    if text and _fresh({"text": text}):
+                        yield {"text": text, "lang": lang}
+            except Exception as e:
+                print(f"    [dialogue/{name}] {e}")
+    for rec in _stream_oasst(langs_set):                    # multilingual backbone
+        if _fresh(rec):
+            yield rec
 
 
 def stream_simple_wikipedia(limit_mb: Optional[int] = None) -> Iterator[dict]:
@@ -215,16 +319,16 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
     approx_examples = max(n_tokens // 6, 1000)
     if key == "tinystories":
         return stream_tinystories(limit_mb)
-    if key in ("dialogue", "daily_dialog"):     # synthetic simple conversation
-        return gen_dialogue(approx_examples)
+    if key in ("dialogue", "daily_dialog"):     # real human conversation corpora
+        return stream_dialogue(langs, limit_mb)
     if key == "simple_wikipedia":
         return stream_simple_wikipedia(limit_mb)
     if key == "arithmetic":
-        return gen_arithmetic(arithmetic_level, approx_examples)
-    if key == "analogies":
+        return stream_arithmetic(langs, arithmetic_level, limit_mb)
+    if key == "analogies":                      # TEMPORARY synthetic (no real corpus yet)
         return gen_analogies(approx_examples)
-    if key == "causal_synth":
-        return gen_causal(approx_examples)
+    if key in ("causal_synth", "causal"):       # real cause→effect (EN) from e-CARE
+        return stream_causal(langs, limit_mb)
     if extra_streamers and key in extra_streamers:
         return extra_streamers[key]()
     return None
