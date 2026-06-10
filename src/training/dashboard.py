@@ -38,6 +38,8 @@ STAGE_NAMES = {
     3: "Abstraction and symbolic composition",
     4: "Causal and procedural reasoning",
     5: "Cognitive ethics and BCF",
+    6: "Action and tool use",
+    7: "Model Context Protocol (MCP)",
 }
 
 

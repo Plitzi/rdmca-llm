@@ -18,6 +18,7 @@ scripts/prepare_data.py and are passed in via `extra_streamers` to avoid a
 circular import.
 """
 from __future__ import annotations
+import json
 import random
 import re
 from typing import Callable, Dict, Iterator, List, Optional
@@ -162,6 +163,177 @@ def stream_causal(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[
         else:                                        # premise is the cause
             cause, effect = premise, correct
         yield {"text": _causal_statement(cause, effect), "lang": "en"}
+
+
+# ──────────────────────────── agentic tool use (real, EN) ───────────────────
+# Real function-calling conversations (NousResearch/hermes-function-calling-v1)
+# re-serialized into a Claude-style agentic loop with JSON tool calls:
+#   System: <how to call tools>
+#   Tools: [{"name","description","input_schema"}, ...]
+#   User: ...
+#   Assistant: <optional text>
+#   Action: {"name": "...", "input": {...}}
+#   Observation: {...}
+#   Assistant: <final answer>
+# The model learns to emit an `Action` JSON and consume an `Observation` — the
+# tool(args)→result loop used by Claude Code / the Anthropic SDK. JSON is used
+# throughout (universal). English only — no multilingual tool-use corpus yet.
+_AGENTIC_SYS = ('You can use tools. To call one, output a line '
+                'Action: {"name": <tool>, "input": {<args>}} and you will then '
+                'receive an Observation with the result; otherwise answer directly.')
+_TOOLCALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_TOOLRESP_RE = re.compile(r"<tool_response>\s*(.*?)\s*</tool_response>", re.DOTALL)
+
+
+def _hermes_tools(raw) -> Optional[str]:
+    """Normalize hermes `tools` to a compact JSON array of
+    {name, description, input_schema} (Claude tool-definition shape)."""
+    try:
+        arr = raw if isinstance(raw, list) else json.loads(raw)
+    except Exception:
+        return None
+    out = []
+    for t in arr if isinstance(arr, list) else []:
+        fn = t.get("function", t) if isinstance(t, dict) else None
+        if fn and fn.get("name"):
+            out.append({"name": fn["name"],
+                        "description": fn.get("description", ""),
+                        "input_schema": fn.get("parameters", {})})
+    return json.dumps(out, ensure_ascii=False) if out else None
+
+
+def _hermes_events(ex: dict):
+    """Parse one hermes example into (tools_json, events). `events` is a list of
+    ('user'|'assistant'|'call'|'result', payload) — shared by the agentic (stage 6)
+    and MCP (stage 7) serializers below."""
+    tools = _hermes_tools(ex.get("tools"))
+    events: list = []
+    for turn in ex.get("conversations") or []:
+        frm, val = turn.get("from"), (turn.get("value") or "").strip()
+        if not val:
+            continue
+        if frm == "human":
+            events.append(("user", " ".join(val.split())))
+        elif frm == "gpt":
+            text = _TOOLCALL_RE.sub("", val).strip()
+            if text:
+                events.append(("assistant", " ".join(text.split())))
+            for c in _TOOLCALL_RE.findall(val):
+                try:
+                    obj = json.loads(c)
+                except Exception:
+                    continue
+                events.append(("call", {"name": obj.get("name"),
+                                        "input": obj.get("arguments", obj.get("input", {}))}))
+        elif frm == "tool":
+            m = _TOOLRESP_RE.search(val)
+            events.append(("result", " ".join((m.group(1) if m else val).split())))
+    return tools, events
+
+
+def _hermes_to_transcript(ex: dict) -> Optional[str]:
+    """Serialize one hermes example into the canonical agentic transcript
+    (Claude-style Action/Observation). None unless it has ≥1 real tool call."""
+    tools, events = _hermes_events(ex)
+    lines = [f"System: {_AGENTIC_SYS}"]
+    if tools:
+        lines.append(f"Tools: {tools}")
+    saw_call = False
+    for kind, payload in events:
+        if kind == "user":
+            lines.append(f"User: {payload}")
+        elif kind == "assistant":
+            lines.append(f"Assistant: {payload}")
+        elif kind == "call":
+            lines.append(f"Action: {json.dumps(payload, ensure_ascii=False)}")
+            saw_call = True
+        elif kind == "result":
+            lines.append(f"Observation: {payload}")
+    return "\n".join(lines) if saw_call and len(lines) >= 4 else None
+
+
+def stream_agentic(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real agentic tool-use transcripts (EN) as a Claude-style loop."""
+    if "en" not in {l.lower() for l in langs}:
+        return
+    from datasets import load_dataset
+    try:
+        ds = load_dataset("NousResearch/hermes-function-calling-v1",
+                          split="train", streaming=True)
+    except Exception as e:
+        print(f"    [agentic] {e}")
+        return
+    seen: set = set()
+    for ex in ds:
+        text = _hermes_to_transcript(ex)
+        if not text:
+            continue
+        h = hash(text)
+        if h in seen:
+            continue
+        seen.add(h)
+        yield {"text": text, "lang": "en"}
+
+
+# ──────────────────────────── MCP protocol (real, EN) ───────────────────────
+# Stage 7: the SAME real tool interactions, re-serialized into the Model Context
+# Protocol wire format (JSON-RPC 2.0): a tools/list result, then tools/call
+# requests and their result messages. Real underlying data (no synthetic), just
+# in MCP's envelope — so the model learns the protocol Claude/MCP servers speak.
+_MCP_SYS = ('You interact with tools over MCP (Model Context Protocol, JSON-RPC 2.0): '
+            'send {"jsonrpc":"2.0","method":"tools/call","params":{"name","arguments"}} '
+            'and receive a matching result message; otherwise answer directly.')
+
+
+def _mcp_to_transcript(ex: dict) -> Optional[str]:
+    """Serialize one hermes example into an MCP JSON-RPC session. None unless it
+    contains at least one real tool call."""
+    tools, events = _hermes_events(ex)
+    lines = [f"System: {_MCP_SYS}"]
+    if tools:
+        listing = {"jsonrpc": "2.0", "id": 0,
+                   "result": {"tools": json.loads(tools)}}
+        lines.append("Server: " + json.dumps(listing, ensure_ascii=False))
+    rid, saw_call = 0, False
+    for kind, payload in events:
+        if kind == "user":
+            lines.append(f"User: {payload}")
+        elif kind == "assistant":
+            lines.append(f"Assistant: {payload}")
+        elif kind == "call":
+            rid += 1
+            req = {"jsonrpc": "2.0", "id": rid, "method": "tools/call",
+                   "params": {"name": payload["name"], "arguments": payload["input"]}}
+            lines.append("Client: " + json.dumps(req, ensure_ascii=False))
+            saw_call = True
+        elif kind == "result":
+            res = {"jsonrpc": "2.0", "id": rid,
+                   "result": {"content": [{"type": "text", "text": payload}]}}
+            lines.append("Server: " + json.dumps(res, ensure_ascii=False))
+    return "\n".join(lines) if saw_call and len(lines) >= 4 else None
+
+
+def stream_mcp(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real tool interactions as MCP (JSON-RPC 2.0) sessions (EN)."""
+    if "en" not in {l.lower() for l in langs}:
+        return
+    from datasets import load_dataset
+    try:
+        ds = load_dataset("NousResearch/hermes-function-calling-v1",
+                          split="train", streaming=True)
+    except Exception as e:
+        print(f"    [mcp] {e}")
+        return
+    seen: set = set()
+    for ex in ds:
+        text = _mcp_to_transcript(ex)
+        if not text:
+            continue
+        h = hash(text)
+        if h in seen:
+            continue
+        seen.add(h)
+        yield {"text": text, "lang": "en"}
 
 
 # ──────────────────────────── HF graded corpora ─────────────────────────────
@@ -329,6 +501,10 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
         return gen_analogies(approx_examples)
     if key in ("causal_synth", "causal"):       # real cause→effect (EN) from e-CARE
         return stream_causal(langs, limit_mb)
+    if key in ("agentic", "tools"):             # real tool-use loop (EN), Claude-style JSON
+        return stream_agentic(langs, limit_mb)
+    if key == "mcp":                            # real tool use over MCP / JSON-RPC (EN)
+        return stream_mcp(langs, limit_mb)
     if extra_streamers and key in extra_streamers:
         return extra_streamers[key]()
     return None

@@ -434,7 +434,12 @@ def main():
     # Languages: --lang override > config(model.languages) > ['en']
     langs = ([l.strip() for l in args.lang.split(",")] if args.lang
              else get_languages(cfg))
-    stages = list(range(1, 6)) if args.stage == "all" else [int(args.stage)]
+    # "all" → every stage declared in this level's curriculum (data-driven, so
+    # new stages like agentic/MCP are picked up automatically).
+    if args.stage == "all":
+        stages = sorted(int(k.replace("stage", "")) for k in cfg.get("curriculum", {}))
+    else:
+        stages = [int(args.stage)]
 
     print(f"Level {level} ({cfg.get('name','custom')}) | languages: {langs} | config: {cfg_path}")
     _NETWORK_ERRORS = (

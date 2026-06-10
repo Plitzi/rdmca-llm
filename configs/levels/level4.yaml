@@ -100,6 +100,22 @@ curriculum:
     data:
       sources: [ethics]
       filter: null
+  stage6:
+    name: "Action and tool use"
+    entry_level: 0
+    n_tokens: 50_000_000
+    data_dir: "data/level4/stage6"
+    data:
+      sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
+      filter: null
+  stage7:
+    name: "Model Context Protocol (MCP)"
+    entry_level: 0
+    n_tokens: 50_000_000
+    data_dir: "data/level4/stage7"
+    data:
+      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
+      filter: null
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
 # Como el cerebro, no todos los sectores se activan por token: el gate elige los

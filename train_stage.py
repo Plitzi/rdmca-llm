@@ -62,7 +62,27 @@ STAGE_NAMES = {
     3: "Abstraction and symbolic composition",
     4: "Causal and procedural reasoning",
     5: "Cognitive ethics and BCF",
+    6: "Action and tool use",
+    7: "Model Context Protocol (MCP)",
 }
+
+
+def stage_name(stage: int, cfg: dict | None = None) -> str:
+    """Stage label — prefers the config's per-stage `name`, then STAGE_NAMES,
+    then a generic fallback. Keeps new stages working with no code change."""
+    if cfg:
+        sc = cfg.get("curriculum", {}).get(f"stage{stage}")
+        if sc and sc.get("name"):
+            return sc["name"]
+    return STAGE_NAMES.get(stage, f"Stage {stage}")
+
+
+def prev_active_stage(stage: int, cfg: dict) -> int | None:
+    """Highest curriculum stage below `stage` declared in this config (the real
+    predecessor — stages can be non-contiguous, e.g. {1,2,3,6}), or None."""
+    below = [int(k.replace("stage", "")) for k in cfg.get("curriculum", {})
+             if int(k.replace("stage", "")) < stage]
+    return max(below) if below else None
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +149,7 @@ def build_data_loader(stage: int, cfg: dict):
         sys.exit(1)
     try:
         loader = DataLoader.from_config(stage, cfg, tokenizer)
-        data_dir = list(cfg["curriculum"].values())[stage - 1].get("data_dir")
+        data_dir = cfg["curriculum"][f"stage{stage}"].get("data_dir")   # key-based (stages may be non-contiguous)
         print(f"  [data] Real data loader: {data_dir}")
         return loader
     except FileNotFoundError as e:
@@ -168,7 +188,7 @@ def evaluate_gate(model, stage: int,
     """
     _, _, desc = STAGE_GATES[stage]
     gate_cfg = (cfg or {}).get("gate", {})
-    max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL[stage])
+    max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL.get(stage, 40.0))
 
     ppl = validation_perplexity(model, data_loader)
     passed = ppl <= max_ppl
@@ -264,8 +284,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     tcfg      = cfg["training"]
     mcfg      = cfg["model"]
     skip_gate = cfg.get("skip_gate", False)   # toy config sets this to true
-    stages    = list(cfg["curriculum"].values())
-    n_tokens_target = stages[stage - 1]["n_tokens"]
+    n_tokens_target = cfg["curriculum"][f"stage{stage}"]["n_tokens"]   # key-based
     root      = ckpt_root(cfg)
     ckpt_dir  = root / f"stage{stage}"
 
@@ -277,7 +296,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
         return f"{n/1e3:.0f}K"
 
     print(f"\n{'='*60}")
-    print(f"  Stage {stage}: {STAGE_NAMES[stage]}")
+    print(f"  Stage {stage}: {stage_name(stage, cfg)}")
     print(f"  Target: {_fmt_tokens(n_tokens_target)} tokens")
     print(f"{'='*60}")
 
@@ -309,13 +328,17 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
           f"d_model={model_cfg.d_model} | layers={model_cfg.n_layers} | "
           f"vocab={model_cfg.vocab_size} | precision={precision}")
 
-    # Load previous stage weights as starting point (stages 2-5)
-    if stage > 1:
-        prev_ckpt = root / f"stage{stage-1}" / "latest.json"
-        with open(prev_ckpt) as f:
-            prev_state = json.load(f)
-        B.engine.load_weights(model, prev_state["checkpoint"])
-        print(f"  Loaded Stage {stage-1} weights as starting point")
+    # Load the previous active stage's weights as the starting point, if present.
+    prev_n = prev_active_stage(stage, cfg)
+    if prev_n is not None:
+        prev_ckpt = root / f"stage{prev_n}" / "latest.json"
+        if prev_ckpt.exists():
+            with open(prev_ckpt) as f:
+                prev_state = json.load(f)
+            B.engine.load_weights(model, prev_state["checkpoint"])
+            print(f"  Loaded Stage {prev_n} weights as starting point")
+        else:
+            print(f"  No Stage {prev_n} checkpoint found — starting from random init")
 
     optimizer = B.engine.make_optimizer(
         model, lr=tcfg["lr"], weight_decay=tcfg["weight_decay"])
@@ -473,7 +496,7 @@ Examples:
         """
     )
     parser.add_argument("--stage",  type=int, required=True,
-                        choices=[1, 2, 3, 4, 5], help="Curriculum stage (1-5)")
+                        help="Curriculum stage number (validated against the level's config)")
     parser.add_argument("--level", type=int, default=None,
                         help="Educational level 1-5 (preescolar..universidad). "
                              "Determines model size, data and resources.")
@@ -513,13 +536,14 @@ Examples:
     R.guard(cfg, mode="train", force=args.force)
 
     # Prerequisite check (previous active stage must be complete)
-    if args.stage > 1 and f"stage{args.stage-1}" in cur:
-        prev = ckpt_root(cfg) / f"stage{args.stage-1}" / "stage_complete.json"
+    prev_n = prev_active_stage(args.stage, cfg)
+    if prev_n is not None:
+        prev = ckpt_root(cfg) / f"stage{prev_n}" / "stage_complete.json"
         if not prev.exists():
-            print(f"ERROR: Stage {args.stage-1} must complete before Stage {args.stage}.")
-            print(f"  Run: python train_stage.py --level {level} --stage {args.stage-1}")
+            print(f"ERROR: Stage {prev_n} must complete before Stage {args.stage}.")
+            print(f"  Run: python train_stage.py --level {level} --stage {prev_n}")
             sys.exit(1)
-        print(f"  Stage {args.stage-1} prereq OK")
+        print(f"  Stage {prev_n} prereq OK")
 
     passed = train_stage(args.stage, cfg, resume=args.resume)
 

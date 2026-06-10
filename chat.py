@@ -46,6 +46,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 
 import src.backend as backend
+from src import agent
 from src.memory.experience_log import log_experience
 from src.config import require_backend, get_precision, load_config
 
@@ -214,7 +215,7 @@ BANNER = """
 ╔══════════════════════════════════════════════════════╗
 ║           RDMCA Interactive Chat                     ║
 ║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256     ║
-║  /stats       /reset     /quit                       ║
+║  /format text|json  /stats  /reset  /quit            ║
 ╚══════════════════════════════════════════════════════╝"""
 
 
@@ -226,6 +227,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     temperature = args.temp
     top_p       = args.topp
     max_tokens  = args.maxtok
+    out_format  = agent.normalize_format(getattr(args, "format", "text"))
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
     last_stats: dict   = {}
@@ -270,6 +272,13 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 max_tokens = int(parts[1])
                 print(f"  Max tokens → {max_tokens}")
 
+            elif cmd == "/format" and len(parts) > 1:
+                try:
+                    out_format = agent.normalize_format(parts[1])
+                    print(f"  Output format → {out_format}")
+                except ValueError as e:
+                    print(f"  {e}")
+
             elif cmd == "/stats":
                 if last_stats:
                     print(f"  Tokens generated : {last_stats['n_tokens']}")
@@ -288,13 +297,14 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
 
             continue
 
-        # ── Encode prompt ─────────────────────────────────────────────────
+        # ── Encode prompt (primed for the chosen output format) ───────────
+        enc_prompt = agent.wrap_prompt(prompt, out_format)
         if tok_ready:
-            new_ids = tokenizer.encode(prompt, lang=lang,
+            new_ids = tokenizer.encode(enc_prompt, lang=lang,
                                        add_bos=not history, add_eos=False)
         else:
             # Fallback: hash characters to vocab IDs for smoke testing
-            new_ids = [2] + [ord(c) % mcfg.vocab_size for c in prompt] + [10]
+            new_ids = [2] + [ord(c) % mcfg.vocab_size for c in enc_prompt] + [10]
 
         history.extend(new_ids)
         # Trim history to fit context window (leave room for generation).
@@ -329,9 +339,18 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         else:
             response = "(empty response — model generated EOS immediately)"
 
-        print(response)
+        # ── Format the response (text | json) for the consumer ────────────
+        result = agent.parse_output(response, out_format)
+        if result["format"] == "json":
+            if result["valid"]:
+                import json as _json
+                print(_json.dumps(result["json"], ensure_ascii=False, indent=2))
+            else:
+                print(f"{response}\n  [warning: output is not valid JSON]")
+        else:
+            print(response)
         print(f"\n  [{len(gen_ids)} tokens · {tps:.1f} tok/s · "
-              f"temp={temperature} · top_p={top_p}]")
+              f"temp={temperature} · top_p={top_p} · format={out_format}]")
 
         # Add response to history
         history.extend(gen_ids)
@@ -383,6 +402,8 @@ Examples:
                         help="Nucleus sampling p (default: 0.9)")
     parser.add_argument("--maxtok",     type=int,   default=256,
                         help="Max new tokens per turn (default: 256)")
+    parser.add_argument("--format",     choices=agent.OUTPUT_FORMATS, default="text",
+                        help="Output format: text (default) or json (structured)")
     parser.add_argument("--force",      action="store_true",
                         help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()

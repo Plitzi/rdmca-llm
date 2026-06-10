@@ -80,6 +80,22 @@ curriculum:
       sources: [arithmetic]
       filter:
         arithmetic_level: 2        # 2 = two-digit + − × (e.g. "23 + 18 = 41").
+  stage6:
+    name: "Action and tool use"
+    entry_level: 0
+    n_tokens: 30_000_000
+    data_dir: "data/level2/stage6"
+    data:
+      sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
+      filter: null
+  stage7:
+    name: "Model Context Protocol (MCP)"
+    entry_level: 0
+    n_tokens: 30_000_000
+    data_dir: "data/level2/stage7"
+    data:
+      sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
+      filter: null
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
 # Como el cerebro, no todos los sectores se activan por token: el gate elige los

@@ -79,6 +79,22 @@ curriculum:
     data:
       sources: [arithmetic]
       filter: {arithmetic_level: 1}
+  stage6:
+    name: "Action and tool use"
+    entry_level: 0               # agentic from the very start; ramps up with the model.
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage6"
+    data:
+      sources: [agentic]         # real tool-use loop (Claude-style JSON Action/Observation).
+      filter: null               # JSON tool transcripts — appropriate by construction.
+  stage7:
+    name: "Model Context Protocol (MCP)"
+    entry_level: 0               # MCP from the start; same real tools, JSON-RPC envelope.
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage7"
+    data:
+      sources: [mcp]             # real tool use re-serialized into MCP (JSON-RPC 2.0).
+      filter: null
 
 # MoE block kept for uniformity (sectors only attach post-freeze, i.e. level 4+).
 moe:
