@@ -100,3 +100,14 @@ curriculum:
     data:
       sources: [ethics]
       filter: null
+
+# ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
+# Como el cerebro, no todos los sectores se activan por token: el gate elige los
+# top_k sectores más relevantes (S1..S6) y SOLO esos computan, así el cómputo
+# activo queda acotado aunque el pool de sectores crezca (equipos pequeños siguen
+# corriéndolo). S7 (Conductual/BCF) NO es experto: queda siempre activo y aislado.
+moe:
+  enabled: true            # enruta los sectores con MoE en consolidación/inferencia
+  experts: 6               # sectores expertos enrutados (S1..S6)
+  top_k: 2                 # sectores activados por token (sparsity tipo cerebro)
+  aux_loss_weight: 0.01    # peso del aux loss de balanceo de expertos

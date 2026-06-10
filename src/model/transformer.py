@@ -19,6 +19,11 @@ B = backend.current()
 nn = B.nn
 ops = B.ops
 
+# Sectors that are NEVER MoE experts: the Behavioral/BCF sector (S7) stays
+# always-on and isolated for the safety guarantee (trained only on the
+# adversarial buffer). All other sectors are gated MoE experts.
+SAFETY_SECTOR_IDS = (7,)
+
 
 # Compatibility shim: precision is now owned by the engine. Older call sites
 # import `set_model_precision` from here.
@@ -106,20 +111,24 @@ class CausalSelfAttention(nn.Module):
         # Sector wiring (set by RDMCAFoundational.attach_sectors). Plain Python
         # attributes, ignored by both backends' parameter trees.
         self.layer_idx = 0
-        self._sector_delta = None
+        self._sector_delta = None      # model._compute_delta(layer, proj, x, route)
+        self._sector_route = None      # model._route(x) -> per-token expert weights
 
     def __call__(self, x, mask=None):
         Bsz, S, D = x.shape
         H, Hd = self.n_heads, self.head_dim
+
+        # Route once per block (per-token top-k over experts); reuse for q,k,v,o.
+        route = self._sector_route(x) if self._sector_route is not None else None
 
         q = self.q_proj(x)
         k = self.k_proj(x)
         v = self.v_proj(x)
         # Inject active LoRA sector deltas (zero-output at init).
         if self._sector_delta is not None:
-            q = q + self._sector_delta(self.layer_idx, "q", x)
-            k = k + self._sector_delta(self.layer_idx, "k", x)
-            v = v + self._sector_delta(self.layer_idx, "v", x)
+            q = q + self._sector_delta(self.layer_idx, "q", x, route)
+            k = k + self._sector_delta(self.layer_idx, "k", x, route)
+            v = v + self._sector_delta(self.layer_idx, "v", x, route)
         q = q.reshape(Bsz, S, H, Hd)
         k = k.reshape(Bsz, S, H, Hd)
         v = v.reshape(Bsz, S, H, Hd)
@@ -151,7 +160,7 @@ class CausalSelfAttention(nn.Module):
         out = ops.transpose((attn @ v), (0, 2, 1, 3)).reshape(Bsz, S, D)
         proj = self.o_proj(out)
         if self._sector_delta is not None:
-            proj = proj + self._sector_delta(self.layer_idx, "o", out)
+            proj = proj + self._sector_delta(self.layer_idx, "o", out, route)
         return proj
 
 
@@ -196,7 +205,12 @@ class RDMCAFoundational(nn.Module):
         # Sector state (populated by attach_sectors). int-keyed dict for logic;
         # params are registered for the backend via engine.register_submodules.
         self.sectors = None
+        self.gate = None              # SectorGate (MoE router over S1..S6)
+        self._expert_ids = []         # sector ids routed by the gate (experts)
+        self._safety_ids = []         # always-on, isolated safety sectors (S7)
         self._routing = _Routing()
+        self._aux_accum = 0.0         # MoE load-balance loss accumulated per forward
+        self._aux_count = 0
 
     # ------------------------------------------------------------------
     # Output projection at an MRL prefix dimension
@@ -211,10 +225,18 @@ class RDMCAFoundational(nn.Module):
 
     def __call__(self, tokens, mask=None):
         """Forward pass. Returns full-dim hidden states [B, S, d_model]."""
+        self._aux_accum = 0.0          # reset MoE aux loss for this forward
+        self._aux_count = 0
         x = self.drop(self.embed(tokens))
         for block in self.blocks:
             x = block(x, mask)
         return self.ln_f(x)
+
+    def aux_loss(self):
+        """Mean MoE load-balance loss over the last forward (0 if no MoE routing)."""
+        if self._aux_count == 0:
+            return 0.0
+        return self._aux_accum / self._aux_count
 
     def logits(self, tokens):
         """Convenience: returns logits at the largest MRL dim."""
@@ -281,23 +303,42 @@ class RDMCAFoundational(nn.Module):
     # Sector integration (post foundational freeze)
     # ------------------------------------------------------------------
 
-    def attach_sectors(self, sectors: dict) -> None:
+    def attach_sectors(self, sectors: dict, moe: bool = True, top_k: int = 2) -> None:
         """
         Register LoRA sector adapters and wire them into every attention block.
         `sectors` is a {sector_id: SectorAdapter} mapping. Adapters are
         zero-output at init, so attaching them does not change model behavior
         until they are trained. Call after the foundational core is frozen.
+
+        With `moe=True`, the non-safety sectors (S1..S6) become **MoE experts**
+        routed per token by a learned `SectorGate` (top-k); the safety sector(s)
+        S7 stay always-on and isolated. With `moe=False` the model uses the
+        legacy explicit routing (`set_active_sectors`).
         """
+        from src.model.moe import SectorGate
         self.sectors = sectors
         B.engine.register_submodules(self, "_sector_store", list(sectors.values()))
+        self._safety_ids = [s for s in sectors if s in SAFETY_SECTOR_IDS]
+        self._expert_ids = sorted(s for s in sectors if s not in SAFETY_SECTOR_IDS)
+
+        if moe and self._expert_ids:
+            self.gate = SectorGate(self.cfg.d_model, len(self._expert_ids), top_k=top_k)
+            B.engine.align_module(self.gate, self)   # match model device/dtype
+            self._routing.mode = "moe"
+        else:
+            self.gate = None
+            self._routing.mode = "explicit"
+
         for i, block in enumerate(self.blocks):
             block.attn.layer_idx = i
             block.attn._sector_delta = self._compute_delta
+            block.attn._sector_route = self._route
 
     def add_sector(self, sector_id: int, rank: int = 4):
         """Instantiate and register a new adaptive sector at runtime (PGQ new
         sector creation, §10.7.4). It participates in inference immediately
-        because _compute_delta reads self.sectors live."""
+        because _compute_delta reads self.sectors live. If MoE is active and the
+        sector is an expert (not safety), the gate grows by one column."""
         from src.model.lora import SectorAdapter
         from src.model.config import LoRAConfig
         if self.sectors is None:
@@ -308,29 +349,66 @@ class RDMCAFoundational(nn.Module):
         self.sectors[sector_id] = adapter
         # Re-register so the new adapter's params are tracked by the backend.
         B.engine.register_submodules(self, "_sector_store", list(self.sectors.values()))
+        if sector_id in SAFETY_SECTOR_IDS:
+            if sector_id not in self._safety_ids:
+                self._safety_ids.append(sector_id)
+        else:
+            if sector_id not in self._expert_ids:
+                self._expert_ids.append(sector_id)
+                if self.gate is not None:
+                    self.gate.grow_experts(1)     # new expert column (zero-init)
         return adapter
 
+    def use_moe(self) -> None:
+        """Switch back to MoE routing (after a temporary explicit/core-only mode)."""
+        self._routing.mode = "moe" if self.gate is not None else "explicit"
+
     def set_active_sectors(self, pairs) -> None:
-        """Set which sectors contribute deltas: list of (sector_id, weight)."""
+        """Legacy explicit routing: only the listed (sector_id, weight) pairs
+        contribute, the gate is bypassed. Used for the isolated S7 update and for
+        BCF core-only reads (`set_active_sectors([])`)."""
+        self._routing.mode = "explicit"
         self._routing.active = list(pairs) if pairs else []
 
-    def _compute_delta(self, layer_idx: int, proj: str, x):
-        """Sum of active sector LoRA deltas for one projection in one layer."""
-        active = self._routing.active
-        if not active or not self.sectors:
+    def _route(self, x):
+        """Per-token MoE routing weights over the experts (S1..S6), or None when
+        not in MoE mode. Also accumulates the load-balance aux loss."""
+        if self.gate is None or self._routing.mode != "moe":
+            return None
+        from src.model.moe import expert_weights, load_balance_loss
+        idx, w, logits = self.gate(x)
+        self._aux_accum = self._aux_accum + load_balance_loss(logits, idx, len(self._expert_ids))
+        self._aux_count += 1
+        return expert_weights(idx, w, len(self._expert_ids))   # [B, S, n_experts]
+
+    def _compute_delta(self, layer_idx: int, proj: str, x, route=None):
+        """Combine sector deltas for one projection in one layer.
+        MoE mode: experts weighted by the per-token gate (`route`) + always-on
+        safety sectors. Explicit mode: sum the `set_active_sectors` list."""
+        if not self.sectors:
             return 0.0
         total = None
-        for sid, weight in active:
-            adapter = self.sectors.get(sid)
-            if adapter is None:
-                continue
-            d = adapter.delta(layer_idx, proj, x) * weight
-            total = d if total is None else total + d
+        if self._routing.mode == "moe" and self.gate is not None and route is not None:
+            for pos, sid in enumerate(self._expert_ids):       # gated experts
+                d = self.sectors[sid].delta(layer_idx, proj, x) * route[..., pos:pos+1]
+                total = d if total is None else total + d
+            for sid in self._safety_ids:                       # safety, always on
+                d = self.sectors[sid].delta(layer_idx, proj, x)
+                total = d if total is None else total + d
+        else:                                                  # explicit/legacy
+            for sid, weight in self._routing.active:
+                adapter = self.sectors.get(sid)
+                if adapter is None:
+                    continue
+                d = adapter.delta(layer_idx, proj, x) * weight
+                total = d if total is None else total + d
         return total if total is not None else 0.0
 
 
 class _Routing:
-    """Plain (non-Module) holder for the active-sector list, so the backend
-    parameter tree never tries to traverse it."""
+    """Plain (non-Module) holder for routing state, so the backend parameter tree
+    never tries to traverse it. `mode` is 'moe' (gated experts + safety) or
+    'explicit' (only the `active` list)."""
     def __init__(self):
+        self.mode = "explicit"
         self.active = []

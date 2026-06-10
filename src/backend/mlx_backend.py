@@ -109,6 +109,14 @@ _ops = SimpleNamespace(
     transpose=lambda x, axes: mx.transpose(x, axes),
     astype=lambda x, dtype: x.astype(dtype),
     stop_gradient=mx.stop_gradient,
+    # top-k along the last axis (order within the k does not matter — softmax over them).
+    topk=lambda x, k, axis=-1: (
+        mx.take_along_axis(x, mx.argsort(x, axis=axis)[..., -k:], axis=axis),
+        mx.argsort(x, axis=axis)[..., -k:]),
+    take_along_axis=lambda x, idx, axis: mx.take_along_axis(x, idx, axis=axis),
+    index_select=lambda x, idx, axis=0: mx.take(x, idx, axis=axis),
+    index_add=lambda out, idx, vals, axis=0: out.at[idx].add(vals),
+    nonzero=None,    # MLX has no static-shape nonzero; the MLX path uses masked dispatch
     silu=mlx_nn.silu,
     relu=mlx_nn.relu,
     cross_entropy=lambda logits, targets, reduction="mean": mlx_nn.losses.cross_entropy(
@@ -206,6 +214,7 @@ _engine = SimpleNamespace(
     # MLX walks dict/list-of-Module attributes automatically, so attaching the
     # sectors dict already registers their params — nothing extra to do.
     register_submodules=lambda parent, name, modules: None,
+    align_module=lambda module, model: None,   # MLX unified memory: no-op
     grad_norm=_grad_norm,
     param_count=_param_count,
     memory_stats=_memory_stats,

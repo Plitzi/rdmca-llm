@@ -30,12 +30,25 @@ teaches, from d_model=128 (level 1) to d_model=768 (level 5).
 | S6 | Multimodal | Cross-modal (image/audio ↔ text) | r=8 |
 | S7 | Behavioral | Ethics, BCF — adversarial buffer only | r=4 |
 
-Sectors are updated **one at a time** during consolidation, with real gradient masking
-(`engine.set_trainable`: MLX freeze/unfreeze, or PyTorch `requires_grad_` toggling): the
-core and the other sectors stay bit-identical. PGQ can **grow
-a sector's rank** (`SectorAdapter.grow_rank`) or **create new sectors**
-(`model.add_sector`) at runtime, preserving the output (new components are zero-output at
-first).
+**Mixture-of-Experts (MoE) over sectors.** The sectors S1–S6 are **experts** routed
+**per token** by a learned gate (`src/model/moe.py` `SectorGate`): each token activates
+only its **top-k** sectors (default k=2) — like the brain, not every expert fires. So the
+*active* sector compute stays bounded as the sector pool grows (PGQ), letting modest
+hardware keep running the model as it accumulates knowledge. The gate + experts train
+**jointly** in consolidation (`pipeline._moe_update`) on the LM loss + a load-balance aux
+loss; because routing is per token, **one experience updates several sectors**
+(multi-sectorial: a new equation's terminology → Linguistic, its method → Formal).
+
+**S7 (Behavioral/BCF) is excluded from the MoE** — it is always-on and isolated, never in
+the consolidation trainable set, shaped only by the BCF probe training. This preserves the
+safety guarantee. The current dispatch computes each expert then weights by the gate (only
+top-k contribute to the output); true sparse compute (capacity-based dispatch) is the
+documented scaling optimization — at the default 6 sectors the LoRA-expert cost is
+negligible next to the dense frozen base.
+
+PGQ can **grow a sector's rank** (`SectorAdapter.grow_rank`) or **create new experts**
+(`model.add_sector`, which grows the gate by a zero-init column) at runtime, preserving the
+output (new components are zero-output at first).
 
 ---
 

@@ -97,8 +97,9 @@ def _build_model(cfg: dict):
     B.engine.load_weights(model, str(frozen))
 
     sectors = build_all_sectors(model_cfg.d_model, model_cfg.n_layers)
-    model.attach_sectors(sectors)
-    set_model_precision(model, get_precision(cfg))   # move sectors to device/dtype too
+    top_k = int(((cfg.get("moe") or {}).get("top_k", 2)))
+    model.attach_sectors(sectors, moe=True, top_k=top_k)   # MoE: gate routes S1..S6
+    set_model_precision(model, get_precision(cfg))   # move sectors + gate to device/dtype
     sec_path = root / "sectors.npz"
     if sec_path.exists():
         saved = dict(np.load(str(sec_path)))
@@ -107,6 +108,10 @@ def _build_model(cfg: dict):
                     if k.startswith(f"S{sid}/")}
             if flat:
                 B.engine.load_state_dict(adapter, flat)
+        gate_flat = {k.split("/", 1)[1]: v for k, v in saved.items()
+                     if k.startswith("GATE/")}
+        if gate_flat and model.gate is not None:
+            B.engine.load_state_dict(model.gate, gate_flat)
     set_model_precision(model, get_precision(cfg))
     return model, root
 
@@ -119,6 +124,9 @@ def _save_sectors(model, root: Path) -> None:
     for sid, adapter in (model.sectors or {}).items():
         for k, v in B.engine.state_dict(adapter).items():
             flat[f"S{sid}/{k}"] = v
+    if getattr(model, "gate", None) is not None:          # persist the MoE router too
+        for k, v in B.engine.state_dict(model.gate).items():
+            flat[f"GATE/{k}"] = v
     if flat:
         np.savez(str(root / "sectors.npz"), **flat)
 

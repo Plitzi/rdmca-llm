@@ -209,9 +209,12 @@ consolidation.
 
 The daemon runs while the system is idle (CPU < 20% for 5+ min), drains the accumulated
 experiences and consolidates them: BCF filter → adversarial filter (R⁺<0) → MRF
-(promote/retain/expire) → sector assignment → **masked sector update** (core and other
-sectors stay intact) → PGQ (sector growth) → snapshot/rollback → audit log in
-`logs/cycle_*.json`.
+(promote/retain/expire) → **MoE joint update** of the gate + expert sectors S1–S6 (routed
+per token, top-k) → PGQ (sector growth) → snapshot/rollback → audit log in
+`logs/cycle_*.json`. The frozen core stays intact; the **per-token gate** means one
+experience updates several sectors (multi-sectorial), while **S7 (safety) stays isolated**
+(never trained here). Configure routing in each level's `moe:` block (`experts`, `top_k`,
+`aux_loss_weight`).
 
 ```bash
 python consolidation_daemon.py --level 3 --once    # one cycle, then exit

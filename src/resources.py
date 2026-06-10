@@ -193,3 +193,8 @@ def announce(cfg: dict, mode: str = "train", stage: Optional[int] = None) -> Non
             print(f"    • {v}")
     print(f"  Model: ~{params_m:.1f}M params | est. {mode} memory ~{need:.1f} GB "
           f"| available ~{have:.1f} GB")
+    moe = cfg.get("moe") or {}
+    if moe.get("enabled"):
+        print(f"  MoE sectors: {moe.get('experts', '?')} experts, "
+              f"top-{moe.get('top_k', '?')} active per token (+ S7 always-on safety) — "
+              f"active sector compute stays bounded as knowledge grows")

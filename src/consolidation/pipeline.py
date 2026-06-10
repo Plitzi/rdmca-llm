@@ -32,7 +32,8 @@ from src.memory.ltss import LTSS
 from src.memory.mrf import mrf
 from src.relevance.engine import RelevanceEngine
 from src.model.bcf import BCFHead
-from src.model.lora import masked_sector_update
+# (MoE joint update is done inline via the backend engine; the isolated
+# masked_sector_update path is no longer used by the consolidation pipeline.)
 from src.consolidation.snapshot import SectorSnapshotManager
 from src.consolidation.ambiguity import AmbiguityHandler
 from src.consolidation.pgq import PGQ
@@ -42,6 +43,7 @@ MIN_BATCH_PER_SECTOR = 8
 CONSOL_SEQ_LEN       = 128    # token length used for consolidation LM updates
 LTSS_DUPLICATE_COH   = 0.95  # cosine sim above which an experience is flagged
 DEFAULT_SECTOR       = 1     # fallback sector when routing is unavailable
+AUX_LOSS_WEIGHT      = 0.01  # weight of the MoE load-balance auxiliary loss
 
 
 @dataclass
@@ -109,6 +111,52 @@ class ConsolidationPipeline:
         self.tokenizer   = tokenizer
         self.optimizer   = (backend.current().engine.make_optimizer(
             model, lr=lr, weight_decay=0.0) if model is not None else None)
+        self._last_rollback = False
+
+    def _moe_update(self, experiences, sectors_updated, delta_norms) -> None:
+        """Joint MoE update: the gate + expert sectors (S1..S6) train together on
+        the consolidation LM loss + load-balance aux loss. Snapshots gate+experts,
+        steps once, and rolls back on a gradient-norm catastrophe. S7 is excluded
+        (frozen → isolated)."""
+        eng = backend.current().engine
+        m   = self.model
+        self._last_rollback = False
+        batch = self._build_token_batch(experiences)
+        if batch is None:
+            return
+        expert_ids = list(m._expert_ids)
+
+        # Snapshot gate (id 0) + each expert before the update (enables rollback).
+        self.snapshots.snapshot_before_update(0, eng.state_dict(m.gate))
+        for sid in expert_ids:
+            self.snapshots.snapshot_before_update(sid, eng.state_dict(m.sectors[sid]))
+
+        # Trainable = gate + experts only; base frozen, S7 frozen (isolated).
+        eng.set_trainable(m, [m.gate] + [m.sectors[s] for s in expert_ids])
+        m.use_moe()
+        lam = AUX_LOSS_WEIGHT
+
+        def loss_fn(model):
+            return model.mrl_loss(batch) + lam * model.aux_loss()
+
+        grad_fn = eng.value_and_grad(m, loss_fn)
+        loss, grads = grad_fn(m)
+        eng.eval(loss)
+        gnorm = eng.grad_norm(m, grads)
+        eng.optimizer_step(self.optimizer, m, grads)
+        eng.freeze_all(m)
+
+        cat = self.snapshots.detect_catastrophe(
+            0, benchmark_delta=0.0, kl_divergence=0.0, bcf_delta=0.0, grad_norm=gnorm)
+        if cat:
+            self.snapshots.rollback(0, m.gate)
+            for sid in expert_ids:
+                self.snapshots.rollback(sid, m.sectors[sid])
+            self._last_rollback = True
+        else:
+            sectors_updated.extend(expert_ids)
+        for sid in expert_ids:
+            delta_norms[f"S{sid}"] = gnorm
 
     def run(self) -> AuditEntry:
         """Execute one full consolidation cycle. Returns the audit log entry."""
@@ -187,53 +235,28 @@ class ConsolidationPipeline:
             else:
                 human_queued += 1
 
-        # --- Steps 7-8: Group by sector and masked update ---
+        # Group by routed sector — kept for stats/PGQ only (training is MoE-joint).
         sector_groups: Dict[int, List[Experience]] = {}
         for exp in final:
             sid = exp.sector_assignment or 1
             sector_groups.setdefault(sid, []).append(exp)
 
-        for sid, group in sector_groups.items():
-            if len(group) < MIN_BATCH_PER_SECTOR:
-                continue
-            if self.snapshots.is_frozen(sid):
-                continue
-            adapter = self._get_adapter(sid)
-            if adapter is None:
-                continue
-
-            # Snapshot the sector before touching it (enables rollback).
-            sector_params = backend.current().engine.state_dict(adapter)
-            self.snapshots.snapshot_before_update(sid, sector_params)
-
-            # Without a model + tokenizer we can only do the filter pipeline.
-            if self.model is None or self.tokenizer is None:
-                sectors_updated.append(sid)
-                delta_norms[f"S{sid}"] = 0.0
-                continue
-
-            batch = self._build_token_batch(group)
-            if batch is None:
-                continue
-
-            def loss_fn(model, _batch=batch, _sid=sid):
-                model.set_active_sectors([(_sid, 1.0)])
-                return model.mrl_loss(_batch)
-
-            loss_val, gnorm = masked_sector_update(
-                self.model, sid, loss_fn, self.optimizer)
-            delta_norms[f"S{sid}"] = gnorm
-
-            # Catastrophe detection (gradient-norm anomaly is computable
-            # in-loop; perf/KL/BCF probes are wired separately).
-            cat = self.snapshots.detect_catastrophe(
-                sid, benchmark_delta=0.0, kl_divergence=0.0,
-                bcf_delta=0.0, grad_norm=gnorm)
-            if cat:
-                self.snapshots.rollback(sid, adapter)
-                rollback = True
-            else:
-                sectors_updated.append(sid)
+        # --- Steps 7-8: MoE joint update over the EXPERT sectors (S1..S6) ---
+        # The gate routes each token to its top-k experts; the gate + all expert
+        # sectors train jointly on the consolidation LM loss + a load-balance aux
+        # loss. One experience can thus update several sectors (multi-sectorial:
+        # new terminology → Linguistic, the method → Formal). The safety sector
+        # S7 is NEVER in the trainable set here — it stays frozen/isolated and is
+        # only shaped by the BCF probe training (train_bcf_head).
+        if (final and self.model is not None and self.tokenizer is not None
+                and getattr(self.model, "gate", None) is not None
+                and len(final) >= MIN_BATCH_PER_SECTOR):
+            self._moe_update(final, sectors_updated, delta_norms)
+            rollback = rollback or self._last_rollback
+        elif final and (self.model is None or self.tokenizer is None):
+            # Filter-only mode (no model): report which experts would have updated.
+            sectors_updated.extend(sorted({(e.sector_assignment or DEFAULT_SECTOR)
+                                           for e in final}))
 
         # --- Step 9: PGQ ---
         busiest = (max(sector_groups, key=lambda s: len(sector_groups[s]))

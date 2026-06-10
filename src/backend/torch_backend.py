@@ -97,6 +97,11 @@ _ops = SimpleNamespace(
     transpose=lambda x, axes: x.permute(*axes),
     astype=lambda x, dtype: x.to(dtype),
     stop_gradient=lambda x: x.detach(),
+    topk=lambda x, k, axis=-1: torch.topk(x, k, dim=axis),          # -> (values, indices)
+    take_along_axis=lambda x, idx, axis: torch.take_along_dim(x, idx, dim=axis),
+    index_select=lambda x, idx, axis=0: x.index_select(axis, idx),
+    index_add=lambda out, idx, vals, axis=0: out.index_add(axis, idx, vals),
+    nonzero=lambda mask: torch.nonzero(mask, as_tuple=False).flatten(),
     silu=F.silu,
     relu=F.relu,
     cross_entropy=lambda logits, targets, reduction="mean": F.cross_entropy(
@@ -198,6 +203,18 @@ def _register_submodules(parent, name, modules) -> None:
         ml.to(DEVICE)
 
 
+def _align_module(module, model) -> None:
+    """Move a newly created submodule (e.g. the MoE gate) to the model's current
+    device/dtype, so it interoperates whether it was added before or after
+    set_precision()."""
+    try:
+        own = {id(q) for q in module.parameters()}
+        ref = next(p for p in model.parameters() if id(p) not in own)
+        module.to(device=ref.device, dtype=ref.dtype)
+    except StopIteration:
+        module.to(DEVICE)
+
+
 def _memory_stats() -> dict:
     if torch.cuda.is_available():
         return {"peak": torch.cuda.max_memory_allocated(),
@@ -223,6 +240,7 @@ _engine = SimpleNamespace(
     set_trainable=_set_trainable,
     freeze_all=_freeze_all,
     register_submodules=_register_submodules,
+    align_module=_align_module,
     grad_norm=_grad_norm,
     param_count=lambda module: sum(p.numel() for p in module.parameters()),
     memory_stats=_memory_stats,
