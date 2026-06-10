@@ -208,6 +208,7 @@ class RDMCAFoundational(nn.Module):
         self.gate = None              # SectorGate (MoE router over S1..S6)
         self._expert_ids = []         # sector ids routed by the gate (experts)
         self._safety_ids = []         # always-on, isolated safety sectors (S7)
+        self._moe_capacity_factor = 1.25   # per-expert capacity slack (MLX dispatch)
         self._routing = _Routing()
         self._aux_accum = 0.0         # MoE load-balance loss accumulated per forward
         self._aux_count = 0
@@ -303,7 +304,8 @@ class RDMCAFoundational(nn.Module):
     # Sector integration (post foundational freeze)
     # ------------------------------------------------------------------
 
-    def attach_sectors(self, sectors: dict, moe: bool = True, top_k: int = 2) -> None:
+    def attach_sectors(self, sectors: dict, moe: bool = True, top_k: int = 2,
+                       capacity_factor: float = 1.25) -> None:
         """
         Register LoRA sector adapters and wire them into every attention block.
         `sectors` is a {sector_id: SectorAdapter} mapping. Adapters are
@@ -317,6 +319,7 @@ class RDMCAFoundational(nn.Module):
         """
         from src.model.moe import SectorGate
         self.sectors = sectors
+        self._moe_capacity_factor = capacity_factor
         B.engine.register_submodules(self, "_sector_store", list(sectors.values()))
         self._safety_ids = [s for s in sectors if s in SAFETY_SECTOR_IDS]
         self._expert_ids = sorted(s for s in sectors if s not in SAFETY_SECTOR_IDS)
@@ -402,35 +405,77 @@ class RDMCAFoundational(nn.Module):
     def _moe_combine(self, layer_idx: int, proj: str, x, route):
         """Combine the routed expert deltas (S1..S6) + always-on safety (S7).
 
-        Two dispatch paths give the SAME result:
-          • sparse (when the backend has `nonzero`, e.g. PyTorch): each expert
-            runs ONLY on the tokens routed to it → O(top_k·T) expert compute, the
-            real saving as the expert pool grows.
-          • masked (e.g. MLX, which needs static shapes): every expert runs on all
-            tokens, weighted by the gate (0 outside its top-k). Correct and cheap
-            while the expert count is small (LoRA experts ≪ the dense base)."""
+        Both dispatch paths compute each expert ONLY on its routed tokens
+        (real top-k saving — bounded as the expert pool grows):
+          • `_moe_sparse` (backends with dynamic `nonzero`, e.g. PyTorch): exact,
+            no token drops.
+          • `_moe_capacity` (static-shape backends, e.g. MLX): GShard-style
+            fixed-capacity dispatch (gather/scatter by index, no dynamic shapes);
+            tokens beyond an expert's capacity are dropped (rare with the default
+            capacity factor)."""
         Bsz, S, D = x.shape
-        flat  = x.reshape(-1, D)                                # [T, D]
-        n_exp = len(self._expert_ids)
-        w     = route.reshape(-1, n_exp)                        # [T, E]
-        sparse = getattr(ops, "nonzero", None) is not None
-
-        out = ops.zeros((flat.shape[0], D), dtype=flat.dtype)
-        for pos, sid in enumerate(self._expert_ids):
-            we = w[:, pos]                                      # [T] gate weight for expert
-            if sparse:
-                nz = ops.nonzero(we > 0.0)                      # tokens routed to this expert
-                if nz.shape[0] == 0:
-                    continue
-                xe = ops.index_select(flat, nz, 0)             # [m, D] only those tokens
-                de = self.sectors[sid].delta(layer_idx, proj, xe)
-                out = ops.index_add(out, nz, de * we[nz][:, None])
-            else:
-                de = self.sectors[sid].delta(layer_idx, proj, flat)   # [T, D]
-                out = out + de * we[:, None]
-        for sid in self._safety_ids:                            # safety: always on, full weight
+        flat = x.reshape(-1, D)                                 # [T, D]
+        w    = route.reshape(-1, len(self._expert_ids))         # [T, E]
+        if getattr(ops, "nonzero", None) is not None:
+            out = self._moe_sparse(layer_idx, proj, flat, w)
+        else:
+            out = self._moe_capacity(layer_idx, proj, flat, w)
+        for sid in self._safety_ids:                            # safety: always on
             out = out + self.sectors[sid].delta(layer_idx, proj, flat)
         return out.reshape(Bsz, S, D)
+
+    def _moe_sparse(self, layer_idx, proj, flat, w):
+        """Exact sparse dispatch: gather each expert's routed tokens via nonzero,
+        run the expert on that subset, scatter the weighted result back."""
+        out = ops.zeros((flat.shape[0], flat.shape[1]), dtype=flat.dtype)
+        for pos, sid in enumerate(self._expert_ids):
+            we = w[:, pos]                                      # [T] gate weight
+            nz = ops.nonzero(we > 0.0)                          # tokens routed here
+            if nz.shape[0] == 0:
+                continue
+            xe = ops.index_select(flat, nz, 0)                  # [m, D]
+            de = self.sectors[sid].delta(layer_idx, proj, xe)
+            out = ops.index_add(out, nz, de * we[nz][:, None])
+        return out
+
+    def _moe_capacity(self, layer_idx, proj, flat, w):
+        """Static-shape capacity dispatch (GShard-style) for backends without a
+        dynamic nonzero. Each expert processes a fixed C = ceil(factor·k·T/E)
+        token slots, so total expert compute ≈ O(top_k·T) regardless of E."""
+        T, D = flat.shape
+        E = len(self._expert_ids)
+        k = self.gate.top_k
+        C = max(int(self._moe_capacity_factor * k * T / E) + 1, 1)
+
+        # Routing positions/indices are non-differentiable by nature — keep them
+        # out of the autograd graph (stop_gradient), or MLX errors trying to take
+        # a VJP w.r.t. scatter indices. The combine WEIGHTS stay differentiable so
+        # the gate still learns.
+        keep = ops.astype(w > 0.0, ops.float32)                 # [T, E] routed?
+        pos  = ops.astype(ops.cumsum(keep, axis=0), ops.int_) - 1   # queue position per expert
+        within = keep * ops.astype(pos < C, ops.float32)        # 1 if kept within capacity
+        keep_i = ops.astype(within, ops.int_)                   # [T, E] int 0/1
+
+        erange = ops.astype(ops.arange(E), ops.int_)[None, :]   # [1, E]
+        slot   = erange * C + pos                                # [T, E] target slot per expert
+        trash  = E * C                                           # overflow / not-routed sink
+        target = ops.stop_gradient(slot * keep_i + trash * (1 - keep_i))   # [T, E] int (const)
+        tok    = ops.astype(ops.arange(T), ops.int_)[:, None] + ops.zeros((1, E), dtype=ops.int_)
+
+        disp = ops.stop_gradient(ops.index_add(ops.zeros((E * C + 1,), dtype=ops.int_),
+                                 target.reshape(-1), tok.reshape(-1)))     # token id per slot
+        comb = ops.index_add(ops.zeros((E * C + 1,)),
+                             target.reshape(-1), w.reshape(-1))            # gate weight per slot (diff)
+        disp = disp[:E * C].reshape(E, C)
+        comb = comb[:E * C].reshape(E, C)
+
+        out = ops.zeros((T, D), dtype=flat.dtype)
+        for e, sid in enumerate(self._expert_ids):
+            idx_e = ops.stop_gradient(disp[e])                 # [C] token indices (const)
+            xe = ops.index_select(flat, idx_e, 0)              # [C, D]
+            de = self.sectors[sid].delta(layer_idx, proj, xe)  # [C, D]
+            out = ops.index_add(out, idx_e, de * comb[e][:, None])
+        return out
 
 
 class _Routing:

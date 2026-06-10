@@ -43,12 +43,18 @@ loss; because routing is per token, **one experience updates several sectors**
 the consolidation trainable set, shaped only by the BCF probe training. This preserves the
 safety guarantee.
 
-**Dispatch** (`RDMCAFoundational._moe_combine`) has two paths giving identical results:
-on PyTorch it is **truly sparse** — each expert runs only on the tokens routed to it via
-`nonzero`/`index_select`/`index_add`, so expert compute is O(top_k·T) and stays bounded as
-the pool grows; on MLX (which needs static shapes) it falls back to a masked combine (every
-expert on all tokens, weighted; cheap while the expert count is small). Parity between the
-two is part of the test suite.
+**Dispatch** (`RDMCAFoundational._moe_combine`) is **sparse on both backends** — each expert
+runs only on its routed tokens, so expert compute is ~O(top_k·T) and stays bounded as the
+pool grows (the saving that lets modest hardware keep up):
+  - PyTorch (`_moe_sparse`): dynamic gather/scatter (`nonzero`/`index_select`/`index_add`) —
+    exact, no token drops.
+  - MLX (`_moe_capacity`): GShard-style **fixed-capacity** dispatch (static shapes via
+    `cumsum` + index gather/scatter), each expert processing C = ⌈factor·k·T/E⌉ slots;
+    overflow tokens are dropped (rare at the default capacity factor 1.25). Routing indices
+    are `stop_gradient`-ed (non-differentiable) while the combine weights stay differentiable
+    so the gate still learns.
+With a large capacity factor (no drops) the capacity path equals the exact path — a parity
+check covered by the tests.
 
 PGQ can **grow a sector's rank** (`SectorAdapter.grow_rank`) or **create new experts**
 (`model.add_sector`, which grows the gate by a zero-init column) at runtime, preserving the

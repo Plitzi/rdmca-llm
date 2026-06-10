@@ -100,3 +100,4 @@ moe:
   experts: 6               # sectores expertos enrutados (S1..S6)
   top_k: 2                 # sectores activados por token (sparsity tipo cerebro)
   aux_loss_weight: 0.01    # peso del aux loss de balanceo de expertos
+  capacity_factor: 1.25    # slack de capacidad por experto (dispatch estático MLX)

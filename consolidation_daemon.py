@@ -97,8 +97,10 @@ def _build_model(cfg: dict):
     B.engine.load_weights(model, str(frozen))
 
     sectors = build_all_sectors(model_cfg.d_model, model_cfg.n_layers)
-    top_k = int(((cfg.get("moe") or {}).get("top_k", 2)))
-    model.attach_sectors(sectors, moe=True, top_k=top_k)   # MoE: gate routes S1..S6
+    moe_cfg = cfg.get("moe") or {}
+    model.attach_sectors(sectors, moe=bool(moe_cfg.get("enabled", True)),
+                         top_k=int(moe_cfg.get("top_k", 2)),
+                         capacity_factor=float(moe_cfg.get("capacity_factor", 1.25)))
     set_model_precision(model, get_precision(cfg))   # move sectors + gate to device/dtype
     sec_path = root / "sectors.npz"
     if sec_path.exists():

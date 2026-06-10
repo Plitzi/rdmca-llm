@@ -100,8 +100,11 @@ _ops = SimpleNamespace(
     topk=lambda x, k, axis=-1: torch.topk(x, k, dim=axis),          # -> (values, indices)
     take_along_axis=lambda x, idx, axis: torch.take_along_dim(x, idx, dim=axis),
     index_select=lambda x, idx, axis=0: x.index_select(axis, idx),
-    index_add=lambda out, idx, vals, axis=0: out.index_add(axis, idx, vals),
+    index_add=lambda out, idx, vals, axis=0: out.index_add(axis, idx.long(), vals),
     nonzero=lambda mask: torch.nonzero(mask, as_tuple=False).flatten(),
+    cumsum=lambda x, axis=0: torch.cumsum(x, dim=axis),
+    where=lambda cond, a, b: torch.where(cond, a, b),
+    int_=torch.int64,
     silu=F.silu,
     relu=F.relu,
     cross_entropy=lambda logits, targets, reduction="mean": F.cross_entropy(

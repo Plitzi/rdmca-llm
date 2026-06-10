@@ -116,7 +116,10 @@ _ops = SimpleNamespace(
     take_along_axis=lambda x, idx, axis: mx.take_along_axis(x, idx, axis=axis),
     index_select=lambda x, idx, axis=0: mx.take(x, idx, axis=axis),
     index_add=lambda out, idx, vals, axis=0: out.at[idx].add(vals),
-    nonzero=None,    # MLX has no static-shape nonzero; the MLX path uses masked dispatch
+    nonzero=None,    # MLX has no static-shape nonzero; the MLX path uses capacity dispatch
+    cumsum=lambda x, axis=0: mx.cumsum(x, axis=axis),
+    where=lambda cond, a, b: mx.where(cond, a, b),
+    int_=mx.int32,
     silu=mlx_nn.silu,
     relu=mlx_nn.relu,
     cross_entropy=lambda logits, targets, reduction="mean": mlx_nn.losses.cross_entropy(
