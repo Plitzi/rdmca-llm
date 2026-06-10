@@ -22,8 +22,27 @@ TOKENIZER_INFO = "dist/tokenizer/tokenizer_info.json"
 # the INFORMATION it teaches (vocab/context/width/depth); the hardware only
 # limits how high a level you can run. Levels 1..5 = preescolar..universidad.
 LEVELS_DIR = "configs/levels"
-MIN_LEVEL, MAX_LEVEL = 1, 5
 DEFAULT_LEVEL = 2                       # primaria — a sensible laptop default
+
+
+def available_levels() -> List[int]:
+    """All level numbers present as `configs/levels/level{N}.yaml`, sorted.
+    Single source of truth for the level range — drop in a new `levelN.yaml`
+    and it is recognized automatically (no code change needed)."""
+    import glob
+    import re
+    levels = []
+    for path in glob.glob(f"{LEVELS_DIR}/level*.yaml"):
+        m = re.search(r"level(\d+)\.yaml$", path)
+        if m:
+            levels.append(int(m.group(1)))
+    return sorted(levels)
+
+
+# Global level bounds, derived from the configs present (fallbacks if none yet).
+_LEVELS = available_levels()
+MIN_LEVEL = _LEVELS[0] if _LEVELS else 0   # level 0 = throwaway smoke/test tier
+MAX_LEVEL = _LEVELS[-1] if _LEVELS else 5
 DEFAULT_CONFIG = f"{LEVELS_DIR}/level{DEFAULT_LEVEL}.yaml"
 
 SUPPORTED_BACKENDS = ("mlx", "torch")
@@ -41,9 +60,10 @@ def resolve_config_path(config: Optional[str] = None,
     level. Levels replace the old `--profile` selector."""
     if level is not None:
         lvl = int(level)
-        if not (MIN_LEVEL <= lvl <= MAX_LEVEL):
+        levels = available_levels()
+        if lvl not in levels:
             raise ValueError(
-                f"Level {lvl} out of range — choose {MIN_LEVEL}..{MAX_LEVEL}.")
+                f"Level {lvl} not found — available: {levels}.")
         return level_config_path(lvl)
     return config or DEFAULT_CONFIG
 

@@ -126,13 +126,12 @@ def estimate_for(cfg: dict, mode: str) -> float:
 def max_runnable_level(mode: str = "train") -> Optional[int]:
     """Highest level whose `mode` estimate fits in available memory (× SAFETY).
     Returns None if even level 1 does not fit. Scans configs/levels/levelN.yaml."""
-    from src.config import load_config, level_config_path
+    from src.config import load_config, level_config_path, available_levels
     budget = available_memory_gb() * SAFETY
     best = None
-    for lvl in range(1, 6):
-        path = level_config_path(lvl)
+    for lvl in available_levels():          # data-driven; new levels picked up automatically
         try:
-            cfg = load_config(path)
+            cfg = load_config(level_config_path(lvl))
         except FileNotFoundError:
             continue
         if estimate_for(cfg, mode) <= budget:

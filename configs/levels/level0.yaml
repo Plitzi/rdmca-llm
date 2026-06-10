@@ -1,0 +1,89 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · LEVEL 0 — Pruebas / smoke test                                    ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  NOT a real cognitive level — a throwaway tier to exercise the WHOLE        ║
+# ║  pipeline (prepare → tokenizer → train stages → chat) end-to-end in a few   ║
+# ║  minutes on any laptop. Tiny model, tiny token budgets. The weights are     ║
+# ║  not meant to be good; use it to verify plumbing, not quality.              ║
+# ║  Real training starts at level 1.                                          ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+level: 0
+name: "Pruebas (smoke)"
+backend: mlx                   # mlx | torch  (both supported)
+tier: edge
+
+information:
+  summary: "Nivel de pruebas: verifica el pipeline completo en minutos (no es calidad real)."
+  areas:
+    1: "Lenguaje: diálogo y frases muy simples."
+    2: "Patrones: analogías sintéticas."
+    3: "Aritmética: sumas/restas de un dígito."
+
+# Tiny model — just enough to run the full code path quickly.
+model:
+  d_model: 64
+  n_layers: 2
+  n_heads: 2                   # head_dim = 32
+  ffn_dim: 256
+  context_len: 64
+  vocab_size: 4096
+  mrl_dims: [32, 64]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en"]
+
+training:
+  precision: bf16
+  lr: 5.0e-4
+  lr_min: 5.0e-5
+  weight_decay: 0.1
+  batch_size: 16
+  grad_accumulation: 2
+  warmup_steps: 50
+  save_every: 400
+  eval_every: 100000           # effectively never (smoke run)
+  clip_grad_norm: 1.0
+
+resources:
+  est_params_m: 1
+  est_train_mem_gb: 0.1
+  est_infer_mem_gb: 0.1
+  min_ram_gb: 1
+
+skip_gate: true                # no graduation gate on the smoke tier
+
+# Tiny budgets → a few minutes end-to-end. Active stages 1-3 (4-5 skipped).
+curriculum:
+  stage1:
+    name: "Language and communication"
+    entry_level: 0
+    n_tokens: 4_000_000
+    data_dir: "data/level0/stage1"
+    data:
+      sources: [tinystories, dialogue]
+      filter: {max_grade: 4, max_word_len: 14}
+  stage2:
+    name: "Perception and pattern recognition"
+    entry_level: 0
+    n_tokens: 2_000_000
+    data_dir: "data/level0/stage2"
+    data:
+      sources: [analogies]
+      filter: null
+  stage3:
+    name: "Abstraction and symbolic composition"
+    entry_level: 0
+    n_tokens: 3_000_000
+    data_dir: "data/level0/stage3"
+    data:
+      sources: [arithmetic]
+      filter: {arithmetic_level: 1}
+
+# MoE block kept for uniformity (sectors only attach post-freeze, i.e. level 4+).
+moe:
+  enabled: true
+  experts: 6
+  top_k: 2
+  aux_loss_weight: 0.01
+  capacity_factor: 1.25

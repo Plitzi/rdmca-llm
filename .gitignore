@@ -18,13 +18,14 @@ dist/tokenizer/*.vocab
 dist/tokenizer/tokenizer_info.json
 # image/audio VQ-VAE tokenizers
 dist/tokenizer/*vqvae*
+# per-run / backup tokenizers and any scratch backups
+dist/tokenizer*.bak/
+dist/tokenizer/*.json
+*.bak
+*.bak/
 
 # ── Training data (large downloads) ───────────────────────────────────────────
-data/stage1_language/*.jsonl
-data/stage2_patterns/*.jsonl
-data/stage3_abstraction/*.jsonl
-data/stage4_causal/*.jsonl
-data/stage5_ethics/*.jsonl
+data/**/*.jsonl
 
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log
