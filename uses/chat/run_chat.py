@@ -34,6 +34,7 @@ Comandos especiales durante el chat:
   /maxtok 256       ajusta máximo de tokens a generar
   /think medium     nivel de razonamiento (off|low|medium|high) — muestra el <think>
   /format text|json formato de salida
+  /stream on|off    transmite tokens en vivo (por defecto: on)
   /stats            muestra estadísticas de la última generación
   /reset            borra el historial de la sesión
   /quit  o  Ctrl+C  salir
@@ -85,15 +86,21 @@ def generate(model,
              top_p: float,
              vocab_size: int,
              context_len: int = 2048,
-             stream: bool = True) -> tuple[list[int], float]:
+             stream: bool = True,
+             decode_fn=None) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
-    If stream=True, prints each token as it is generated.
+
+    If stream=True, prints tokens as they are generated. When `decode_fn` is
+    given (e.g. tokenizer.decode), it decodes the running output and prints the
+    new text delta each step — real token streaming; otherwise it falls back to
+    a per-token ▌ marker (used on the no-tokenizer plumbing path).
     """
     ops = backend.current().ops
     engine = backend.current().engine
     tokens = ops.array(np.asarray([input_ids], dtype=np.int64))   # [1, S]
     generated: list[int] = []
+    printed = ""
     t0 = time.perf_counter()
 
     EOS_ID = 3
@@ -117,8 +124,13 @@ def generate(model,
         tokens  = ops.concatenate([tokens, new_tok], axis=1)
 
         if stream:
-            # Flush single token — will be decoded by caller
-            print("▌", end="", flush=True)
+            if decode_fn is not None:
+                text = decode_fn(generated)         # re-decode (subwords join cleanly)
+                sys.stdout.write(text[len(printed):])
+                sys.stdout.flush()
+                printed = text
+            else:
+                print("▌", end="", flush=True)
 
     elapsed = time.perf_counter() - t0
     tps = len(generated) / elapsed if elapsed > 0 else 0.0
@@ -128,7 +140,9 @@ def generate(model,
 def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
                       max_new_tokens: int, think_budget: int,
                       temperature: float, top_p: float, vocab_size: int,
-                      context_len: int) -> tuple[str, list[int], float]:
+                      context_len: int, stream: bool = False,
+                      think_prefix: str = "", answer_prefix: str = "",
+                      ) -> tuple[str, list[int], float]:
     """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
 
     Returns (think_text, answer_ids, tok_per_s). With think_budget <= 0 it is a
@@ -136,17 +150,30 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
     when the budget is hit (or trimmed at </think> if the model closes early), so
     the answer is always generated from a well-formed `… </think>` prefix —
     mirroring how Claude bounds extended thinking with a token budget.
+
+    When `stream=True` the scratchpad and answer are printed live (decoded
+    incrementally), each preceded by its prefix label; callers then skip their
+    own printing of the same content.
     """
-    gen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
-               context_len=context_len, stream=False)
+    decode_fn = tokenizer.decode
+    sgen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
+                context_len=context_len, stream=stream,
+                decode_fn=(decode_fn if stream else None))
+
+    def _label(prefix):
+        if stream and prefix:
+            sys.stdout.write(prefix); sys.stdout.flush()
+
     if think_budget <= 0:
-        ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens, **gen)
+        _label(answer_prefix)
+        ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens, **sgen)
         return "", ids, tps
 
     enc = lambda s: tokenizer.encode(s, lang=lang, add_bos=False, add_eos=False)
     # Phase A — scratchpad. Prime with the opening tag so generation starts inside it.
+    _label(think_prefix)
     think_ids, tps_a = generate(model, list(prompt_ids) + enc(agent.THINK_OPEN),
-                                max_new_tokens=think_budget, **gen)
+                                max_new_tokens=think_budget, **sgen)
     think_text = tokenizer.decode(think_ids) if think_ids else ""
     if agent.THINK_CLOSE in think_text:                 # model closed early
         think_text = think_text.split(agent.THINK_CLOSE)[0]
@@ -154,8 +181,9 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
 
     # Phase B — answer, from a force-closed scratchpad prefix.
     closed = f"{agent.THINK_OPEN} {think_text} {agent.THINK_CLOSE}\n"
+    _label(answer_prefix)
     answer_ids, tps_b = generate(model, list(prompt_ids) + enc(closed),
-                                 max_new_tokens=max_new_tokens, **gen)
+                                 max_new_tokens=max_new_tokens, **sgen)
     tps = next((t for t in (tps_b, tps_a) if t), 0.0)   # report a meaningful rate
     return think_text, answer_ids, tps
 
@@ -253,7 +281,7 @@ BANNER = """
 ║           RDMCA Interactive Chat                     ║
 ║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256     ║
 ║  /think off|low|medium|high   /format text|json      ║
-║  /stats  /reset  /quit                               ║
+║  /stream on|off  /stats  /reset  /quit               ║
 ╚══════════════════════════════════════════════════════╝"""
 
 
@@ -266,7 +294,8 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     top_p       = args.topp
     max_tokens  = args.maxtok
     out_format  = agent.normalize_format(getattr(args, "format", "text"))
-    think_level = agent.normalize_thinking(getattr(args, "think", "off"))
+    think_level = agent.normalize_thinking(getattr(args, "think", "medium"))
+    stream      = bool(getattr(args, "stream", True))
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
     last_stats: dict   = {}
@@ -325,6 +354,10 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 except ValueError as e:
                     print(f"  {e}")
 
+            elif cmd == "/stream" and len(parts) > 1:
+                stream = parts[1].lower() in ("on", "true", "1", "yes")
+                print(f"  Streaming → {'on' if stream else 'off'}")
+
             elif cmd == "/stats":
                 if last_stats:
                     print(f"  Tokens generated : {last_stats['n_tokens']}")
@@ -332,6 +365,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                     print(f"  Temperature      : {last_stats['temperature']}")
                     print(f"  Top-p            : {last_stats['top_p']}")
                     print(f"  Thinking         : {last_stats['think']}")
+                    print(f"  Streaming        : {'on' if stream else 'off'}")
                 else:
                     print("  No generation yet.")
 
@@ -359,10 +393,12 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         if len(history) > max_hist:
             history = history[-max_hist:]
 
-        # ── Generate (two-phase when thinking is on) ──────────────────────
+        # ── Generate (two-phase when thinking is on, streamed when asked) ──
         # Thinking needs a real tokenizer (the scratchpad is decoded/re-encoded
         # between phases), so it is disabled on the vocab-ID fallback path.
-        budget = agent.think_budget(think_level, max_tokens) if tok_ready else 0
+        # Streaming likewise needs a tokenizer to decode the live deltas.
+        budget    = agent.think_budget(think_level, max_tokens) if tok_ready else 0
+        stream_on = stream and tok_ready
         think_text = ""
         try:
             think_text, gen_ids, tps = generate_thinking(
@@ -370,39 +406,41 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 max_new_tokens=max_tokens, think_budget=budget,
                 temperature=temperature, top_p=top_p,
                 vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
+                stream=stream_on,
+                think_prefix="\n💭 thinking: ", answer_prefix="\nRDMCA: ",
             )
         except Exception as e:
             print(f"\n  [error] {e}")
             continue
 
-        # ── Show the reasoning scratchpad (when thinking is active) ───────
-        if think_text:
-            print(f"\n💭 thinking: {think_text}")
-
-        print(f"\nRDMCA: ", end="", flush=True)
-
-        # ── Decode ────────────────────────────────────────────────────────
+        # ── Decode the answer ─────────────────────────────────────────────
         if tok_ready and gen_ids:
             response = tokenizer.decode(gen_ids)
         elif gen_ids:
-            # Fallback: show token IDs
             response = f"[token IDs — tokenizer not trained]: {gen_ids[:20]}…"
         else:
             response = "(empty response — model generated EOS immediately)"
 
-        # ── Format the response (text | json) for the consumer ────────────
+        # ── Present the answer (text | json) ──────────────────────────────
+        # In stream mode the scratchpad + answer were already printed live, so
+        # only re-render for JSON (to pretty-print the parsed object).
+        if not stream_on:
+            if think_text:
+                print(f"\n💭 thinking: {think_text}")
+            print(f"\nRDMCA: ", end="", flush=True)
         result = agent.parse_output(response, out_format)
         if result["format"] == "json":
             if result["valid"]:
                 import json as _json
-                print(_json.dumps(result["json"], ensure_ascii=False, indent=2))
-            else:
+                print(("\n" if stream_on else "")
+                      + _json.dumps(result["json"], ensure_ascii=False, indent=2))
+            elif not stream_on:
                 print(f"{response}\n  [warning: output is not valid JSON]")
-        else:
+        elif not stream_on:
             print(response)
         print(f"\n  [{len(gen_ids)} tokens · {tps:.1f} tok/s · "
               f"temp={temperature} · top_p={top_p} · format={out_format} · "
-              f"think={think_level}]")
+              f"think={think_level} · stream={'on' if stream_on else 'off'}]")
 
         # Add response to history
         history.extend(gen_ids)
@@ -456,8 +494,11 @@ Examples:
                         help="Max new tokens per turn (default: 256)")
     parser.add_argument("--format",     choices=agent.OUTPUT_FORMATS, default="text",
                         help="Output format: text (default) or json (structured)")
-    parser.add_argument("--think",      choices=agent.THINKING_LEVELS, default="off",
-                        help="Reasoning effort: off (default), low, medium, high")
+    parser.add_argument("--think",      choices=agent.THINKING_LEVELS, default="medium",
+                        help="Reasoning effort: off, low, medium (default), high — "
+                             "more thinking generally means better answers")
+    parser.add_argument("--stream",     action=argparse.BooleanOptionalAction, default=True,
+                        help="Stream tokens as they generate (default: on; --no-stream to disable)")
     parser.add_argument("--force",      action="store_true",
                         help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()

@@ -189,20 +189,25 @@ def build_agent_prompt(tools: List[Tool], user: str,
 
 
 def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
-              skill_md: Optional[str] = None, max_steps: int = 4,
+              skill_md: Optional[str] = None, max_steps: int = 6,
               think: str = "off") -> dict:
-    """Drive the tool loop. `generate_fn(prompt_text) -> response_text` wraps the
-    model (and applies the thinking budget itself). Returns
-    {"final": <text|None>, "steps": [{"action","observation"}, …]}.
+    """Drive the tool loop — multiple think→act→observe rounds until the model
+    answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
+    wraps the model; it may return a `<think>…</think>` scratchpad before the
+    answer/action, which is captured per step (the action/observation parsing
+    ignores it). Returns
+    {"final": <text|None>, "thinking": <text|None>,
+     "steps": [{"thinking","action","observation"}, …]}.
     """
     registry = {t.name: t for t in tools}
     transcript = build_agent_prompt(tools, user, skill_md, think)
     steps: list = []
     for _ in range(max_steps):
         out = generate_fn(transcript)
-        action = parse_action(out)
+        thinking, answer = split_thinking(out)
+        action = parse_action(answer)
         if action is None:                          # no tool call → final answer
-            return {"final": out.strip(), "steps": steps}
+            return {"final": answer.strip(), "thinking": thinking, "steps": steps}
         tool = registry.get(action["name"])
         if tool is None:
             obs: Any = {"error": f"unknown tool '{action['name']}'"}
@@ -211,7 +216,7 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
                 obs = tool.run(action.get("input", {}) or {})
             except Exception as e:                  # tools must never crash the loop
                 obs = {"error": str(e)}
-        steps.append({"action": action, "observation": obs})
+        steps.append({"thinking": thinking, "action": action, "observation": obs})
         transcript += (f"\nAction: {json.dumps(action, ensure_ascii=False)}"
                        f"\nObservation: {json.dumps(obs, ensure_ascii=False)}"
                        f"\nAssistant:")

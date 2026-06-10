@@ -42,13 +42,15 @@ def load_skill(name: str) -> str | None:
 
 
 def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float,
-                     max_new_tokens: int, think: str = "off"):
+                     max_new_tokens: int, think: str = "off", stream: bool = False):
     """Wrap the model as generate_fn(prompt_text) -> response_text.
 
-    When `think` is on (and a real tokenizer is present) the model first writes a
-    budget-capped <think> scratchpad; it is dropped before returning so the agent
-    loop only ever sees/parses the answer."""
-    budget = agent.think_budget(think, max_new_tokens) if tokenizer.ready else 0
+    Returns the model's full turn (a <think>…</think> scratchpad, if any, plus
+    the answer/action) — `run_agent` splits the scratchpad out for display and
+    ignores it when parsing the action. When `think` is on the model first writes
+    a budget-capped scratchpad; when `stream` is on each step is printed live."""
+    budget    = agent.think_budget(think, max_new_tokens) if tokenizer.ready else 0
+    stream_on = stream and tokenizer.ready
 
     def _gen(prompt_text: str) -> str:
         if tokenizer.ready:
@@ -56,36 +58,47 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
         else:
             ids = [2] + [ord(c) % mcfg.vocab_size for c in prompt_text] + [10]
         if budget > 0:
-            _think, gen_ids, _ = chat.generate_thinking(
+            think_text, gen_ids, _ = chat.generate_thinking(
                 model, list(ids), tokenizer=tokenizer, lang="en",
                 max_new_tokens=max_new_tokens, think_budget=budget,
                 temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
-                context_len=mcfg.context_len)
+                context_len=mcfg.context_len, stream=stream_on,
+                think_prefix="\n  💭 ", answer_prefix="\n  ▸ ")
         else:
+            if stream_on:
+                sys.stdout.write("\n  ▸ "); sys.stdout.flush()
             gen_ids, _ = chat.generate(
                 model, list(ids), max_new_tokens=max_new_tokens,
                 temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
-                context_len=mcfg.context_len, stream=False)
+                context_len=mcfg.context_len, stream=stream_on,
+                decode_fn=(tokenizer.decode if stream_on else None))
+            think_text = ""
         if not (tokenizer.ready and gen_ids):
             return ""
-        return agent.strip_thinking(tokenizer.decode(gen_ids))
+        # Re-attach the scratchpad so run_agent can surface it; it is ignored by
+        # the action parser. (No-op when think is off.)
+        answer = tokenizer.decode(gen_ids)
+        return f"{agent.THINK_OPEN} {think_text} {agent.THINK_CLOSE}\n{answer}" if think_text else answer
     return _gen
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="RDMCA agent (tool loop)")
     ap.add_argument("--level", type=int, default=1, help="Educational level (default: 1)")
-    ap.add_argument("--stage", type=int, default=8, help="Checkpoint stage (default: 8 = Skills)")
+    ap.add_argument("--stage", type=int, default=9, help="Checkpoint stage (default: 9 = Reasoning)")
     ap.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint .npz")
     ap.add_argument("--dummy", action="store_true", help="Random weights (plumbing test)")
     ap.add_argument("--query", required=True, help="The user message")
     ap.add_argument("--skill", default="time-helper", help="Skill to inject (dir name)")
-    ap.add_argument("--max-steps", type=int, default=4)
+    ap.add_argument("--max-steps", type=int, default=6,
+                    help="Max think→act→observe rounds before giving up (default: 6)")
     ap.add_argument("--temp", type=float, default=0.7)
     ap.add_argument("--topp", type=float, default=0.9)
     ap.add_argument("--maxtok", type=int, default=64, help="Max new tokens per step")
-    ap.add_argument("--think", choices=agent.THINKING_LEVELS, default="off",
-                    help="Reasoning effort per step: off (default), low, medium, high")
+    ap.add_argument("--think", choices=agent.THINKING_LEVELS, default="medium",
+                    help="Reasoning effort per step: off, low, medium (default), high")
+    ap.add_argument("--stream", action=argparse.BooleanOptionalAction, default=True,
+                    help="Stream each step live (default: on; --no-stream to disable)")
     args = ap.parse_args()
 
     cfg_path = resolve_config_path(None, args.level)
@@ -99,20 +112,27 @@ def main() -> None:
 
     generate_fn = make_generate_fn(model, mcfg, tokenizer, temperature=args.temp,
                                    top_p=args.topp, max_new_tokens=args.maxtok,
-                                   think=args.think)
+                                   think=args.think, stream=args.stream)
     skill_md = load_skill(args.skill)
     print(f"  Tools: {[t.name for t in TOOLS]} | Skill: {args.skill if skill_md else '—'}"
-          f" | Thinking: {args.think}\n")
+          f" | Thinking: {args.think} | Stream: {'on' if args.stream else 'off'}\n")
+    print(f"User: {args.query}")
 
     result = agent.run_agent(generate_fn, TOOLS, args.query,
                              skill_md=skill_md, max_steps=args.max_steps,
                              think=args.think)
 
-    print(f"User: {args.query}\n")
+    # Structured recap of the rounds. Thinking is only re-printed here when it
+    # was NOT already streamed live (avoids duplicating the scratchpad).
+    print("\n── trace ──")
     for i, step in enumerate(result["steps"], 1):
+        if step.get("thinking") and not args.stream:
+            print(f"  [step {i}] 💭 {step['thinking']}")
         print(f"  [step {i}] Action: {step['action']}")
-        print(f"           Observation: {step['observation']}")
+        print(f"            Observation: {step['observation']}")
     if result.get("final"):
+        if result.get("thinking") and not args.stream:
+            print(f"\n💭 {result['thinking']}")
         print(f"\nAgent: {result['final']}")
     else:
         print(f"\nAgent: (no final answer — {result.get('note', 'stopped')})")

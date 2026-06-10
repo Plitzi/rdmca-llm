@@ -49,12 +49,12 @@ python train_stage.py --level 1 --stage 7     # MCP
 python train_stage.py --level 1 --stage 8     # skills
 python train_stage.py --level 1 --stage 9     # reasoning (chain-of-thought)
 
-# 4. Chat (text / JSON output, optional reasoning)
+# 4. Chat — streamed live, reasoning=medium by default
 python uses/chat/run_chat.py --level 1 --stage 9
 python uses/chat/run_chat.py --level 1 --stage 9 --format json
-python uses/chat/run_chat.py --level 1 --stage 9 --think medium   # show <think> scratchpad
+python uses/chat/run_chat.py --level 1 --stage 9 --think high --no-stream
 
-# 5. Agent (tool loop with the example tool + skill)
+# 5. Agent (multi-round tool loop with the example tool + skill)
 python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
 ```
 
@@ -62,9 +62,13 @@ python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
 - **Conversation / arithmetic**: `run_chat.py` — ask simple questions and sums
   (the model should do arithmetic itself; that's the stage-3 skill).
 - **Output format**: `run_chat.py --format json` (or `/format json` at runtime).
-- **Reasoning**: `run_chat.py --think medium` (or `/think medium`) — the model
-  writes a `<think>…</think>` scratchpad (shown in the chat) before answering.
-  The level is an effort/budget dial: off · low · medium · high.
+- **Reasoning**: on by default at `medium` — the model writes a `<think>…</think>`
+  scratchpad (shown in the chat) before answering. Effort/budget dial:
+  off · low · medium · high (`--think` / `/think`).
+- **Streaming**: tokens stream live by default (`--no-stream` / `/stream off` to
+  batch) so chat and agent feel fluid.
+- **Multi-round agent**: the agent runs several think→act→observe rounds until it
+  answers (Claude Code-style); each round's reasoning + tool call is surfaced.
 - **Tool use**: `run_agent.py` with a date/time question → the model should emit
   an `Action` calling `get_current_time`; the runner executes it and feeds back
   the `Observation`. (The example tool is deliberately *not* a calculator, so it

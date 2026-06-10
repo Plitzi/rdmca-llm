@@ -201,8 +201,11 @@ In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512`
 
 **Thinking / reasoning** — stage 9 teaches a `<think>…</think>` scratchpad
 register (real GSM8K chain-of-thought). `--think` / `/think` is an effort dial
-(off · low · medium · high) that sets how big a token budget the scratchpad
-gets; the chat shows the scratchpad above the answer. See [uses/chat/](../uses/chat/).
+(off · low · medium · high, **default medium** — more thinking ≈ better answers)
+that sets how big a token budget the scratchpad gets; the chat shows the
+scratchpad above the answer. Tokens **stream live by default** (`--no-stream` to
+batch). The agent (`uses/agent/run_agent.py`) runs several think→act→observe
+rounds until it answers, surfacing each round. See [uses/chat/](../uses/chat/).
 
 With `--image`/`--audio`, the **perception layer** converts the file to unified-vocab
 tokens and prepends them to the context (text output, Era 3a). It requires the matching
