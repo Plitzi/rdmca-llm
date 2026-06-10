@@ -111,6 +111,14 @@ curriculum:
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
+  stage8:
+    name: "Skills"
+    entry_level: 0
+    n_tokens: 30_000_000
+    data_dir: "data/level1/stage8"
+    data:
+      sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
+      filter: null
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
 # Como el cerebro, no todos los sectores se activan por token: el gate elige los

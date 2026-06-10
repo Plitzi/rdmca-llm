@@ -336,6 +336,61 @@ def stream_mcp(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dic
         yield {"text": text, "lang": "en"}
 
 
+# ──────────────────────────── skills (real, EN) ─────────────────────────────
+# Stage 8: skills work like Claude Code's — a SKILL.md with YAML frontmatter
+# (name, description = when to use it) plus instructions. When a request matches
+# a skill's description, the agent follows its instructions. Real procedures from
+# Super-NaturalInstructions: each task's `definition` is the instruction body,
+# applied to a real input→target. Capped per task so coverage is broad (many
+# skills) rather than deep (one skill drilled).
+_SKILL_SYS = ("You have Skills — reusable procedures defined with YAML frontmatter "
+              "(name, description) and instructions. When a request matches a Skill's "
+              "description, use it and follow its instructions.")
+_SKILL_CAP_PER_TASK = 40
+
+
+def _skill_slug(task_name: str) -> str:
+    """'task001_quoref_question_generation' → 'quoref-question-generation'."""
+    s = re.sub(r"^task\d+_", "", task_name or "").replace("_", "-").strip("-")
+    return s or "skill"
+
+
+def stream_skills(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real skills (EN) as Claude-style SKILL.md + an applied input→target."""
+    if "en" not in {l.lower() for l in langs}:
+        return
+    from datasets import load_dataset
+    try:
+        ds = load_dataset("Muennighoff/natural-instructions", split="train", streaming=True)
+    except Exception as e:
+        print(f"    [skills] {e}")
+        return
+    seen: set = set()
+    per_task: dict = {}
+    for ex in ds:
+        defn = " ".join((ex.get("definition") or "").split())
+        inp = " ".join((ex.get("inputs") or "").split())
+        tgt = " ".join((ex.get("targets") or "").split())
+        if not (defn and inp and tgt):
+            continue
+        task = ex.get("task_name") or ""
+        if per_task.get(task, 0) >= _SKILL_CAP_PER_TASK:   # breadth over depth
+            continue
+        slug = _skill_slug(task)
+        text = (f"System: {_SKILL_SYS}\n"
+                f"Skill:\n---\nname: {slug}\n"
+                f"description: Use this skill to {slug.replace('-', ' ')}.\n---\n"
+                f"{defn}\n"
+                f"User: {inp}\n"
+                f"Assistant: {tgt}")
+        h = hash(text)
+        if h in seen:
+            continue
+        seen.add(h)
+        per_task[task] = per_task.get(task, 0) + 1
+        yield {"text": text, "lang": "en"}
+
+
 # ──────────────────────────── HF graded corpora ─────────────────────────────
 def stream_tinystories(limit_mb: Optional[int] = None) -> Iterator[dict]:
     """TinyStories — short, simple children's stories (EN). Level 1 language."""
@@ -505,6 +560,8 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
         return stream_agentic(langs, limit_mb)
     if key == "mcp":                            # real tool use over MCP / JSON-RPC (EN)
         return stream_mcp(langs, limit_mb)
+    if key == "skills":                         # real skills (EN), Claude-style SKILL.md
+        return stream_skills(langs, limit_mb)
     if extra_streamers and key in extra_streamers:
         return extra_streamers[key]()
     return None

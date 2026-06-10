@@ -95,6 +95,14 @@ curriculum:
     data:
       sources: [mcp]             # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
+  stage8:
+    name: "Skills"
+    entry_level: 0               # skills from the start (Claude-style SKILL.md procedures).
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage8"
+    data:
+      sources: [skills]          # real procedures (Super-NaturalInstructions) as SKILL.md.
+      filter: null
 
 # MoE block kept for uniformity (sectors only attach post-freeze, i.e. level 4+).
 moe:
