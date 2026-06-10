@@ -42,18 +42,33 @@ def load_skill(name: str) -> str | None:
 
 
 def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float,
-                     max_new_tokens: int):
-    """Wrap the model as generate_fn(prompt_text) -> response_text."""
+                     max_new_tokens: int, think: str = "off"):
+    """Wrap the model as generate_fn(prompt_text) -> response_text.
+
+    When `think` is on (and a real tokenizer is present) the model first writes a
+    budget-capped <think> scratchpad; it is dropped before returning so the agent
+    loop only ever sees/parses the answer."""
+    budget = agent.think_budget(think, max_new_tokens) if tokenizer.ready else 0
+
     def _gen(prompt_text: str) -> str:
         if tokenizer.ready:
             ids = tokenizer.encode(prompt_text, lang="en", add_bos=True, add_eos=False)
         else:
             ids = [2] + [ord(c) % mcfg.vocab_size for c in prompt_text] + [10]
-        gen_ids, _ = chat.generate(
-            model, list(ids), max_new_tokens=max_new_tokens,
-            temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
-            context_len=mcfg.context_len, stream=False)
-        return tokenizer.decode(gen_ids) if (tokenizer.ready and gen_ids) else ""
+        if budget > 0:
+            _think, gen_ids, _ = chat.generate_thinking(
+                model, list(ids), tokenizer=tokenizer, lang="en",
+                max_new_tokens=max_new_tokens, think_budget=budget,
+                temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
+                context_len=mcfg.context_len)
+        else:
+            gen_ids, _ = chat.generate(
+                model, list(ids), max_new_tokens=max_new_tokens,
+                temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
+                context_len=mcfg.context_len, stream=False)
+        if not (tokenizer.ready and gen_ids):
+            return ""
+        return agent.strip_thinking(tokenizer.decode(gen_ids))
     return _gen
 
 
@@ -69,6 +84,8 @@ def main() -> None:
     ap.add_argument("--temp", type=float, default=0.7)
     ap.add_argument("--topp", type=float, default=0.9)
     ap.add_argument("--maxtok", type=int, default=64, help="Max new tokens per step")
+    ap.add_argument("--think", choices=agent.THINKING_LEVELS, default="off",
+                    help="Reasoning effort per step: off (default), low, medium, high")
     args = ap.parse_args()
 
     cfg_path = resolve_config_path(None, args.level)
@@ -81,12 +98,15 @@ def main() -> None:
     tokenizer = TextTokenizer()
 
     generate_fn = make_generate_fn(model, mcfg, tokenizer, temperature=args.temp,
-                                   top_p=args.topp, max_new_tokens=args.maxtok)
+                                   top_p=args.topp, max_new_tokens=args.maxtok,
+                                   think=args.think)
     skill_md = load_skill(args.skill)
-    print(f"  Tools: {[t.name for t in TOOLS]} | Skill: {args.skill if skill_md else '—'}\n")
+    print(f"  Tools: {[t.name for t in TOOLS]} | Skill: {args.skill if skill_md else '—'}"
+          f" | Thinking: {args.think}\n")
 
     result = agent.run_agent(generate_fn, TOOLS, args.query,
-                             skill_md=skill_md, max_steps=args.max_steps)
+                             skill_md=skill_md, max_steps=args.max_steps,
+                             think=args.think)
 
     print(f"User: {args.query}\n")
     for i, step in enumerate(result["steps"], 1):

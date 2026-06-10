@@ -41,6 +41,7 @@ STAGE_NAMES = {
     6: "Action and tool use",
     7: "Model Context Protocol (MCP)",
     8: "Skills",
+    9: "Reasoning",
 }
 
 

@@ -65,6 +65,7 @@ STAGE_NAMES = {
     6: "Action and tool use",
     7: "Model Context Protocol (MCP)",
     8: "Skills",
+    9: "Reasoning",
 }
 
 
@@ -187,7 +188,10 @@ def evaluate_gate(model, stage: int,
     are wired in. Stage 5 additionally checks BCF probe accuracy when a probe
     set is available. Returns (score, passed).
     """
-    _, _, desc = STAGE_GATES[stage]
+    # Post-base behavioral stages (tool use / MCP / skills / reasoning) have no
+    # benchmark gate — fall back to the perplexity-only proxy with a generic label.
+    gate = STAGE_GATES.get(stage)
+    desc = gate[2] if gate else stage_name(stage, cfg)
     gate_cfg = (cfg or {}).get("gate", {})
     max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL.get(stage, 40.0))
 
@@ -477,8 +481,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 train_bcf_head(model, ckpt_dir, precision)
                 freeze_model(model, root / "foundational")
         else:
+            need = STAGE_GATES[stage][1] if stage in STAGE_GATES else None
+            need_txt = f"(need {need:.2f}) " if need is not None else ""
             dash.print(f"Budget exhausted. Gate: {score:.4f} "
-                       f"(need {STAGE_GATES[stage][1]:.2f}) — run --resume to continue")
+                       f"{need_txt}— run --resume to continue")
     return passed
 
 

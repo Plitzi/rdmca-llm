@@ -103,6 +103,14 @@ curriculum:
     data:
       sources: [skills]          # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
+  stage9:
+    name: "Reasoning"
+    entry_level: 0               # chain-of-thought from the start (mejora con el tamaño).
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage9"
+    data:
+      sources: [reasoning]       # real CoT (GSM8K) as <think>…</think> + answer.
+      filter: null
 
 # MoE block kept for uniformity (sectors only attach post-freeze, i.e. level 4+).
 moe:

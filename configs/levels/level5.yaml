@@ -108,6 +108,12 @@ curriculum:
     n_tokens: 100_000_000
     data_dir: "data/level5/stage8"
     data: {sources: [skills], filter: null}    # real procedures as Claude-style SKILL.md
+  stage9:
+    name: "Reasoning"
+    entry_level: 0
+    n_tokens: 100_000_000
+    data_dir: "data/level5/stage9"
+    data: {sources: [reasoning], filter: null}  # real CoT (GSM8K) as <think>…</think> + answer
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
 # Como el cerebro, no todos los sectores se activan por token: el gate elige los

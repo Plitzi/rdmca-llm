@@ -198,6 +198,13 @@ readability gate + synthetic arithmetic/dialogue/analogy/causal generators + sim
 graded corpora like TinyStories / Simple-English-Wikipedia); **level 5 applies no filter**
 and reuses the full `data/stage*_*` corpora.
 
+Beyond the 5 cognitive stages, four post-base **behavioral** stages (`entry_level: 0`,
+present from level 1) teach Claude-style registers the consumers reuse: tool use (6),
+MCP (7), skills (8) and **reasoning (9)** — chain-of-thought as a `<think>…</think>`
+scratchpad (real GSM8K traces via `graded.stream_reasoning`). The reasoning *effort* is a
+runtime dial (`--think off|low|medium|high`) centralized in `src/agent.py`; see
+[uses/chat/](../../uses/chat/).
+
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
 override) — plus an `announce` that prints what the model is learning and from which areas.

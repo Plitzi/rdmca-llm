@@ -191,12 +191,18 @@ From here the core is never touched again: all learning is through consolidation
 ```bash
 python uses/chat/run_chat.py --level 3 --stage 5                 # core + sectors
 python uses/chat/run_chat.py --level 3 --stage 1 --lang es       # Spanish session
+python uses/chat/run_chat.py --level 3 --stage 9 --think medium  # show <think> reasoning
 python uses/chat/run_chat.py --level 3 --stage 5 --image foto.png   # visual grounding
 python uses/chat/run_chat.py --level 3 --stage 5 --audio clip.wav   # audio grounding
 ```
 
-In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512` · `/stats`
-· `/reset` · `/quit`.
+In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512`
+· `/think off|low|medium|high` · `/format text|json` · `/stats` · `/reset` · `/quit`.
+
+**Thinking / reasoning** — stage 9 teaches a `<think>…</think>` scratchpad
+register (real GSM8K chain-of-thought). `--think` / `/think` is an effort dial
+(off · low · medium · high) that sets how big a token budget the scratchpad
+gets; the chat shows the scratchpad above the answer. See [uses/chat/](../uses/chat/).
 
 With `--image`/`--audio`, the **perception layer** converts the file to unified-vocab
 tokens and prepends them to the context (text output, Era 3a). It requires the matching

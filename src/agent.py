@@ -30,10 +30,13 @@ def normalize_format(fmt: Optional[str]) -> str:
     return fmt
 
 
-def wrap_prompt(prompt: str, fmt: str) -> str:
-    """Prepare the prompt text for the chosen output format."""
+def wrap_prompt(prompt: str, fmt: str, think: str = "off") -> str:
+    """Prepare the prompt text for the chosen output format and thinking level."""
+    prompt = prompt.rstrip()
+    if normalize_thinking(think) != "off":
+        prompt += THINK_INSTRUCTION
     if normalize_format(fmt) == "json":
-        return prompt.rstrip() + _JSON_PRIMER
+        prompt += _JSON_PRIMER
     return prompt
 
 
@@ -45,6 +48,7 @@ def parse_output(text: str, fmt: str) -> dict:
     """
     if normalize_format(fmt) == "text":
         return {"format": "text", "text": text}
+    text = strip_thinking(text)                 # never parse JSON out of a scratchpad
     obj, valid = None, False
     m = _JSON_OBJ_RE.search(text)               # first {...} span in the output
     if m:
@@ -54,6 +58,67 @@ def parse_output(text: str, fmt: str) -> dict:
         except (ValueError, TypeError):
             obj = None
     return {"format": "json", "json": obj, "valid": valid, "raw": text}
+
+
+# ─────────────────────────── thinking / reasoning ───────────────────────────
+# A reasoning register the model learns in the Reasoning stage (stage 9): it
+# emits a <think>…</think> scratchpad and then the answer (mirrors Claude's
+# thinking blocks). The "thinking level" is an effort dial — whether to think at
+# all and how large a token budget the scratchpad gets — analogous to Claude's
+# reasoning effort. Same hook every consumer (chat / agent / future API) reuses.
+THINKING_LEVELS = ("off", "low", "medium", "high")
+THINK_OPEN  = "<think>"          # MUST match the delimiters used by the
+THINK_CLOSE = "</think>"         # reasoning data (see src/data/graded.py).
+
+# Fraction of the per-turn token budget (`max_tokens`) the scratchpad may use.
+# off → no thinking; high → up to the full budget (it closes at </think> sooner
+# if the model finishes on its own). The dial is relative to max_tokens because
+# small levels have tiny context windows, so an absolute count won't fit.
+_THINK_BUDGET_FRAC = {"off": 0.0, "low": 0.25, "medium": 0.5, "high": 1.0}
+
+THINK_INSTRUCTION = (f" First reason step by step inside {THINK_OPEN} {THINK_CLOSE}, "
+                     "then give the final answer.")
+
+# A closed scratchpad, and an unterminated one (budget hit / EOS before close).
+_THINK_RE      = re.compile(re.escape(THINK_OPEN) + r"(.*?)" + re.escape(THINK_CLOSE),
+                            re.DOTALL)
+_THINK_OPEN_RE = re.compile(re.escape(THINK_OPEN) + r".*", re.DOTALL)
+
+
+def normalize_thinking(level: Optional[str]) -> str:
+    """Validate/normalize a thinking-level name."""
+    level = (level or "off").lower()
+    if level not in THINKING_LEVELS:
+        raise ValueError(f"Unknown thinking level '{level}' — choose from {THINKING_LEVELS}.")
+    return level
+
+
+def think_budget(level: str, max_tokens: int) -> int:
+    """Token budget for the <think> scratchpad at this level (0 = no thinking)."""
+    return int(max_tokens * _THINK_BUDGET_FRAC[normalize_thinking(level)])
+
+
+def split_thinking(text: str) -> tuple:
+    """Split a raw generation into (thinking, answer).
+
+    A closed <think>…</think> block is returned as `thinking` (its inner text);
+    everything outside it is the answer. Returns (None, text) when no block is
+    present."""
+    m = _THINK_RE.search(text)
+    if m:
+        answer = (text[:m.start()] + text[m.end():]).strip()
+        return m.group(1).strip(), answer
+    return None, text
+
+
+def strip_thinking(text: str) -> str:
+    """Drop any <think> scratchpad (closed or unterminated) from a turn, leaving
+    just the answer. Used before action/format parsing so reasoning is never
+    mistaken for a tool call or the output payload."""
+    thinking, answer = split_thinking(text)
+    if thinking is not None:
+        return answer
+    return _THINK_OPEN_RE.sub("", text).strip()
 
 
 # ─────────────────────────────── agentic loop ───────────────────────────────
@@ -88,7 +153,9 @@ def tools_spec(tools: List[Tool]) -> str:
 
 def parse_action(text: str) -> Optional[dict]:
     """Extract a tool call from a model turn, or None. Accepts an `Action:` line
-    or a bare JSON object carrying a `name`."""
+    or a bare JSON object carrying a `name`. Any <think> scratchpad is stripped
+    first so reasoning is never mistaken for a tool call."""
+    text = strip_thinking(text)
     candidates = []
     m = _ACTION_RE.search(text)
     if m:
@@ -108,9 +175,10 @@ def parse_action(text: str) -> Optional[dict]:
 
 
 def build_agent_prompt(tools: List[Tool], user: str,
-                       skill_md: Optional[str] = None) -> str:
+                       skill_md: Optional[str] = None, think: str = "off") -> str:
     """Assemble the initial agentic prompt (system + tools + optional skill + user)."""
-    parts = [f"System: {AGENT_SYSTEM}"]
+    system = AGENT_SYSTEM + (THINK_INSTRUCTION if normalize_thinking(think) != "off" else "")
+    parts = [f"System: {system}"]
     if tools:
         parts.append(f"Tools: {tools_spec(tools)}")
     if skill_md:
@@ -121,12 +189,14 @@ def build_agent_prompt(tools: List[Tool], user: str,
 
 
 def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
-              skill_md: Optional[str] = None, max_steps: int = 4) -> dict:
+              skill_md: Optional[str] = None, max_steps: int = 4,
+              think: str = "off") -> dict:
     """Drive the tool loop. `generate_fn(prompt_text) -> response_text` wraps the
-    model. Returns {"final": <text|None>, "steps": [{"action","observation"}, …]}.
+    model (and applies the thinking budget itself). Returns
+    {"final": <text|None>, "steps": [{"action","observation"}, …]}.
     """
     registry = {t.name: t for t in tools}
-    transcript = build_agent_prompt(tools, user, skill_md)
+    transcript = build_agent_prompt(tools, user, skill_md, think)
     steps: list = []
     for _ in range(max_steps):
         out = generate_fn(transcript)

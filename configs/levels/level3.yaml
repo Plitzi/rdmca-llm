@@ -113,6 +113,14 @@ curriculum:
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
+  stage9:
+    name: "Reasoning"
+    entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
+    n_tokens: 50_000_000
+    data_dir: "data/level3/stage9"
+    data:
+      sources: [reasoning]     # CoT real (GSM8K) como <think>…</think> + respuesta.
+      filter: null
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
 # Como el cerebro, no todos los sectores se activan por token: el gate elige los

@@ -32,6 +32,8 @@ Comandos especiales durante el chat:
   /temp 0.7         ajusta temperatura (0.0 = greedy, 1.0 = creativo)
   /topp 0.9         ajusta nucleus sampling p
   /maxtok 256       ajusta máximo de tokens a generar
+  /think medium     nivel de razonamiento (off|low|medium|high) — muestra el <think>
+  /format text|json formato de salida
   /stats            muestra estadísticas de la última generación
   /reset            borra el historial de la sesión
   /quit  o  Ctrl+C  salir
@@ -121,6 +123,41 @@ def generate(model,
     elapsed = time.perf_counter() - t0
     tps = len(generated) / elapsed if elapsed > 0 else 0.0
     return generated, tps
+
+
+def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
+                      max_new_tokens: int, think_budget: int,
+                      temperature: float, top_p: float, vocab_size: int,
+                      context_len: int) -> tuple[str, list[int], float]:
+    """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
+
+    Returns (think_text, answer_ids, tok_per_s). With think_budget <= 0 it is a
+    single plain generation and think_text is "". The scratchpad is force-closed
+    when the budget is hit (or trimmed at </think> if the model closes early), so
+    the answer is always generated from a well-formed `… </think>` prefix —
+    mirroring how Claude bounds extended thinking with a token budget.
+    """
+    gen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
+               context_len=context_len, stream=False)
+    if think_budget <= 0:
+        ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens, **gen)
+        return "", ids, tps
+
+    enc = lambda s: tokenizer.encode(s, lang=lang, add_bos=False, add_eos=False)
+    # Phase A — scratchpad. Prime with the opening tag so generation starts inside it.
+    think_ids, tps_a = generate(model, list(prompt_ids) + enc(agent.THINK_OPEN),
+                                max_new_tokens=think_budget, **gen)
+    think_text = tokenizer.decode(think_ids) if think_ids else ""
+    if agent.THINK_CLOSE in think_text:                 # model closed early
+        think_text = think_text.split(agent.THINK_CLOSE)[0]
+    think_text = think_text.strip()
+
+    # Phase B — answer, from a force-closed scratchpad prefix.
+    closed = f"{agent.THINK_OPEN} {think_text} {agent.THINK_CLOSE}\n"
+    answer_ids, tps_b = generate(model, list(prompt_ids) + enc(closed),
+                                 max_new_tokens=max_new_tokens, **gen)
+    tps = next((t for t in (tps_b, tps_a) if t), 0.0)   # report a meaningful rate
+    return think_text, answer_ids, tps
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -215,7 +252,8 @@ BANNER = """
 ╔══════════════════════════════════════════════════════╗
 ║           RDMCA Interactive Chat                     ║
 ║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256     ║
-║  /format text|json  /stats  /reset  /quit            ║
+║  /think off|low|medium|high   /format text|json      ║
+║  /stats  /reset  /quit                               ║
 ╚══════════════════════════════════════════════════════╝"""
 
 
@@ -228,6 +266,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     top_p       = args.topp
     max_tokens  = args.maxtok
     out_format  = agent.normalize_format(getattr(args, "format", "text"))
+    think_level = agent.normalize_thinking(getattr(args, "think", "off"))
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
     last_stats: dict   = {}
@@ -279,12 +318,20 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 except ValueError as e:
                     print(f"  {e}")
 
+            elif cmd == "/think" and len(parts) > 1:
+                try:
+                    think_level = agent.normalize_thinking(parts[1])
+                    print(f"  Thinking → {think_level}")
+                except ValueError as e:
+                    print(f"  {e}")
+
             elif cmd == "/stats":
                 if last_stats:
                     print(f"  Tokens generated : {last_stats['n_tokens']}")
                     print(f"  Speed            : {last_stats['tps']:.1f} tok/s")
                     print(f"  Temperature      : {last_stats['temperature']}")
                     print(f"  Top-p            : {last_stats['top_p']}")
+                    print(f"  Thinking         : {last_stats['think']}")
                 else:
                     print("  No generation yet.")
 
@@ -297,8 +344,8 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
 
             continue
 
-        # ── Encode prompt (primed for the chosen output format) ───────────
-        enc_prompt = agent.wrap_prompt(prompt, out_format)
+        # ── Encode prompt (primed for the chosen output format + thinking) ─
+        enc_prompt = agent.wrap_prompt(prompt, out_format, think=think_level)
         if tok_ready:
             new_ids = tokenizer.encode(enc_prompt, lang=lang,
                                        add_bos=not history, add_eos=False)
@@ -312,23 +359,27 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         if len(history) > max_hist:
             history = history[-max_hist:]
 
-        # ── Generate ──────────────────────────────────────────────────────
-        print(f"\nRDMCA: ", end="", flush=True)
-        t_start = time.perf_counter()
-
+        # ── Generate (two-phase when thinking is on) ──────────────────────
+        # Thinking needs a real tokenizer (the scratchpad is decoded/re-encoded
+        # between phases), so it is disabled on the vocab-ID fallback path.
+        budget = agent.think_budget(think_level, max_tokens) if tok_ready else 0
+        think_text = ""
         try:
-            gen_ids, tps = generate(
-                model, list(history),
-                max_new_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                vocab_size=mcfg.vocab_size,
-                context_len=mcfg.context_len,
-                stream=False,   # decode full response at once
+            think_text, gen_ids, tps = generate_thinking(
+                model, list(history), tokenizer=tokenizer, lang=lang,
+                max_new_tokens=max_tokens, think_budget=budget,
+                temperature=temperature, top_p=top_p,
+                vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
             )
         except Exception as e:
             print(f"\n  [error] {e}")
             continue
+
+        # ── Show the reasoning scratchpad (when thinking is active) ───────
+        if think_text:
+            print(f"\n💭 thinking: {think_text}")
+
+        print(f"\nRDMCA: ", end="", flush=True)
 
         # ── Decode ────────────────────────────────────────────────────────
         if tok_ready and gen_ids:
@@ -350,13 +401,14 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         else:
             print(response)
         print(f"\n  [{len(gen_ids)} tokens · {tps:.1f} tok/s · "
-              f"temp={temperature} · top_p={top_p} · format={out_format}]")
+              f"temp={temperature} · top_p={top_p} · format={out_format} · "
+              f"think={think_level}]")
 
         # Add response to history
         history.extend(gen_ids)
         last_stats = {
             "n_tokens": len(gen_ids), "tps": tps,
-            "temperature": temperature, "top_p": top_p,
+            "temperature": temperature, "top_p": top_p, "think": think_level,
         }
 
         # Record the interaction as an experience for daily consolidation.
@@ -404,6 +456,8 @@ Examples:
                         help="Max new tokens per turn (default: 256)")
     parser.add_argument("--format",     choices=agent.OUTPUT_FORMATS, default="text",
                         help="Output format: text (default) or json (structured)")
+    parser.add_argument("--think",      choices=agent.THINKING_LEVELS, default="off",
+                        help="Reasoning effort: off (default), low, medium, high")
     parser.add_argument("--force",      action="store_true",
                         help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()

@@ -7,7 +7,8 @@ Each level teaches information of increasing complexity. This module provides:
     used to keep text at/below a level's reading difficulty (level 5 = no gate).
   - streamers over real HuggingFace corpora for the lower levels: TinyStories,
     conversation (`stream_dialogue`), arithmetic (`stream_arithmetic`), causal
-    reasoning (`stream_causal`) and Simple-English Wikipedia.
+    reasoning (`stream_causal`), chain-of-thought (`stream_reasoning`) and
+    Simple-English Wikipedia.
   - `gen_analogies` is the one remaining TEMPORARY synthetic generator (no real
     graded analogy corpus loads on datasets>=3 yet); see its TODO.
 
@@ -273,6 +274,49 @@ def stream_agentic(langs: List[str], limit_mb: Optional[int] = None) -> Iterator
             continue
         seen.add(h)
         yield {"text": text, "lang": "en"}
+
+
+# ──────────────────────────── reasoning / CoT (real, EN) ────────────────────
+# Stage 9: chain-of-thought traces. GSM8K answers already contain step-by-step
+# working ending in "#### <final>"; we reframe each into the canonical thinking
+# transcript — a <think>…</think> scratchpad followed by the answer — so the
+# model learns to reason before answering (mirrors Claude's thinking blocks).
+# The delimiters MUST match src/agent.py THINK_OPEN / THINK_CLOSE.
+_THINK_OPEN, _THINK_CLOSE = "<think>", "</think>"
+_GSM_FINAL_RE = re.compile(r"####\s*(.+?)\s*$", re.DOTALL)
+
+
+def _cot_transcript(question: str, answer: str) -> Optional[str]:
+    """Reframe one (question, GSM8K-answer) pair as a <think>…</think> + answer
+    transcript. None if it lacks either working steps or a final answer."""
+    question = " ".join((question or "").split())
+    answer = (answer or "").strip()
+    if not question or not answer:
+        return None
+    m = _GSM_FINAL_RE.search(answer)
+    final = m.group(1).strip() if m else ""
+    steps = " ".join(_GSM_FINAL_RE.sub("", answer).split())
+    if not steps or not final:
+        return None
+    return (f"User: {question}\n"
+            f"Assistant: {_THINK_OPEN} {steps} {_THINK_CLOSE}\n"
+            f"The answer is {final}.")
+
+
+def stream_reasoning(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream chain-of-thought traces (EN) from GSM8K as <think>…</think> + answer."""
+    if "en" not in {l.lower() for l in langs}:
+        return
+    from datasets import load_dataset
+    try:
+        ds = load_dataset("openai/gsm8k", "main", split="train", streaming=True)
+    except Exception as e:
+        print(f"    [reasoning] {e}")
+        return
+    for ex in ds:
+        text = _cot_transcript(ex.get("question", ""), ex.get("answer", ""))
+        if text:
+            yield {"text": text, "lang": "en"}
 
 
 # ──────────────────────────── MCP protocol (real, EN) ───────────────────────
@@ -558,6 +602,8 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
         return stream_causal(langs, limit_mb)
     if key in ("agentic", "tools"):             # real tool-use loop (EN), Claude-style JSON
         return stream_agentic(langs, limit_mb)
+    if key in ("reasoning", "cot"):             # real chain-of-thought (EN), <think>…</think>
+        return stream_reasoning(langs, limit_mb)
     if key == "mcp":                            # real tool use over MCP / JSON-RPC (EN)
         return stream_mcp(langs, limit_mb)
     if key == "skills":                         # real skills (EN), Claude-style SKILL.md
