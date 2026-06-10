@@ -1,4 +1,0 @@
-# RDMCA — MLX compute backend (Apple Silicon, fastest on Mac).
-# Use with: pip install -r requirements.txt -r requirements-mlx.txt
-mlx>=0.20
-mlx-lm>=0.20

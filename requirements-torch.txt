@@ -1,6 +1,0 @@
-# RDMCA — PyTorch compute backend (Linux/cloud CUDA, or Mac MPS/CPU).
-# Use with: pip install -r requirements.txt -r requirements-torch.txt
-#
-# For a specific CUDA build, follow https://pytorch.org/get-started/locally/
-# (e.g. pip install torch --index-url https://download.pytorch.org/whl/cu124).
-torch>=2.2

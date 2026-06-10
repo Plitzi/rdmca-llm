@@ -12,12 +12,9 @@ Constraint Function (BCF) built in.
 ## Quick start
 
 ```bash
-# 1. Environment
+# 1. Environment — one install works on Mac and Linux/cloud
 /opt/homebrew/bin/python3.10 -m venv .venv && source .venv/bin/activate
-pip install sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
-# + ONE compute backend:
-pip install mlx mlx-lm     # Apple Silicon (fastest on Mac)
-pip install torch          # Linux/cloud (CUDA) or Mac (MPS/CPU)
+pip install -r requirements.txt   # base + torch; MLX auto-added only on Apple Silicon
 
 # 2. Exercise the WHOLE real pipeline at the most basic level (1 = preescolar)
 python scripts/prepare_data.py    --level 1 --stage 1

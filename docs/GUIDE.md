@@ -39,11 +39,11 @@ Contents:
 /opt/homebrew/bin/python3.10 -m venv .venv      # (any Python 3.10 venv on Linux)
 source .venv/bin/activate
 
-# Base deps + exactly ONE compute backend:
-pip install -r requirements.txt -r requirements-mlx.txt     # Apple Silicon — fastest on Mac
-pip install -r requirements.txt -r requirements-torch.txt   # Linux/cloud (CUDA) or Mac (MPS/CPU)
+# One install works everywhere: base + PyTorch, plus MLX automatically on Apple
+# Silicon only (an environment marker makes pip skip MLX on Linux/Windows — no crash).
+pip install -r requirements.txt
 
-# Sanity-check the backend you installed:
+# Sanity-check the backend(s) you got:
 python -c "import mlx.core as mx; print(mx.default_device())"          # MLX → Device(gpu, 0)
 python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_available())"
 ```

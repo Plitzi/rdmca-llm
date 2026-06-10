@@ -1,10 +1,12 @@
-# RDMCA — base dependencies (backend-agnostic)
-# Install these PLUS exactly one compute backend:
-#   pip install -r requirements.txt -r requirements-mlx.txt     # Apple Silicon
-#   pip install -r requirements.txt -r requirements-torch.txt   # Linux/cloud CUDA, or Mac MPS/CPU
+# RDMCA — all dependencies in one install:
+#   pip install -r requirements.txt
 #
-# A compute backend (mlx OR torch) is required — see requirements-{mlx,torch}.txt.
+# Installs the base libs + BOTH compute backends, but MLX is gated by an
+# environment marker so it is only fetched on Apple Silicon (mlx is macOS/arm64
+# only) — on Linux/Windows pip simply skips it, no crash. PyTorch installs
+# everywhere (CUDA on Linux, MPS/CPU on Mac).
 
+# ── Base (backend-agnostic) ───────────────────────────────────────────────────
 numpy>=1.26
 PyYAML>=6.0
 sentencepiece>=0.2          # text tokenizer
@@ -12,10 +14,19 @@ rich>=13.0                  # training dashboard / console UI
 datasets>=2.18              # HuggingFace dataset streaming (data preparation)
 psutil>=5.9                 # available-memory probe for the level resource guard
 
-# Multimodal (image/audio tokenizers + perception). Light, kept in base so the
-# default install is complete; `soundfile` needs the system libsndfile library.
+# Multimodal (image/audio tokenizers + perception). `soundfile` needs the
+# system libsndfile library.
 pillow>=10.0                # image loading/resize for the image VQ-VAE
 soundfile>=0.12             # audio loading for the audio VQ-VAE
 
 # Tests
 pytest>=8.0
+
+# ── Compute backends ──────────────────────────────────────────────────────────
+# PyTorch — Linux/cloud (CUDA) or Mac (MPS/CPU). For a specific CUDA build see
+# https://pytorch.org/get-started/locally/ (e.g. --index-url .../whl/cu124).
+torch>=2.2
+
+# MLX — Apple Silicon only. The marker makes pip skip it elsewhere (no error).
+mlx>=0.20;    sys_platform == "darwin" and platform_machine == "arm64"
+mlx-lm>=0.20; sys_platform == "darwin" and platform_machine == "arm64"
