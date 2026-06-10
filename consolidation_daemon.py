@@ -68,8 +68,8 @@ def wait_for_idle() -> None:
 
 
 def _ckpt_root(cfg: dict) -> Path:
-    level = cfg.get("level")
-    return Path("dist/checkpoints") / f"level{level}" if level else Path("dist/checkpoints")
+    level = cfg.get("level")                        # NB: level 0 is valid → use `is None`
+    return Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
 
 
 def _build_model(cfg: dict):

@@ -441,10 +441,12 @@ def main():
 
     _setup_hf_token()
 
-    from src.config import resolve_config_path, load_config, get_languages, get_level
+    from src.config import resolve_config_path, load_config, get_languages, get_level, MAX_LEVEL
     cfg_path = resolve_config_path(args.config, args.level)
     cfg      = load_config(cfg_path)
-    level    = get_level(cfg) or args.level or 5
+    level    = get_level(cfg)                       # NB: level 0 is valid → use `is None`
+    if level is None:                               # custom config w/o a level → least filtering
+        level = args.level if args.level is not None else MAX_LEVEL
     # Languages: --lang override > config(model.languages) > ['en']
     langs = ([l.strip() for l in args.lang.split(",")] if args.lang
              else get_languages(cfg))

@@ -171,8 +171,8 @@ def load_model(args):
         ckpt_path = Path(args.checkpoint)
     elif args.stage:
         import json as _json
-        level     = cfg.get("level")
-        root      = Path("dist/checkpoints") / f"level{level}" if level else Path("dist/checkpoints")
+        level     = cfg.get("level")                # NB: level 0 is valid → use `is None`
+        root      = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
         stage_dir = root / f"stage{args.stage}"
 
         def _resolve_json(p: Path) -> Path | None:
