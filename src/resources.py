@@ -177,6 +177,7 @@ def announce(cfg: dict, mode: str = "train", stage: Optional[int] = None) -> Non
     need  = estimate_for(cfg, mode)
     have  = available_memory_gb()
     params_m = count_params(cfg["model"]) / 1e6
+    precision = (cfg.get("training", {}) or {}).get("precision", "bf16")
 
     print(f"\n  ── Level {level}: {name} ──")
     if info.get("summary"):
@@ -190,8 +191,8 @@ def announce(cfg: dict, mode: str = "train", stage: Optional[int] = None) -> Non
         print("  Learning across areas:")
         for k, v in areas.items():
             print(f"    • {v}")
-    print(f"  Model: ~{params_m:.1f}M params | est. {mode} memory ~{need:.1f} GB "
-          f"| available ~{have:.1f} GB")
+    print(f"  Model: ~{params_m:.1f}M params | precision {precision} | "
+          f"est. {mode} memory ~{need:.1f} GB | available ~{have:.1f} GB")
     moe = cfg.get("moe") or {}
     if moe.get("enabled"):
         print(f"  MoE sectors: {moe.get('experts', '?')} experts, "

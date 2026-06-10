@@ -61,6 +61,30 @@ from src.config import require_backend, get_precision, load_config
 # Generation
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Anti-logic-bomb generation guards. Generation is already bounded by
+# `max_new_tokens`, but an adversarial prompt can still drive a tiny model into a
+# degenerate loop that burns the whole budget (and, with thinking on, stalls the
+# turn). These detect that and stop early:
+_MAX_TOKEN_REPEAT = 32      # same token N× in a row → degenerate
+_CYCLE_MAX_LEN    = 8       # look for a repeating cycle up to this length …
+_CYCLE_MIN_REPS   = 5       # … repeated at least this many times → looping
+GEN_DEADLINE_S    = 90.0    # default per-generation wall-clock cap (0 = unlimited)
+
+
+def _looping(generated: list) -> bool:
+    """True if the tail of `generated` is a short cycle repeated many times — the
+    signature of a stuck 'thinking' loop. O(_CYCLE_MAX_LEN) per call."""
+    n = len(generated)
+    for c in range(1, _CYCLE_MAX_LEN + 1):
+        span = c * _CYCLE_MIN_REPS
+        if n < span:
+            break
+        tail = generated[-span:]
+        if all(tail[i] == tail[i % c] for i in range(span)):
+            return True
+    return False
+
+
 def sample_top_p(logits, temperature: float, top_p: float) -> int:
     logits_np = np.asarray(backend.current().ops.to_numpy(logits), dtype=np.float32)
     if temperature == 0.0:
@@ -87,7 +111,8 @@ def generate(model,
              vocab_size: int,
              context_len: int = 2048,
              stream: bool = True,
-             decode_fn=None) -> tuple[list[int], float]:
+             decode_fn=None,
+             max_seconds: float | None = None) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
 
@@ -95,12 +120,17 @@ def generate(model,
     given (e.g. tokenizer.decode), it decodes the running output and prints the
     new text delta each step — real token streaming; otherwise it falls back to
     a per-token ▌ marker (used on the no-tokenizer plumbing path).
+
+    Anti-logic-bomb guards (besides the `max_new_tokens` cap): generation also
+    stops on a degenerate token loop (`_looping`) and on an optional wall-clock
+    deadline (`max_seconds`), so a crafted prompt can't wedge the turn.
     """
     ops = backend.current().ops
     engine = backend.current().engine
     tokens = ops.array(np.asarray([input_ids], dtype=np.int64))   # [1, S]
     generated: list[int] = []
     printed = ""
+    repeat_run = 0
     t0 = time.perf_counter()
 
     EOS_ID = 3
@@ -119,9 +149,20 @@ def generate(model,
         if next_id == EOS_ID:
             break
 
+        # Anti-loop: a single token repeated many times, or a short repeating
+        # cycle, is a stuck generation — stop rather than burn the budget.
+        repeat_run = repeat_run + 1 if (generated and next_id == generated[-1]) else 1
+        if repeat_run >= _MAX_TOKEN_REPEAT:
+            break
+
         generated.append(next_id)
         new_tok = ops.array(np.asarray([[next_id]], dtype=np.int64))
         tokens  = ops.concatenate([tokens, new_tok], axis=1)
+
+        if _looping(generated):
+            break
+        if max_seconds is not None and (time.perf_counter() - t0) > max_seconds:
+            break
 
         if stream:
             if decode_fn is not None:
@@ -142,6 +183,7 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
                       temperature: float, top_p: float, vocab_size: int,
                       context_len: int, stream: bool = False,
                       think_prefix: str = "", answer_prefix: str = "",
+                      max_seconds: float | None = None,
                       ) -> tuple[str, list[int], float]:
     """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
 
@@ -158,7 +200,7 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
     decode_fn = tokenizer.decode
     sgen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
                 context_len=context_len, stream=stream,
-                decode_fn=(decode_fn if stream else None))
+                decode_fn=(decode_fn if stream else None), max_seconds=max_seconds)
 
     def _label(prefix):
         if stream and prefix:
@@ -191,6 +233,24 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
 # ──────────────────────────────────────────────────────────────────────────────
 # Model loading
 # ──────────────────────────────────────────────────────────────────────────────
+
+_QUANT_BITS = {"none": None, "int8": 8, "int4": 4}
+
+
+def _apply_quant(model, quant: str) -> None:
+    """Quantize model weights for limited hardware (int8 / int4). No-op for
+    'none'. Real grouped-affine quantization on both backends — see
+    engine.quantize in src/backend/{mlx,torch}_backend.py."""
+    bits = _QUANT_BITS.get(quant or "none")
+    if bits is None:
+        return
+    B = backend.current()
+    if not hasattr(B.engine, "quantize"):
+        print(f"  [quant] backend '{B.name}' has no quantize — staying at float precision")
+        return
+    print(f"  Quantizing weights → {bits}-bit (limited-hardware mode)")
+    B.engine.quantize(model, bits=bits)
+
 
 def load_model(args):
     cfg = load_config(args.config)
@@ -226,6 +286,7 @@ def load_model(args):
         dummy = B.ops.array(np.zeros((1, 2), dtype=np.int64))
         _ = model(dummy)
         B.engine.eval(model.parameters())
+        _apply_quant(model, getattr(args, "quant", "none"))
         B.engine.set_eval(model)
         print("  [dummy mode] Random weights — output will be gibberish.")
         print("  Run training first to get meaningful generations.\n")
@@ -268,6 +329,7 @@ def load_model(args):
     print(f"  Loading checkpoint: {ckpt_path}")
     B.engine.load_weights(model, str(ckpt_path))
     set_model_precision(model, precision)    # cast to configured inference precision
+    _apply_quant(model, getattr(args, "quant", "none"))   # optional 4-/8-bit
     B.engine.set_eval(model)                 # disable dropout for inference
     return model, mcfg
 
@@ -296,6 +358,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     out_format  = agent.normalize_format(getattr(args, "format", "text"))
     think_level = agent.normalize_thinking(getattr(args, "think", "medium"))
     stream      = bool(getattr(args, "stream", True))
+    deadline    = getattr(args, "max_seconds", GEN_DEADLINE_S) or None   # 0 → unlimited
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
     last_stats: dict   = {}
@@ -406,7 +469,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 max_new_tokens=max_tokens, think_budget=budget,
                 temperature=temperature, top_p=top_p,
                 vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
-                stream=stream_on,
+                stream=stream_on, max_seconds=deadline,
                 think_prefix="\n💭 thinking: ", answer_prefix="\nRDMCA: ",
             )
         except Exception as e:
@@ -499,6 +562,12 @@ Examples:
                              "more thinking generally means better answers")
     parser.add_argument("--stream",     action=argparse.BooleanOptionalAction, default=True,
                         help="Stream tokens as they generate (default: on; --no-stream to disable)")
+    parser.add_argument("--quant",       choices=("none", "int8", "int4"), default="none",
+                        help="Weight quantization for limited hardware: none (default), "
+                             "int8 (~4× smaller), int4 (~8× smaller)")
+    parser.add_argument("--max-seconds", type=float, default=GEN_DEADLINE_S,
+                        help=f"Per-generation wall-clock cap, anti-loop guard "
+                             f"(default {GEN_DEADLINE_S:g}s; 0 = unlimited)")
     parser.add_argument("--force",      action="store_true",
                         help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()

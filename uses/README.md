@@ -69,6 +69,11 @@ python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
   batch) so chat and agent feel fluid.
 - **Multi-round agent**: the agent runs several think→act→observe rounds until it
   answers (Claude Code-style); each round's reasoning + tool call is surfaced.
+- **Limited hardware**: `--quant int8|int4` loads quantized weights (≈¼ / ≈⅛ size,
+  real on both backends). For *training* bigger levels on the same machine, lower the
+  precision (`train_stage.py --precision bf16`) — the memory guard is precision-aware.
+- **Anti-loop**: a degenerate-thinking loop or runaway turn is stopped by a loop
+  detector + `--max-seconds` deadline; genuine long reasoning is never truncated.
 - **Tool use**: `run_agent.py` with a date/time question → the model should emit
   an `Action` calling `get_current_time`; the runner executes it and feeds back
   the `Observation`. (The example tool is deliberately *not* a calculator, so it

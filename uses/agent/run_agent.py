@@ -45,7 +45,8 @@ def load_skill(name: str) -> str | None:
 
 
 def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float,
-                     max_new_tokens: int, think: str = "off", stream: bool = False):
+                     max_new_tokens: int, think: str = "off", stream: bool = False,
+                     max_seconds: float | None = None):
     """Wrap the model as generate_fn(prompt_text) -> response_text.
 
     Returns the model's full turn (a <think>…</think> scratchpad, if any, plus
@@ -65,7 +66,7 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
                 model, list(ids), tokenizer=tokenizer, lang="en",
                 max_new_tokens=max_new_tokens, think_budget=budget,
                 temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
-                context_len=mcfg.context_len, stream=stream_on,
+                context_len=mcfg.context_len, stream=stream_on, max_seconds=max_seconds,
                 think_prefix="\n  💭 ", answer_prefix="\n  ▸ ")
         else:
             if stream_on:
@@ -73,7 +74,7 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
             gen_ids, _ = chat.generate(
                 model, list(ids), max_new_tokens=max_new_tokens,
                 temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
-                context_len=mcfg.context_len, stream=stream_on,
+                context_len=mcfg.context_len, stream=stream_on, max_seconds=max_seconds,
                 decode_fn=(tokenizer.decode if stream_on else None))
             think_text = ""
         if not (tokenizer.ready and gen_ids):
@@ -102,12 +103,16 @@ def main() -> None:
                     help="Reasoning effort per step: off, low, medium (default), high")
     ap.add_argument("--stream", action=argparse.BooleanOptionalAction, default=True,
                     help="Stream each step live (default: on; --no-stream to disable)")
+    ap.add_argument("--quant", choices=("none", "int8", "int4"), default="none",
+                    help="Weight quantization for limited hardware: none, int8, int4")
+    ap.add_argument("--max-seconds", type=float, default=chat.GEN_DEADLINE_S,
+                    help="Per-step wall-clock cap, anti-loop guard (0 = unlimited)")
     args = ap.parse_args()
 
     cfg_path = resolve_config_path(None, args.level)
     load_args = SimpleNamespace(config=cfg_path, dummy=args.dummy,
                                 checkpoint=args.checkpoint, stage=args.stage,
-                                level=args.level, force=True)
+                                level=args.level, force=True, quant=args.quant)
     print("Loading model…")
     model, mcfg = chat.load_model(load_args)
     from src.modalities.text import TextTokenizer
@@ -115,10 +120,12 @@ def main() -> None:
 
     generate_fn = make_generate_fn(model, mcfg, tokenizer, temperature=args.temp,
                                    top_p=args.topp, max_new_tokens=args.maxtok,
-                                   think=args.think, stream=args.stream)
+                                   think=args.think, stream=args.stream,
+                                   max_seconds=(args.max_seconds or None))
     skill_md = load_skill(args.skill)
     print(f"  Tools: {[t.name for t in TOOLS]} | Skill: {args.skill if skill_md else '—'}"
-          f" | Thinking: {args.think} | Stream: {'on' if args.stream else 'off'}\n")
+          f" | Thinking: {args.think} | Stream: {'on' if args.stream else 'off'}"
+          f" | Quant: {args.quant}\n")
     print(f"User: {args.query}")
 
     result = agent.run_agent(generate_fn, TOOLS, args.query,

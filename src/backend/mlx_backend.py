@@ -147,6 +147,35 @@ def _set_precision(model, precision: str) -> None:
     mx.eval(model.parameters())
 
 
+def _quantize(model, bits: int = 4, group_size: int = 64,
+              skip_names: tuple = ("head",)) -> None:
+    """In-place weight quantization (4- or 8-bit) for limited testing hardware.
+
+    Uses MLX grouped affine quantization on Linear/Embedding layers whose feature
+    dimension is divisible by `group_size`; any layer that doesn't divide evenly
+    (small tiers can hit this) is left in its float dtype rather than erroring.
+    `skip_names` (last path component) are left in float — e.g. the output head,
+    which the MRL logic slices by `.weight` and which is the most quant-sensitive."""
+    skipped = []
+
+    def predicate(path, m):
+        if path.split(".")[-1] in skip_names:
+            return False
+        w = getattr(m, "weight", None)
+        if not (hasattr(m, "to_quantized") and isinstance(w, mx.array)):
+            return False
+        if w.shape[-1] % group_size != 0:
+            skipped.append(path)
+            return False
+        return True
+
+    mlx_nn.quantize(model, group_size=group_size, bits=bits, class_predicate=predicate)
+    mx.eval(model.parameters())
+    if skipped:
+        print(f"  [quant] {len(skipped)} layer(s) not divisible by group_size={group_size} "
+              f"kept in float dtype")
+
+
 def _optimizer_step(opt, model, grads):
     opt.update(model, grads)
     mx.eval(model.parameters(), opt.state)
@@ -206,6 +235,7 @@ _engine = SimpleNamespace(
     eval=lambda *xs: mx.eval(*xs) if xs else None,
     item=lambda x: float(x.item()),
     set_precision=_set_precision,
+    quantize=_quantize,
     set_train=lambda model: model.train(),
     set_eval=lambda model: model.eval(),
     save_weights=_save_weights,

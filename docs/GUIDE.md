@@ -76,6 +76,14 @@ training:
   tests but has no loss-scaling, so it can produce NaNs on a real run — use it only to
   sanity-check the pipeline. Note: `bf16` on Mac **MPS** (torch) is slower and less
   precise than on MLX/CUDA — prefer MLX on Mac, or `fp32` for MPS sanity runs.
+- **Lower precision → bigger levels fit.** The resource guard's memory estimate is
+  precision-aware, so dropping `fp32 → bf16` roughly halves weights/grads/activations
+  and a heavier level may now fit on the same hardware. Override per run without
+  editing the config: `python train_stage.py --level 4 --stage 1 --precision bf16`
+  (the guard recomputes with the chosen dtype; the announce prints it).
+- **Inference quantization** — for running (not training) on limited hardware, chat/agent
+  take `--quant int8|int4`: real grouped-affine quantization (≈¼ / ≈⅛ resident size)
+  via `engine.quantize` on both backends. See [uses/chat/](../uses/chat/).
 
 ## 4. Choose languages
 

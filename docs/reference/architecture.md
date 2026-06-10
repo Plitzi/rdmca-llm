@@ -208,6 +208,13 @@ runtime dial (`--think off|low|medium|high`) centralized in `src/agent.py`; see
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
 override) — plus an `announce` that prints what the model is learning and from which areas.
+The estimate is **precision-aware**, so a lower training precision shrinks it and a heavier
+level may fit; `train_stage.py --precision {fp32,bf16,fp16}` overrides the config per run.
+For inference on limited hardware, chat/agent accept `--quant {int8,int4}` → real
+grouped-affine weight quantization via `engine.quantize` (MLX native; torch weight-only,
+packed nibbles at 4-bit; the output head stays in float). Generation is bounded by
+`max_new_tokens`, a degenerate-loop detector, and a wall-clock deadline (`--max-seconds`)
+— anti-logic-bomb guards that stop only on stuck/repeating output, never genuine reasoning.
 
 ---
 

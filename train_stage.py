@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import src.backend as backend
-from src.config import require_backend, get_precision
+from src.config import require_backend, get_precision, SUPPORTED_PRECISIONS
 
 # NOTE: model/data/dashboard modules are imported lazily (inside the functions
 # below) — only AFTER require_backend() has selected the compute backend — so
@@ -513,15 +513,25 @@ Examples:
                         help="Resume from latest checkpoint in stage dir")
     parser.add_argument("--force", action="store_true",
                         help="Run even if the resource guard says it won't fit (risk OOM)")
+    parser.add_argument("--precision", choices=SUPPORTED_PRECISIONS, default=None,
+                        help="Override training precision (fp32|bf16|fp16). Lower precision "
+                             "uses less memory, so a bigger level may fit on the same hardware.")
     args = parser.parse_args()
 
     from src.config import resolve_config_path
     cfg_path = resolve_config_path(args.config, args.level)
     cfg = load_config(cfg_path)
+    # Precision override (CLI wins over config). Set before the guard/announce so
+    # the memory estimate — which is precision-aware — reflects the chosen dtype:
+    # dropping fp32→bf16 roughly halves weight/grad/activation bytes, letting a
+    # larger level fit on the same hardware.
+    if args.precision:
+        cfg.setdefault("training", {})["precision"] = args.precision
     level = cfg.get("level", "?")
     require_backend(cfg)              # selects the configured backend (mlx | torch)
     print(f"  Level: {level} ({cfg.get('name','custom')}) | "
-          f"backend: {cfg.get('backend','mlx')} | config: {cfg_path}")
+          f"backend: {cfg.get('backend','mlx')} | config: {cfg_path} | "
+          f"precision: {get_precision(cfg)}")
 
     # Is this stage active at this level? (entry_level ≤ level and present)
     skey = f"stage{args.stage}"

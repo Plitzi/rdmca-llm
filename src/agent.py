@@ -76,6 +76,15 @@ THINK_CLOSE = "</think>"         # reasoning data (see src/data/graded.py).
 # small levels have tiny context windows, so an absolute count won't fit.
 _THINK_BUDGET_FRAC = {"off": 0.0, "low": 0.25, "medium": 0.5, "high": 1.0}
 
+# Resource ceiling on scratchpad tokens (NOT the loop defense). This only bounds
+# how much memory/compute one turn's reasoning can request — it is deliberately
+# generous so it never truncates genuine long reasoning. The actual defense
+# against an infinite-thinking logic bomb is the *loop detector* in
+# run_chat.generate() (`_looping` + the wall-clock deadline), which fires only on
+# degenerate repetition/stalls and so cannot cut short real, progressing thought.
+# A looping scratchpad is detected and closed early; the model then still answers.
+MAX_THINK_TOKENS = 4096
+
 THINK_INSTRUCTION = (f" First reason step by step inside {THINK_OPEN} {THINK_CLOSE}, "
                      "then give the final answer.")
 
@@ -94,8 +103,10 @@ def normalize_thinking(level: Optional[str]) -> str:
 
 
 def think_budget(level: str, max_tokens: int) -> int:
-    """Token budget for the <think> scratchpad at this level (0 = no thinking)."""
-    return int(max_tokens * _THINK_BUDGET_FRAC[normalize_thinking(level)])
+    """Token budget for the <think> scratchpad at this level (0 = no thinking),
+    clamped to MAX_THINK_TOKENS as an anti-logic-bomb ceiling."""
+    budget = int(max_tokens * _THINK_BUDGET_FRAC[normalize_thinking(level)])
+    return min(budget, MAX_THINK_TOKENS)
 
 
 def split_thinking(text: str) -> tuple:
