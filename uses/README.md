@@ -33,6 +33,8 @@ including the agentic stages (tool use, MCP, skills).
 # 0. (optional) higher HF download limits — put HF_TOKEN in .env (see .env.example)
 cp .env.example .env        # then edit HF_TOKEN=...
 
+# (to start completely fresh: python scripts/purge.py --all --dry-run, then --yes)
+
 # 1. Prepare the data for every stage in the level (downloads real corpora)
 python scripts/prepare_data.py --level 1 --stage all
 

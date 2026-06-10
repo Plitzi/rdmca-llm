@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""
+Purge generated artifacts for a fresh-from-zero training run.
+
+Removes ONLY things the pipeline generates — checkpoints, the trained tokenizer,
+prepared training corpora, runtime memory and logs. It never touches your
+inputs: configs, `.env`, source code, `data/benchmarks/` (BCF probes you
+provide), or the shared HuggingFace download cache.
+
+Targets (pick any combination, or --all):
+  --checkpoints   dist/checkpoints/  + dist/snapshots/   (trained weights, frozen core, sectors)
+  --tokenizer     dist/tokenizer/    + dist/tokenizer*.bak (SentencePiece + image/audio VQ-VAE)
+  --data          data/level*/        (prepared graded corpora — NOT benchmarks/runtime)
+  --runtime       data/runtime/       (experiences.jsonl, ltss.db — consolidation memory)
+  --logs          logs/               (daemon.log, cycle_*.json, human_queue.jsonl)
+  --hf-cache      ~/.cache/huggingface/{datasets,hub}  (shared HF download cache;
+                  honors HF_HOME / HF_DATASETS_CACHE / HF_HUB_CACHE). Opt-in only —
+                  NOT included in --all, shared across projects, slow to refill.
+
+Scope with --level N to limit --checkpoints and --data to one level
+(tokenizer/runtime/logs/hf-cache are global and always purged in full when selected).
+
+Safety: prints exactly what will be deleted (with sizes) and asks for
+confirmation. Use --dry-run to only preview, or --yes to skip the prompt.
+
+Examples:
+  python scripts/purge.py --all --dry-run            # preview a full wipe
+  python scripts/purge.py --all --yes                # full fresh start
+  python scripts/purge.py --checkpoints --data --level 1   # redo level 1 only
+  python scripts/purge.py --tokenizer --checkpoints  # keep prepared data, retrain
+  python scripts/purge.py --all --hf-cache --yes     # wipe everything incl. HF cache
+  python scripts/purge.py --hf-cache --dry-run       # preview just the HF cache
+"""
+from __future__ import annotations
+import argparse
+import os
+import shutil
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+
+# Repo-internal targets, purged by --all.
+TARGET_NAMES = ("checkpoints", "tokenizer", "data", "runtime", "logs")
+# Opt-in only (NOT in --all): the HuggingFace download cache is shared across
+# projects and slow to refill, so it's never wiped implicitly.
+EXTRA_NAMES = ("hf_cache",)
+
+
+def _hf_cache_paths() -> list[Path]:
+    """HuggingFace dataset + hub cache dirs, honoring HF env vars."""
+    hf_home = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache/huggingface"))
+    datasets = Path(os.environ.get("HF_DATASETS_CACHE") or (hf_home / "datasets"))
+    hub = Path(os.environ.get("HF_HUB_CACHE")
+               or os.environ.get("HUGGINGFACE_HUB_CACHE") or (hf_home / "hub"))
+    return [datasets, hub]
+
+
+def _paths_for(target: str, level: int | None) -> list[Path]:
+    """Resolve a target name to the concrete paths it would remove."""
+    lvl = f"level{level}" if level is not None else None
+    if target == "checkpoints":
+        if lvl:
+            return [REPO / "dist/checkpoints" / lvl]
+        return [REPO / "dist/checkpoints", REPO / "dist/snapshots"]
+    if target == "tokenizer":                       # global (trained per level into one dir)
+        return [REPO / "dist/tokenizer", *sorted((REPO / "dist").glob("tokenizer*.bak"))]
+    if target == "data":                            # prepared corpora only — keep benchmarks/runtime
+        if lvl:
+            return [REPO / "data" / lvl]
+        return sorted((REPO / "data").glob("level*"))
+    if target == "runtime":
+        return [REPO / "data/runtime"]
+    if target == "logs":
+        return [REPO / "logs"]
+    if target == "hf_cache":                         # shared, outside the repo
+        return _hf_cache_paths()
+    return []
+
+
+def _display(p: Path) -> str:
+    """Repo-relative path when inside the repo, else absolute (e.g. HF cache)."""
+    try:
+        return str(p.relative_to(REPO))
+    except ValueError:
+        return str(p)
+
+
+def _size_bytes(path: Path) -> int:
+    if path.is_file() or path.is_symlink():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file() and not p.is_symlink():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _human(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Purge generated artifacts for a fresh training run.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__)
+    ap.add_argument("--all", action="store_true", help="Purge every repo target (not the HF cache)")
+    for t in TARGET_NAMES:
+        ap.add_argument(f"--{t}", action="store_true", help=f"Purge {t}")
+    ap.add_argument("--hf-cache", dest="hf_cache", action="store_true",
+                    help="Also delete the shared HuggingFace download cache "
+                         "(datasets + hub). Opt-in only — NOT included in --all; slow to refill.")
+    ap.add_argument("--level", type=int, default=None,
+                    help="Limit --checkpoints/--data to one level (else all levels)")
+    ap.add_argument("--dry-run", action="store_true", help="Preview only; delete nothing")
+    ap.add_argument("--yes", "-y", action="store_true", help="Skip the confirmation prompt")
+    args = ap.parse_args()
+
+    selected = [t for t in TARGET_NAMES if args.all or getattr(args, t)]
+    if args.hf_cache:                                # opt-in, never via --all
+        selected.append("hf_cache")
+    if not selected:
+        ap.error("nothing selected — pass --all, --hf-cache, or one or more of: "
+                 + ", ".join(f"--{t}" for t in TARGET_NAMES))
+
+    # Resolve and de-duplicate existing paths, remembering which targets are empty.
+    plan: list[tuple[str, Path, int]] = []
+    seen: set[Path] = set()
+    absent: list[str] = []
+    for t in selected:
+        hits = [p for p in _paths_for(t, args.level) if p.exists() and p not in seen]
+        if not hits:
+            absent.append(t)
+        for p in hits:
+            seen.add(p)
+            plan.append((t, p, _size_bytes(p)))
+
+    scope = f" (level {args.level})" if args.level is not None else ""
+    print(f"\nPurge plan{scope}:")
+    if not plan:
+        print("  Nothing to delete — all selected targets are already absent.")
+        return
+    total = 0
+    for t, p, sz in plan:
+        total += sz
+        print(f"  [{t:<11}] {_display(p)}  ({_human(sz)})")
+    if absent:
+        print(f"  (already empty: {', '.join(absent)})")
+    print(f"  Total: {_human(total)} across {len(plan)} path(s)")
+    kept = "configs/, .env, src/, data/benchmarks/"
+    if "hf_cache" not in selected:
+        kept += ", HF cache"
+    print(f"  Kept (inputs): {kept}.")
+    if "hf_cache" in selected:
+        print("  ⚠️  HF cache is shared across projects — re-downloads on next prepare_data.")
+
+    if args.dry_run:
+        print("\n[dry-run] Nothing deleted.")
+        return
+
+    if not args.yes:
+        try:
+            reply = input("\nType 'yes' to delete the above permanently: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            reply = ""
+        if reply != "yes":
+            print("Aborted — nothing deleted.")
+            return
+
+    removed = 0
+    for _, p, _sz in plan:
+        try:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            removed += 1
+            print(f"  removed {_display(p)}")
+        except OSError as e:
+            print(f"  [error] could not remove {_display(p)}: {e}")
+    print(f"\nDone — removed {removed}/{len(plan)} path(s), freed ~{_human(total)}.")
+    print("Fresh start: prepare_data → train_tokenizer → train_stage.")
+
+
+if __name__ == "__main__":
+    main()

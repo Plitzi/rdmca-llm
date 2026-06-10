@@ -299,19 +299,33 @@ stage (stage 6)** — i.e. levels **4–5**. At L1 you chat with the pure **dens
 per-token MoE routing + consolidation, train a level that reaches stage 6 and then run
 `consolidation_daemon.py --level N --once`.
 
-## 12. Cleanup
+## 12. Cleanup / fresh start
+
+Use `scripts/purge.py` to wipe generated artifacts and train from zero. It only
+removes things the pipeline produces (checkpoints, tokenizer, prepared corpora,
+runtime memory, logs) — never your inputs (configs, `.env`, `src/`,
+`data/benchmarks/`, the HF cache). It previews what it will delete (with sizes)
+and asks for confirmation; `--dry-run` previews only, `--yes` skips the prompt.
 
 ```bash
-# Downloaded data (regenerable)
-rm -rf data/stage*_*/*.jsonl
-# HuggingFace cache
-rm -rf ~/.cache/huggingface/datasets ~/.cache/huggingface/hub
-# Model weights (NOT regenerable without retraining)
-rm -rf dist/checkpoints/
-# Tokenizers (text + VQ-VAE)
-rm -rf dist/tokenizer/
-# Sector snapshots, logs and memory
-rm -rf snapshots/* logs/* data/runtime/ltss.db data/runtime/experiences.jsonl
+python scripts/purge.py --all --dry-run            # preview a full wipe
+python scripts/purge.py --all --yes                # full fresh start
+python scripts/purge.py --checkpoints --data --level 1   # redo level 1 only
+python scripts/purge.py --tokenizer --checkpoints  # keep prepared data, retrain
+```
+
+Targets: `--checkpoints` (`dist/checkpoints/` + `dist/snapshots/`), `--tokenizer`
+(`dist/tokenizer/` + VQ-VAE + `*.bak`), `--data` (`data/level*/` corpora),
+`--runtime` (`data/runtime/` — `experiences.jsonl`, `ltss.db`), `--logs`. Scope
+checkpoints/data to one level with `--level N`.
+
+The shared HuggingFace download cache is left alone by `--all` (re-downloading is
+slow and it's shared across projects). To wipe it too, opt in explicitly with
+`--hf-cache` (honors `HF_HOME` / `HF_DATASETS_CACHE` / `HF_HUB_CACHE`):
+
+```bash
+python scripts/purge.py --hf-cache --dry-run       # preview just the HF cache
+python scripts/purge.py --all --hf-cache --yes     # wipe everything incl. HF cache
 ```
 
 ## 13. Scaling up (T3/T4)
