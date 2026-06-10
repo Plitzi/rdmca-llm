@@ -115,7 +115,9 @@ _ops = SimpleNamespace(
         logits, targets, reduction=reduction),
     bce_with_logits=lambda logits, labels, reduction="mean": mlx_nn.losses.binary_cross_entropy(
         logits, labels, with_logits=True, reduction=reduction),
-    to_numpy=lambda x: np.array(x),
+    # numpy has no bfloat16; cast float types to float32 before converting.
+    to_numpy=lambda x: np.array(
+        x.astype(mx.float32) if isinstance(x, mx.array) and x.dtype in _FLOAT_DTYPES else x),
     from_numpy=lambda a: mx.array(a),
     float32=mx.float32, bfloat16=mx.bfloat16, float16=mx.float16,
 )

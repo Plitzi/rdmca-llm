@@ -330,87 +330,109 @@ def write_jsonl(records: Iterator[dict], out_path: Path,
     return tokens_written
 
 
-def prepare_stage(stage: int, langs: List[str],
-                  limit_mb: Optional[int] = None) -> None:
-    budget = TOKEN_BUDGET_M[stage]
-    lang_str = "+".join(l.upper() for l in langs)
-    print(f"\n{'='*60}")
-    print(f"Stage {stage} [{lang_str}] — target: {budget}M tokens")
-    print(f"{'='*60}")
+def _arc_subset(subset: str):
+    """Full-corpus streamer for one ARC subset (ARC-Easy | ARC-Challenge)."""
+    def gen():
+        try:
+            from datasets import load_dataset
+            ds = load_dataset("allenai/ai2_arc", subset, split="train")
+            for ex in ds:
+                q       = ex["question"]
+                labels  = ex["choices"]["label"]
+                texts   = ex["choices"]["text"]
+                answer  = ex.get("answerKey", "")
+                options = "  ".join(f"{l}: {t}" for l, t in zip(labels, texts))
+                correct = next((t for l, t in zip(labels, texts) if l == answer), "")
+                yield {"text": f"Question: {q}\nOptions: {options}\nAnswer: {correct}",
+                       "lang": "en"}
+        except Exception as e:
+            print(f"    [arc {subset}] {e}")
+    return gen
 
-    dir_map = {
-        1: Path("data/stage1_language"),
-        2: Path("data/stage2_patterns"),
-        3: Path("data/stage3_abstraction"),
-        4: Path("data/stage4_causal"),
-        5: Path("data/stage5_ethics"),
+
+def _full_corpus_streamers(stage: int, langs: List[str],
+                           limit_mb: Optional[int]) -> dict:
+    """Streamers for the FULL (unfiltered) corpora, keyed by source name. These
+    back the higher levels; `graded.stream_source` handles the simple/synthetic
+    sources for the lower levels."""
+    def wikipedia():
+        for lang in langs:
+            for art in stream_wikipedia(lang, limit_mb=limit_mb):
+                if article_matches_stage(art["title"], art["text"], stage):
+                    yield art
+    return {
+        "wikipedia":     wikipedia,
+        "arc_easy":      _arc_subset("ARC-Easy"),
+        "arc_challenge": _arc_subset("ARC-Challenge"),
+        "gsm8k":         stream_gsm8k_bilingual,
+        "math":          stream_math,
+        "ethics":        stream_ethics_bilingual,
     }
-    out_dir = dir_map[stage]
+
+
+def prepare_stage_for_level(level: int, stage: int, cfg: dict,
+                            langs: List[str], limit_mb: Optional[int] = None) -> None:
+    """Prepare graded data for one (level, stage), reading the level config's
+    curriculum entry: which sources, the complexity filter, the token budget and
+    the output dir. Skips stages whose entry_level is above this level."""
+    from src.data import graded
+
+    cur = cfg.get("curriculum", {}) or {}
+    skey = f"stage{stage}"
+    if skey not in cur:
+        print(f"  Stage {stage}: not active at level {level} — skipping.")
+        return
+    sc    = cur[skey]
+    entry = int(sc.get("entry_level", 1))
+    if entry > level:
+        print(f"  Stage {stage}: enters at level {entry} (> {level}) — skipping.")
+        return
+
+    data    = sc.get("data", {}) or {}
+    sources = data.get("sources", []) or []
+    flt     = data.get("filter")                       # None at level 5
+    arith   = (flt or {}).get("arithmetic_level", level) if isinstance(flt, dict) else level
+    out_dir = Path(sc["data_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Budget split: equitable across the configured languages.
-    per_lang = budget // max(len(langs), 1)
+    budget_m     = max(int(sc.get("n_tokens", 100_000_000) // 1_000_000), 1)
+    per_source_m = max(budget_m // max(len(sources), 1), 1)
+    extra        = _full_corpus_streamers(stage, langs, limit_mb)
 
-    # Wikipedia per language
-    for lang in langs:
-        wiki_path   = out_dir / f"wikipedia_{lang}.jsonl"
-        lang_budget = per_lang
+    print(f"\n{'='*60}")
+    print(f"Level {level} · Stage {stage}: {sc.get('name','')}")
+    print(f"  sources={sources}  filter={flt}  budget~{budget_m}M tokens → {out_dir}/")
+    print(f"{'='*60}")
 
-        ok, reason = _validate_jsonl(wiki_path, lang_budget)
+    for src in sources:
+        out_path = out_dir / f"{src}.jsonl"
+        ok, reason = _validate_jsonl(out_path, per_source_m)
         if ok:
-            print(f"  OK (valid): {wiki_path.name}  —  {reason}")
+            print(f"  OK (valid): {out_path.name}  —  {reason}")
             continue
-        elif wiki_path.exists():
-            print(f"  Invalid file detected: {wiki_path.name}  —  {reason}")
-            print(f"  Removing and re-downloading…")
-            wiki_path.unlink()
+        it = graded.stream_source(
+            src, langs=langs, n_tokens=per_source_m * 1_000_000,
+            arithmetic_level=arith, limit_mb=limit_mb, extra_streamers=extra)
+        if it is None:
+            print(f"  [skip] unknown source '{src}'")
+            continue
+        if flt:                                        # readability gate (None ⇒ keep all)
+            it = (rec for rec in it if graded.passes_filter(rec.get("text", ""), flt))
+        tokens = write_jsonl(it, out_path, per_source_m)
+        print(f"  {src}: {tokens/1e6:.1f}M tokens → {out_path.name}")
 
-        print(f"  Writing {wiki_path} …")
-
-        def filtered_wiki(l=lang):
-            for article in stream_wikipedia(l, limit_mb=limit_mb):
-                if article_matches_stage(article["title"], article["text"], stage):
-                    yield article
-
-        tokens = write_jsonl(filtered_wiki(), wiki_path, lang_budget)
-        print(f"  Wikipedia {lang.upper()}: {tokens/1e6:.0f}M tokens → {wiki_path}")
-
-    # Stage-specific task datasets (only the ones matching configured languages).
-    if stage == 2 and "en" in langs:
-        arc_path = out_dir / "arc_en.jsonl"
-        if not arc_path.exists():
-            tokens = write_jsonl(stream_arc(), arc_path, 10)
-            print(f"  ARC (EN): {tokens/1e6:.2f}M tokens → {arc_path}")
-
-    if stage == 3 and ("en" in langs or "es" in langs):
-        gsm_path = out_dir / "gsm8k_tasks.jsonl"
-        if not gsm_path.exists():
-            tokens = write_jsonl(stream_gsm8k_bilingual(), gsm_path, 10)
-            print(f"  GSM8K tasks: {tokens/1e6:.2f}M tokens → {gsm_path}")
-
-        if "en" in langs:
-            math_path = out_dir / "competition_math_en.jsonl"
-            if not math_path.exists():
-                tokens = write_jsonl(stream_math(), math_path, 20)
-                print(f"  MATH (EN): {tokens/1e6:.2f}M tokens → {math_path}")
-
-    if stage == 5 and ("en" in langs or "es" in langs):
-        ethics_path = out_dir / "ethics_tasks.jsonl"
-        if not ethics_path.exists():
-            tokens = write_jsonl(stream_ethics_bilingual(), ethics_path, 1)
-            print(f"  Ethics tasks: {tokens/1e6:.2f}M tokens → {ethics_path}")
-
-    print(f"  Stage {stage} data ready in {out_dir}/")
+    print(f"  Stage {stage} ready in {out_dir}/")
 
 
 def main():
     parser = argparse.ArgumentParser(description="RDMCA curriculum data preparation")
+    parser.add_argument("--level", type=int, default=None,
+                        help="Educational level 1-5 (preescolar..universidad). "
+                             "Determines the graded data sources + complexity.")
     parser.add_argument("--stage", default="all",
                         help="Stage number (1-5) or 'all'")
     parser.add_argument("--config", default=None,
-                        help="Config path (languages source of truth)")
-    parser.add_argument("--profile", default=None,
-                        help="Hardware profile: nano | m2max | test | …")
+                        help="Explicit config path (overrides --level)")
     parser.add_argument("--lang", default=None,
                         help="Comma-separated override of config languages")
     parser.add_argument("--limit", type=int, default=None,
@@ -419,15 +441,16 @@ def main():
 
     _setup_hf_token()
 
+    from src.config import resolve_config_path, load_config, get_languages, get_level
+    cfg_path = resolve_config_path(args.config, args.level)
+    cfg      = load_config(cfg_path)
+    level    = get_level(cfg) or args.level or 5
     # Languages: --lang override > config(model.languages) > ['en']
-    from src.config import resolve_config_path, load_config, get_languages
-    if args.lang:
-        langs = [l.strip() for l in args.lang.split(",")]
-    else:
-        langs = get_languages(load_config(resolve_config_path(args.config, args.profile)))
+    langs = ([l.strip() for l in args.lang.split(",")] if args.lang
+             else get_languages(cfg))
     stages = list(range(1, 6)) if args.stage == "all" else [int(args.stage)]
 
-    print(f"Languages: {langs}")
+    print(f"Level {level} ({cfg.get('name','custom')}) | languages: {langs} | config: {cfg_path}")
     _NETWORK_ERRORS = (
         "RemoteProtocolError", "ConnectError", "ReadTimeout",
         "ConnectionError", "ServerDisconnected", "TimeoutError",
@@ -435,7 +458,7 @@ def main():
 
     try:
         for s in stages:
-            prepare_stage(s, langs=langs, limit_mb=args.limit)
+            prepare_stage_for_level(level, s, cfg, langs=langs, limit_mb=args.limit)
     except KeyboardInterrupt:
         print("\n\nInterrupted. Run the same command again to resume.")
         sys.exit(0)
@@ -446,7 +469,7 @@ def main():
             sys.exit(1)
         raise   # anything else: show full traceback
 
-    print("\nDone. Next: python scripts/train_tokenizer.py")
+    print(f"\nDone. Next: python scripts/train_tokenizer.py --level {level}")
     sys.stdout.flush()
     sys.stderr.flush()
     # The HuggingFace datasets streaming iterators leave multiprocessing

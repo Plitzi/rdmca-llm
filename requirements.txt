@@ -1,0 +1,21 @@
+# RDMCA — base dependencies (backend-agnostic)
+# Install these PLUS exactly one compute backend:
+#   pip install -r requirements.txt -r requirements-mlx.txt     # Apple Silicon
+#   pip install -r requirements.txt -r requirements-torch.txt   # Linux/cloud CUDA, or Mac MPS/CPU
+#
+# A compute backend (mlx OR torch) is required — see requirements-{mlx,torch}.txt.
+
+numpy>=1.26
+PyYAML>=6.0
+sentencepiece>=0.2          # text tokenizer
+rich>=13.0                  # training dashboard / console UI
+datasets>=2.18              # HuggingFace dataset streaming (data preparation)
+psutil>=5.9                 # available-memory probe for the level resource guard
+
+# Multimodal (image/audio tokenizers + perception). Light, kept in base so the
+# default install is complete; `soundfile` needs the system libsndfile library.
+pillow>=10.0                # image loading/resize for the image VQ-VAE
+soundfile>=0.12             # audio loading for the audio VQ-VAE
+
+# Tests
+pytest>=8.0

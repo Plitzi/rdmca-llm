@@ -1,0 +1,82 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · LEVEL 2 — Primaria (primary school)   [default level]             ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  Full sentences and short paragraphs, a wider everyday vocabulary, two-    ║
+# ║  digit arithmetic (+ − ×) and simple patterns. Reasonable first "real"     ║
+# ║  model on a laptop. Size follows the information, not the hardware.        ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+level: 2
+name: "Primaria"
+backend: mlx                   # mlx | torch
+tier: edge
+
+information:
+  summary: "Frases y párrafos, vocabulario cotidiano más amplio, aritmética de dos dígitos y patrones simples."
+  areas:
+    1: "Lenguaje: oraciones y párrafos, vocabulario cotidiano; conversa con más fluidez."
+    2: "Patrones: analogías y secuencias con más variedad."
+    3: "Aritmética: +, −, × de dos dígitos."
+
+model:
+  d_model: 256                 # wider than L1 — more vocabulary/structure to hold.
+  n_layers: 6
+  n_heads: 8                   # head_dim = 32
+  ffn_dim: 1024
+  context_len: 256             # longer text than L1.
+  vocab_size: 8192
+  mrl_dims: [128, 256]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en"]
+
+training:
+  precision: bf16
+  lr: 4.0e-4
+  lr_min: 4.0e-5
+  weight_decay: 0.1
+  batch_size: 12
+  grad_accumulation: 4
+  warmup_steps: 500
+  save_every: 1000
+  eval_every: 2000
+  clip_grad_norm: 1.0
+
+resources:
+  est_params_m: 11             # live count ≈ 10.5M
+  est_train_mem_gb: 0.5
+  est_infer_mem_gb: 0.1
+  min_ram_gb: 4
+
+skip_gate: false               # graduation gate active from primaria upward.
+gate:
+  max_perplexity: {1: 50.0, 2: 48.0, 3: 45.0}
+
+curriculum:
+  stage1:
+    name: "Language and communication"
+    entry_level: 1
+    n_tokens: 600_000_000
+    data_dir: "data/level2/stage1"
+    data:
+      sources: [simple_wikipedia, dialogue]   # Simple-English Wikipedia + synthetic dialogue.
+      filter:
+        max_grade: 5               # ~10-year-old reading level.
+        max_word_len: 16
+  stage2:
+    name: "Perception and pattern recognition"
+    entry_level: 1
+    n_tokens: 80_000_000
+    data_dir: "data/level2/stage2"
+    data:
+      sources: [analogies]
+      filter: null
+  stage3:
+    name: "Abstraction and symbolic composition"
+    entry_level: 1
+    n_tokens: 150_000_000
+    data_dir: "data/level2/stage3"
+    data:
+      sources: [arithmetic]
+      filter:
+        arithmetic_level: 2        # 2 = two-digit + − × (e.g. "23 + 18 = 41").

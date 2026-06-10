@@ -16,8 +16,8 @@ Runs during system idle time (CPU < 20% for 5+ minutes).
 Executes the full consolidation pipeline on accumulated experiences.
 
 Usage:
-  python consolidation_daemon.py --profile m2max
-  python consolidation_daemon.py --profile m2max --once
+  python consolidation_daemon.py --level 5
+  python consolidation_daemon.py --level 5 --once
 """
 import argparse
 import logging
@@ -68,8 +68,8 @@ def wait_for_idle() -> None:
 
 
 def _ckpt_root(cfg: dict) -> Path:
-    profile = cfg.get("profile")
-    return Path("dist/checkpoints") / profile if profile else Path("dist/checkpoints")
+    level = cfg.get("level")
+    return Path("dist/checkpoints") / f"level{level}" if level else Path("dist/checkpoints")
 
 
 def _build_model(cfg: dict):
@@ -190,17 +190,18 @@ def run_consolidation(cfg: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="RDMCA Consolidation Daemon")
-    parser.add_argument("--config", default=None)
-    parser.add_argument("--profile", default=None,
-                        help="Hardware profile: nano | m2max | test | …")
+    parser.add_argument("--config", default=None,
+                        help="Explicit config path (overrides --level)")
+    parser.add_argument("--level", type=int, default=None,
+                        help="Educational level 1-5 (which frozen base to consolidate on)")
     parser.add_argument("--once", action="store_true",
                         help="Run one cycle immediately and exit (skip idle detection)")
     args = parser.parse_args()
 
     from src.config import resolve_config_path, load_config, require_backend
-    config_path = resolve_config_path(args.config, args.profile)
+    config_path = resolve_config_path(args.config, args.level)
     cfg = load_config(config_path)
-    require_backend(cfg)              # mlx only for now; torch errors clearly
+    require_backend(cfg)              # selects the configured backend (mlx | torch)
 
     Path("logs").mkdir(exist_ok=True)
     logging.info(f"Daemon started | config={config_path} | once={args.once}")

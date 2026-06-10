@@ -3,9 +3,9 @@
 ## Model
 
 Decoder-only transformer (GPT-style) with RoPE, RMSNorm (pre-norm), SwiGLU FFN and an
-MRL (Matryoshka) loss over nested dims. The concrete size is set by the profile
-(`configs/profiles/*.yaml`); the base config defaults to d_model=256, 8 layers, 4 heads,
-FFN 1024, context 2048.
+MRL (Matryoshka) loss over nested dims. The concrete size is set by the **level**
+(`configs/levels/level{1..5}.yaml`) — the size follows the *information* the level
+teaches, from d_model=128 (level 1) to d_model=768 (level 5).
 
 | Component | Value (base config) |
 |---|---|
@@ -141,8 +141,9 @@ rdmca-llm/
 │   ├── train_audio_tokenizer.py  Train the audio VQ-VAE
 │   └── prepare_multimodal.py   Interleaved image/audio-text grounding data
 ├── configs/
-│   ├── rdmca_t2.yaml           Base config
-│   └── profiles/               test · nano · m2max · a100 · cluster
+│   └── levels/                 level1..5 (preescolar..universidad) — size + data + resources
+├── src/resources.py            Memory estimate + OOM guard + level announce
+├── src/data/graded.py          Graded sources, readability filter, synthetic generators
 ├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
 ├── experiments/continual_learning.py   Hypothesis validation (no-forgetting)
 ├── train_stage.py              Stage training + freeze + BCF
@@ -154,18 +155,27 @@ rdmca-llm/
     └── papers/                 Theory paper + implementation guide
 ```
 
-Checkpoints: `dist/checkpoints/<profile>/stage<N>/`, frozen core at
+Checkpoints: `dist/checkpoints/level<N>/stage<N>/`, frozen core at
 `.../foundational/theta_f_frozen.npz`, sectors at `.../sectors.npz`. Tokenizers in
 `dist/tokenizer/`. Long-term memory in `data/runtime/ltss.db`.
 
 ---
 
-## The `test` profile
+## Levels (educational curriculum)
 
-`configs/profiles/test.yaml` replaces the old "toy": the **same real flow** with a small
-model, little data and `skip_gate: true`. It points all stages at the same corpus so you
-can run the 5 stages → freeze → consolidation without downloading the per-stage datasets.
-It is only for verifying the pipeline; the weights are not production-quality.
+Levels replace the old hardware profiles. A level (`configs/levels/level{1..5}.yaml`,
+selected with `--level N`) sets the model size, the graded data complexity and the
+resource budget — the **information** drives the size, the **hardware** only caps how high
+a level you can run. The 5 cognitive **stages** (Language, Patterns, Arithmetic, Causal,
+Ethics) each declare an `entry_level`: language/patterns/arithmetic from level 1, causal at
+3, ethics at 4. Data is graded per level via `src/data/graded.py` (a Flesch-Kincaid
+readability gate + synthetic arithmetic/dialogue/analogy/causal generators + simple
+graded corpora like TinyStories / Simple-English-Wikipedia); **level 5 applies no filter**
+and reuses the full `data/stage*_*` corpora.
+
+`src/resources.py` estimates a level's parameter count and peak memory from its config,
+compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
+override) — plus an `announce` that prints what the model is learning and from which areas.
 
 ---
 
@@ -175,7 +185,7 @@ It is only for verifying the pipeline; the weights are not production-quality.
 `data/runtime/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
 filter (R⁺<0) → LTSS consistency → MRF → sector assignment (STR + SectorRouter) → masked
 per-sector update → PGQ → snapshot/rollback → audit log in `logs/cycle_*.json`. It saves
-the sectors to `dist/checkpoints/<profile>/sectors.npz`.
+the sectors to `dist/checkpoints/level<N>/sectors.npz`.
 
 ---
 
@@ -187,14 +197,14 @@ size you will use.
 
 ```python
 import numpy as np                       # checkpoints are neutral .npz (numpy)
-w = np.load("dist/checkpoints/<profile>/foundational/theta_f_frozen.npz")
+w = np.load("dist/checkpoints/level5/foundational/theta_f_frozen.npz")
 emb_t3 = w["embed.weight"][:, :512]       # 512-dim prefix
 ```
 
-| Profile | approx d_model | Target hardware | Default backend |
-|---|---|---|---|
-| test | 256 (4 layers) | smoke test | mlx |
-| nano | 384 | MacBook M2/M3 | mlx |
-| m2max | 512 | MacBook M2/M3 Max 64 GB | mlx |
-| a100 | 768 | 1× A100 (CUDA) | torch |
-| cluster | 1024 | multi-GPU (CUDA, single device) | torch |
+| Level | Grade | d_model | ~params | Default backend |
+|---|---|---|---|---|
+| 1 | Preescolar  | 128 | ~2M   | mlx |
+| 2 | Primaria    | 256 | ~11M  | mlx |
+| 3 | Secundaria  | 384 | ~32M  | mlx |
+| 4 | Bachillerato| 512 | ~76M  | torch |
+| 5 | Universidad | 768 | ~200M | torch |

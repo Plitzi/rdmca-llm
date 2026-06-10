@@ -14,14 +14,14 @@ except ModuleNotFoundError:
 RDMCA Progressive Stage Trainer with Checkpoint-Resume
 =======================================================
 Usage:
-  # Start Stage 1 fresh
-  python train_stage.py --stage 1 --config configs/rdmca_t2.yaml
+  # Start Stage 1 fresh at a given level
+  python train_stage.py --level 1 --stage 1
 
   # Resume Stage 1 after a pause
-  python train_stage.py --stage 1 --config configs/rdmca_t2.yaml --resume
+  python train_stage.py --level 1 --stage 1 --resume
 
   # After Stage 1 gate passes, start Stage 2
-  python train_stage.py --stage 2 --config configs/rdmca_t2.yaml
+  python train_stage.py --level 1 --stage 2
 
 Each stage must pass its graduation gate before the next can begin.
 Foundational core is frozen permanently after Stage 5.
@@ -74,9 +74,9 @@ def load_config(path: str) -> dict:
 
 
 def ckpt_root(cfg: dict) -> Path:
-    """Checkpoint root, namespaced by profile so profiles never collide."""
-    profile = cfg.get("profile")
-    return Path("dist/checkpoints") / profile if profile else Path("dist/checkpoints")
+    """Checkpoint root, namespaced by level so levels never collide."""
+    level = cfg.get("level")
+    return Path("dist/checkpoints") / f"level{level}" if level else Path("dist/checkpoints")
 
 
 def cosine_lr(step: int, base_lr: float, min_lr: float,
@@ -125,7 +125,7 @@ def build_data_loader(stage: int, cfg: dict):
     tokenizer = TextTokenizer()
     if not tokenizer.ready:
         print("ERROR: tokenizer not found at dist/tokenizer/rdmca_spm.model")
-        print("  Run: python scripts/train_tokenizer.py --profile <profile>")
+        print("  Run: python scripts/train_tokenizer.py --level <N>")
         sys.exit(1)
     try:
         loader = DataLoader.from_config(stage, cfg, tokenizer)
@@ -134,8 +134,8 @@ def build_data_loader(stage: int, cfg: dict):
         return loader
     except FileNotFoundError as e:
         print(f"ERROR: {e}")
-        print(f"  Run: python scripts/prepare_data.py --stage {stage} "
-              f"--profile {cfg.get('profile', '')}".rstrip())
+        print(f"  Run: python scripts/prepare_data.py --level {cfg.get('level', '')} "
+              f"--stage {stage}".rstrip())
         sys.exit(1)
 
 
@@ -467,52 +467,74 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python train_stage.py --stage 1 --config configs/rdmca_t2.yaml
-  python train_stage.py --stage 1 --config configs/rdmca_t2.yaml --resume
-  python train_stage.py --stage 2 --config configs/rdmca_t2.yaml
+  python train_stage.py --level 1 --stage 1
+  python train_stage.py --level 1 --stage 1 --resume
+  python train_stage.py --level 2 --stage 2
         """
     )
     parser.add_argument("--stage",  type=int, required=True,
                         choices=[1, 2, 3, 4, 5], help="Curriculum stage (1-5)")
-    parser.add_argument("--profile", type=str, default=None,
-                        help="Hardware profile: nano | m2max | a100 | cluster "
-                             "(resolves to configs/profiles/<name>.yaml)")
-    parser.add_argument("--config", type=str, default="configs/rdmca_t2.yaml")
+    parser.add_argument("--level", type=int, default=None,
+                        help="Educational level 1-5 (preescolar..universidad). "
+                             "Determines model size, data and resources.")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Explicit config path (overrides --level)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint in stage dir")
+    parser.add_argument("--force", action="store_true",
+                        help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()
 
-    if args.profile:
-        args.config = f"configs/profiles/{args.profile}.yaml"
-    cfg = load_config(args.config)
-    require_backend(cfg)              # mlx only for now; torch errors clearly
-    print(f"  Profile: {cfg.get('profile', '(custom)')} | "
-          f"tier: {cfg.get('tier', '?')} | backend: {cfg.get('backend', 'mlx')} | "
-          f"config: {args.config}")
+    from src.config import resolve_config_path
+    cfg_path = resolve_config_path(args.config, args.level)
+    cfg = load_config(cfg_path)
+    level = cfg.get("level", "?")
+    require_backend(cfg)              # selects the configured backend (mlx | torch)
+    print(f"  Level: {level} ({cfg.get('name','custom')}) | "
+          f"backend: {cfg.get('backend','mlx')} | config: {cfg_path}")
 
-    # Prerequisite check
-    if args.stage > 1:
+    # Is this stage active at this level? (entry_level ≤ level and present)
+    skey = f"stage{args.stage}"
+    cur = cfg.get("curriculum", {}) or {}
+    if skey not in cur:
+        print(f"ERROR: Stage {args.stage} is not part of level {level}.")
+        active = sorted(int(k.replace('stage','')) for k in cur)
+        print(f"  Active stages at level {level}: {active}")
+        sys.exit(1)
+    entry = int(cur[skey].get("entry_level", 1))
+    if entry > (level if isinstance(level, int) else 99):
+        print(f"ERROR: Stage {args.stage} enters at level {entry}; you are at level {level}.")
+        print(f"  Train it at level {entry} or higher.")
+        sys.exit(1)
+
+    # Resource guard + announce (avoid OOM mid-run; report what is being learned).
+    from src import resources as R
+    R.announce(cfg, mode="train", stage=args.stage)
+    R.guard(cfg, mode="train", force=args.force)
+
+    # Prerequisite check (previous active stage must be complete)
+    if args.stage > 1 and f"stage{args.stage-1}" in cur:
         prev = ckpt_root(cfg) / f"stage{args.stage-1}" / "stage_complete.json"
         if not prev.exists():
             print(f"ERROR: Stage {args.stage-1} must complete before Stage {args.stage}.")
-            print(f"  Run: python train_stage.py --stage {args.stage-1} --config {args.config}")
+            print(f"  Run: python train_stage.py --level {level} --stage {args.stage-1}")
             sys.exit(1)
         print(f"  Stage {args.stage-1} prereq OK")
 
     passed = train_stage(args.stage, cfg, resume=args.resume)
 
     skip_gate = cfg.get("skip_gate", False)
-    prof_flag = f" --profile {args.profile}" if args.profile else f" --config {args.config}"
+    lvl_flag = f" --level {level}" if isinstance(level, int) else f" --config {cfg_path}"
     if passed:
         if skip_gate:
             print(f"\nStage {args.stage} complete (smoke test). Pipeline verified.")
-            print(f"Next: python chat.py{prof_flag} --stage {args.stage}")
+            print(f"Next: python chat.py{lvl_flag} --stage {args.stage}")
         elif args.stage < 5:
             nxt = args.stage + 1
-            print(f"\nNext: python train_stage.py{prof_flag} --stage {nxt}")
+            print(f"\nNext: python train_stage.py{lvl_flag} --stage {nxt}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
-            print(f"Next: python consolidation_daemon.py{prof_flag} --once")
+            print(f"Next: python consolidation_daemon.py{lvl_flag} --once")
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print(f"  Options: extend corpus, adjust thresholds, or --resume")

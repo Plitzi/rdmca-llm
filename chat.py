@@ -132,6 +132,11 @@ def load_model(args):
     B = backend.current()
     precision = get_precision(cfg)
 
+    # Announce what this level can do + guard inference memory against the device.
+    from src import resources as R
+    R.announce(cfg, mode="infer")
+    R.guard(cfg, mode="infer", force=getattr(args, "force", False))
+
     # Import model modules now that the backend is selected.
     from src.model.transformer import RDMCAFoundational, set_model_precision
     from src.model.config import ModelConfig
@@ -166,8 +171,8 @@ def load_model(args):
         ckpt_path = Path(args.checkpoint)
     elif args.stage:
         import json as _json
-        profile   = cfg.get("profile")
-        root      = Path("dist/checkpoints") / profile if profile else Path("dist/checkpoints")
+        level     = cfg.get("level")
+        root      = Path("dist/checkpoints") / f"level{level}" if level else Path("dist/checkpoints")
         stage_dir = root / f"stage{args.stage}"
 
         def _resolve_json(p: Path) -> Path | None:
@@ -356,9 +361,10 @@ Examples:
   python chat.py --stage 1 --lang es --temp 0.8
         """,
     )
-    parser.add_argument("--config",     default="configs/rdmca_t2.yaml")
-    parser.add_argument("--profile",    type=str, default=None,
-                        help="Hardware profile: nano | m2max | a100 | cluster")
+    parser.add_argument("--config",     default=None,
+                        help="Explicit config path (overrides --level)")
+    parser.add_argument("--level",      type=int, default=None,
+                        help="Educational level 1-5 (which base to chat with)")
     parser.add_argument("--stage",      type=int, default=None,
                         help="Load latest checkpoint from this stage")
     parser.add_argument("--checkpoint", type=str, default=None,
@@ -377,10 +383,12 @@ Examples:
                         help="Nucleus sampling p (default: 0.9)")
     parser.add_argument("--maxtok",     type=int,   default=256,
                         help="Max new tokens per turn (default: 256)")
+    parser.add_argument("--force",      action="store_true",
+                        help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()
 
-    if args.profile:
-        args.config = f"configs/profiles/{args.profile}.yaml"
+    from src.config import resolve_config_path
+    args.config = resolve_config_path(args.config, args.level)
 
     if not args.dummy and args.stage is None and args.checkpoint is None:
         print("Specify --stage N, --checkpoint PATH, or --dummy")

@@ -1,0 +1,97 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · LEVEL 1 — Preescolar (preschool)                                  ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  The most basic base. Like a small child: a tiny vocabulary, short simple  ║
+# ║  sentences, can hold a basic conversation, and does very basic arithmetic  ║
+# ║  (counting and single-digit + / −). Trains in minutes–hours on a laptop.   ║
+# ║                                                                            ║
+# ║  A level's SIZE is dictated by the INFORMATION it must learn, not by the   ║
+# ║  hardware. The hardware only limits how high a level you can run (see the  ║
+# ║  resource guard in src/resources.py).                                      ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+level: 1                       # level number (1..5). Selected with `--level 1`.
+name: "Preescolar"             # human grade name, shown by the startup announce.
+backend: mlx                   # mlx | torch  (both supported)
+tier: edge                     # informational tag (edge = runs on a laptop)
+
+# What the model learns at this level — printed by the resource 'announce' so
+# you always know what areas the base is being taught.
+information:
+  summary: "Conversación muy básica, vocabulario de niño pequeño y aritmética simple (contar, +/− de un dígito)."
+  areas:                       # keyed by stage number (only active stages)
+    1: "Lenguaje: palabras y frases cortas, diálogo simple — puede conversar."
+    2: "Patrones: secuencias y analogías muy simples (esto va con esto)."
+    3: "Aritmética: contar y sumar/restar números de un solo dígito."
+
+# ── Model — dimensioned to the information above (tiny). ──────────────────────
+model:
+  d_model: 128                 # hidden width. Small vocab/short text ⇒ narrow.
+  n_layers: 4                  # transformer blocks (depth).
+  n_heads: 4                   # attention heads (head_dim = d_model/n_heads = 32).
+  ffn_dim: 512                 # SwiGLU inner dim (≈4·d_model).
+  context_len: 128             # max tokens of context — short for simple text.
+  vocab_size: 4096             # "child" vocabulary (the tokenizer is trained to this).
+  mrl_dims: [64, 128]          # Matryoshka prefix dims used by the MRL loss.
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en"]            # config-driven languages (edit to add "es").
+
+# ── Training hyperparameters. ────────────────────────────────────────────────
+training:
+  precision: bf16              # fp32 | bf16 | fp16 (default bf16).
+  lr: 5.0e-4                   # higher LR is fine for a tiny model.
+  lr_min: 5.0e-5
+  weight_decay: 0.1
+  batch_size: 16               # big batch fits easily at this size.
+  grad_accumulation: 2         # effective batch = batch_size × grad_accumulation.
+  warmup_steps: 200
+  save_every: 500
+  eval_every: 1000
+  clip_grad_norm: 1.0
+
+# ── Resource estimates (documented; the live guard recomputes from `model`). ──
+# These are reference figures so you can compare levels at a glance. The actual
+# go/no-go decision is made at runtime by src/resources.py against real free RAM.
+resources:
+  est_params_m: 2              # ≈ millions of parameters (live count ≈ 2.1M).
+  est_train_mem_gb: 0.2        # ≈ peak training memory.
+  est_infer_mem_gb: 0.1        # ≈ inference memory.
+  min_ram_gb: 2                # informational minimum to run comfortably.
+
+skip_gate: true                # no graduation gate at the basic level.
+
+# ── Curriculum — which cognitive stages are active and their graded data. ────
+# A stage runs only if `entry_level` ≤ this level. Data complexity is graded per
+# level: `sources` lists where the data comes from, `filter` caps complexity
+# (null = no filter, used only at level 5). See scripts/prepare_data.py.
+curriculum:
+  stage1:
+    name: "Language and communication"
+    entry_level: 1             # language is the foundation — present from level 1.
+    n_tokens: 300_000_000      # training-token budget for this stage at this level.
+    data_dir: "data/level1/stage1"
+    data:
+      sources: [tinystories, dialogue]   # simple stories + synthetic simple dialogue.
+      filter:
+        # Flesch-Kincaid US grade ceiling (words/sentence + syllables/word).
+        # Lower = simpler reading level. ~2 ≈ a 7-year-old's reading level.
+        max_grade: 2
+        max_word_len: 12           # also drop texts with very long words.
+  stage2:
+    name: "Perception and pattern recognition"
+    entry_level: 1
+    n_tokens: 30_000_000
+    data_dir: "data/level1/stage2"
+    data:
+      sources: [analogies]       # synthetic simple analogies/sequences.
+      filter: null               # already simple by construction.
+  stage3:
+    name: "Abstraction and symbolic composition"
+    entry_level: 1             # basic arithmetic from the very start.
+    n_tokens: 50_000_000
+    data_dir: "data/level1/stage3"
+    data:
+      sources: [arithmetic]
+      filter:
+        arithmetic_level: 1        # 1 = single-digit + / − only (e.g. "3 + 4 = 7").

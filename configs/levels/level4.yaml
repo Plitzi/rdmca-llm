@@ -1,0 +1,102 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · LEVEL 4 — Bachillerato (high school)                              ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  Advanced text, word-problem math (GSM8K), causal + procedural reasoning,  ║
+# ║  and the first ethics. Needs a serious GPU (e.g. A100-class) — defaults to ║
+# ║  the torch/CUDA backend.                                                   ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+level: 4
+name: "Bachillerato"
+backend: torch                 # this level targets CUDA GPUs
+tier: gpu
+
+information:
+  summary: "Texto avanzado, problemas de palabra (GSM8K), razonamiento causal y procedural, y ética."
+  areas:
+    1: "Lenguaje: textos avanzados y especializados."
+    2: "Patrones: razonamiento abstracto exigente (ARC-Challenge)."
+    3: "Matemáticas: problemas de palabra y aritmética avanzada (GSM8K)."
+    4: "Causal/Procedural: cadenas causa→efecto y procedimientos paso a paso."
+    5: "Ética: principios morales y restricciones de comportamiento (BCF)."
+
+model:
+  d_model: 512
+  n_layers: 12
+  n_heads: 8                   # head_dim = 64
+  ffn_dim: 2048
+  context_len: 1024
+  vocab_size: 24576
+  mrl_dims: [128, 256, 512]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en"]
+
+training:
+  precision: bf16
+  lr: 3.0e-4
+  lr_min: 3.0e-5
+  weight_decay: 0.1
+  batch_size: 8
+  grad_accumulation: 8
+  warmup_steps: 2000
+  save_every: 5000
+  eval_every: 10000
+  clip_grad_norm: 1.0
+
+resources:
+  est_params_m: 76             # live count ≈ 75.5M
+  est_train_mem_gb: 5
+  est_infer_mem_gb: 1
+  min_vram_gb: 16
+
+skip_gate: false
+gate:
+  max_perplexity: {1: 42.0, 2: 40.0, 3: 38.0, 4: 36.0, 5: 34.0}
+
+curriculum:
+  stage1:
+    name: "Language and communication"
+    entry_level: 1
+    n_tokens: 1_500_000_000
+    data_dir: "data/level4/stage1"
+    data:
+      sources: [wikipedia]
+      filter:
+        max_grade: 13              # ~high-school / early-college reading level.
+        max_word_len: 28
+  stage2:
+    name: "Perception and pattern recognition"
+    entry_level: 1
+    n_tokens: 300_000_000
+    data_dir: "data/level4/stage2"
+    data:
+      sources: [arc_easy, arc_challenge]
+      filter: null
+  stage3:
+    name: "Abstraction and symbolic composition"
+    entry_level: 1
+    n_tokens: 700_000_000
+    data_dir: "data/level4/stage3"
+    data:
+      sources: [arithmetic, gsm8k]
+      filter:
+        arithmetic_level: 4            # 4 = harder arithmetic alongside GSM8K word problems.
+  stage4:
+    name: "Causal and procedural reasoning"
+    entry_level: 3
+    n_tokens: 500_000_000
+    data_dir: "data/level4/stage4"
+    data:
+      sources: [causal_synth, wikipedia]
+      filter:
+        max_grade: 13
+        max_word_len: 28
+  stage5:
+    name: "Cognitive ethics and BCF"
+    entry_level: 4                     # ethics enters here.
+    n_tokens: 100_000_000
+    data_dir: "data/level4/stage5"
+    data:
+      sources: [ethics]
+      filter: null

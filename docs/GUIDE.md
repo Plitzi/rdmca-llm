@@ -20,7 +20,7 @@ Contents:
 8. [Freeze + BCF](#8-freeze--bcf)
 9. [Chat (text / image / audio)](#9-chat)
 10. [Daily consolidation](#10-daily-consolidation)
-11. [Quick test (the `test` profile)](#11-quick-test-the-test-profile)
+11. [Quick test (level 1)](#11-quick-test-level-1)
 12. [Cleanup](#12-cleanup)
 13. [Scaling up (T3/T4)](#13-scaling-up-t3t4)
 
@@ -31,18 +31,17 @@ Contents:
 - **Apple Silicon Mac** (M1/M2/M3/M4) with the **MLX** backend (unified GPU), **or**
   **Linux/cloud with NVIDIA CUDA** (or CPU/MPS) with the **PyTorch** backend.
 - Python 3.10 (macOS: Homebrew).
-- ~40 GB free (data + weights + venv) for a real run; the `test` profile needs little.
+- ~40 GB free (data + weights + venv) for a real run; level 1 needs little.
 
 ## 2. Setup (once)
 
 ```bash
 /opt/homebrew/bin/python3.10 -m venv .venv      # (any Python 3.10 venv on Linux)
 source .venv/bin/activate
-pip install sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfile
 
-# + exactly ONE compute backend:
-pip install mlx mlx-lm     # Apple Silicon — fastest on Mac
-pip install torch          # Linux/cloud (CUDA) or Mac (MPS/CPU)
+# Base deps + exactly ONE compute backend:
+pip install -r requirements.txt -r requirements-mlx.txt     # Apple Silicon — fastest on Mac
+pip install -r requirements.txt -r requirements-torch.txt   # Linux/cloud (CUDA) or Mac (MPS/CPU)
 
 # Sanity-check the backend you installed:
 python -c "import mlx.core as mx; print(mx.default_device())"          # MLX → Device(gpu, 0)
@@ -55,7 +54,7 @@ themselves with the venv's Python if you run them without activating it.
 
 ## 3. Backend & precision
 
-Both are set in the config / profile.
+Both are set in the level config.
 
 ```yaml
 backend: mlx          # mlx | torch  (both fully supported)
@@ -66,8 +65,8 @@ training:
 - **Backend** — the **same model code** runs on either backend (one source of truth
   behind `src/backend/`); `require_backend()` selects it at startup. Use `mlx` on
   Apple Silicon (fastest there) and `torch` on Linux/cloud CUDA (or Mac MPS/CPU). The
-  cloud profiles `a100`/`cluster` default to `torch`; `test`/`nano`/`m2max` to `mlx`.
-  PyTorch auto-picks the device: CUDA → MPS → CPU.
+  higher levels (`level4`/`level5`) default to `torch`; the lower ones to `mlx` — change
+  the `backend:` key in any level config. PyTorch auto-picks the device: CUDA → MPS → CPU.
   **Checkpoints are cross-backend** for the text foundational model: a core trained on
   MLX loads into the PyTorch model and vice-versa (identical parameter names).
   *Exception:* the image/audio VQ-VAE weight checkpoints are **not** cross-backend
@@ -104,19 +103,20 @@ Downloads Wikipedia (one dump per language) + per-stage task datasets. It is
 
 ```bash
 # Per stage (recommended; you can pause between stages)
-python scripts/prepare_data.py --profile m2max --stage 1
-python scripts/prepare_data.py --profile m2max --stage 2
+python scripts/prepare_data.py --level 3 --stage 1
+python scripts/prepare_data.py --level 3 --stage 2
 # … 3, 4, 5
 
 # All at once
-python scripts/prepare_data.py --profile m2max --stage all
+python scripts/prepare_data.py --level 3 --stage all
 
-# Small slice for testing (50 MB per language)
-python scripts/prepare_data.py --profile test --stage 1 --limit 50
+# Most basic level (small, fast)
+python scripts/prepare_data.py --level 1 --stage 1
 ```
 
-Output: `data/stage{1..5}_*/` as `.jsonl` (`{"text": "...", "lang": "<code>"}`).
-A real bilingual run is roughly ~18 GB downloaded, ~36 GB on disk.
+Output: `data/level{N}/stage{1..5}/` as `.jsonl` (`{"text": "...", "lang": "<code>"}`),
+one file per source. Level 5 reuses the full unfiltered `data/stage{1..5}_*/` dirs.
+A real high-level bilingual run is roughly ~18 GB downloaded, ~36 GB on disk.
 
 ## 6. Tokenizers
 
@@ -126,7 +126,7 @@ Train it **after** you have Stage-1 data. It creates the SentencePiece model and
 **unified vocabulary** (text ∪ image ∪ audio) in `tokenizer_info.json`.
 
 ```bash
-python scripts/train_tokenizer.py --profile m2max --vocab_size 65536 --sample_mb 500
+python scripts/train_tokenizer.py --level 3 --vocab_size 65536 --sample_mb 500
 ```
 
 ### 6.2 Image and audio (optional, for multimodal)
@@ -149,37 +149,37 @@ Output: `dist/tokenizer/image_vqvae.npz` and `dist/tokenizer/audio_vqvae.npz`.
 ## 7. Train the 5 stages
 
 Progressive curriculum. Each stage must pass its graduation gate before the next (the
-`test` profile skips it). Checkpoints are saved automatically; `--resume` continues.
+level 1 skips it). Checkpoints are saved automatically; `--resume` continues.
 
 ```bash
-python train_stage.py --profile m2max --stage 1      # Language
-python train_stage.py --profile m2max --stage 2      # Patterns
-python train_stage.py --profile m2max --stage 3      # Abstraction
-python train_stage.py --profile m2max --stage 4      # Causality
-python train_stage.py --profile m2max --stage 5      # Ethics + BCF
+python train_stage.py --level 3 --stage 1      # Language
+python train_stage.py --level 3 --stage 2      # Patterns
+python train_stage.py --level 3 --stage 3      # Abstraction
+python train_stage.py --level 3 --stage 4      # Causality
+python train_stage.py --level 3 --stage 5      # Ethics + BCF
 
 # Resume after Ctrl+C
-python train_stage.py --profile m2max --stage 1 --resume
+python train_stage.py --level 3 --stage 1 --resume
 ```
 
 | Stage | Gate metric | Threshold |
 |---|---|---|
-| 1 Language | val perplexity (BLiMP proxy) | per profile |
-| 2 Patterns | val perplexity (ARC proxy) | per profile |
-| 3 Abstraction | val perplexity (GSM8K proxy) | per profile |
-| 4 Causal | val perplexity | per profile |
-| 5 Ethics | val perplexity + **BCF probe ≥ 0.90** | per profile |
+| 1 Language | val perplexity (BLiMP proxy) | per level |
+| 2 Patterns | val perplexity (ARC proxy) | per level |
+| 3 Abstraction | val perplexity (GSM8K proxy) | per level |
+| 4 Causal | val perplexity | per level |
+| 5 Ethics | val perplexity + **BCF probe ≥ 0.90** | per level |
 
 > Gates use **validation perplexity** as the operative proxy. To use real benchmarks
 > (BLiMP/ARC/GSM8K), replace `evaluate_gate` in `train_stage.py`.
 
-Checkpoints live in `dist/checkpoints/<profile>/stage<N>/` (`step_*.npz`, `latest.json`,
+Checkpoints live in `dist/checkpoints/level<N>/stage<N>/` (`step_*.npz`, `latest.json`,
 `final.npz`, `stage_complete.json`).
 
 ## 8. Freeze + BCF
 
 When **Stage 5** completes, the foundational core is **frozen permanently** and saved to
-`dist/checkpoints/<profile>/foundational/theta_f_frozen.npz`. If
+`dist/checkpoints/level<N>/foundational/theta_f_frozen.npz`. If
 `data/benchmarks/bcf_probes.jsonl` exists (one `{"text": "...", "label": 0|1}` per line),
 the BCF safety head is also trained and saved as `bcf_head.npz`. This happens
 automatically inside `train_stage.py --stage 5`.
@@ -189,10 +189,10 @@ From here the core is never touched again: all learning is through consolidation
 ## 9. Chat
 
 ```bash
-python chat.py --profile m2max --stage 5                 # core + sectors
-python chat.py --profile m2max --stage 1 --lang es       # Spanish session
-python chat.py --profile m2max --stage 5 --image foto.png   # visual grounding
-python chat.py --profile m2max --stage 5 --audio clip.wav   # audio grounding
+python chat.py --level 3 --stage 5                 # core + sectors
+python chat.py --level 3 --stage 1 --lang es       # Spanish session
+python chat.py --level 3 --stage 5 --image foto.png   # visual grounding
+python chat.py --level 3 --stage 5 --audio clip.wav   # audio grounding
 ```
 
 In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512` · `/stats`
@@ -214,29 +214,29 @@ sectors stay intact) → PGQ (sector growth) → snapshot/rollback → audit log
 `logs/cycle_*.json`.
 
 ```bash
-python consolidation_daemon.py --profile m2max --once    # one cycle, then exit
-python consolidation_daemon.py --profile m2max           # daemon (waits for idle)
+python consolidation_daemon.py --level 3 --once    # one cycle, then exit
+python consolidation_daemon.py --level 3           # daemon (waits for idle)
 ```
 
-Updated sectors are saved to `dist/checkpoints/<profile>/sectors.npz`; long-term memory
+Updated sectors are saved to `dist/checkpoints/level<N>/sectors.npz`; long-term memory
 to `data/runtime/ltss.db`.
 
-## 11. Quick test (the `test` profile)
+## 11. Quick test (level 1)
 
 The same real flow, with **less data and a small model** (no "toy", no synthetic data).
 Ideal to verify everything runs end-to-end in ~10 min.
 
 ```bash
-python scripts/prepare_data.py    --profile test --stage 1 --limit 50
-python scripts/train_tokenizer.py --profile test --vocab_size 8000 --sample_mb 20
-python train_stage.py             --profile test --stage 1
-python chat.py                    --profile test --stage 1
+python scripts/prepare_data.py    --level 1 --stage 1
+python scripts/train_tokenizer.py --level 1
+python train_stage.py             --level 1 --stage 1
+python chat.py                    --level 1 --stage 1
 ```
 
-The `test` profile (`configs/profiles/test.yaml`) uses `skip_gate: true` and points all
-stages at the same corpus, so you can run the 5 stages → freeze → consolidation without
-downloading the per-stage datasets. It is a pipeline check only; the weights are not
-production-quality.
+Level 1 (`configs/levels/level1.yaml`) uses `skip_gate: true`, a tiny model and simple
+graded data (TinyStories + synthetic dialogue + single-digit arithmetic), so it trains
+fast on a laptop and the model can already **hold a basic conversation and do simple
+arithmetic**. Higher levels add complexity and need more resources.
 
 ## 12. Cleanup
 
@@ -257,9 +257,11 @@ rm -rf snapshots/* logs/* data/runtime/ltss.db data/runtime/experiences.jsonl
 
 The model uses MRL (nested embeddings). A large model can be **truncated down** to a
 smaller tier at inference (not the other way around): train at the size you will use.
-Profiles: `test` (smoke), `nano` (~26M), `m2max` (~109M), `a100`, `cluster` (the last two
-target NVIDIA GPUs and default to `backend: torch`, so they run on CUDA out of the box).
-See [reference/architecture.md](reference/architecture.md).
+**Levels** (`configs/levels/`) set the size from the information taught — 1 Preescolar
+(~2M) · 2 Primaria (~11M) · 3 Secundaria (~32M) · 4 Bachillerato (~76M, `torch`) ·
+5 Universidad (~200M, `torch`, no filters). A startup **resource guard** refuses a level
+that won't fit your hardware (override with `--force`). See
+[reference/architecture.md](reference/architecture.md).
 
 ---
 

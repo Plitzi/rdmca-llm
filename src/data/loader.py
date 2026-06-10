@@ -121,10 +121,9 @@ class DataLoader:
     @classmethod
     def from_config(cls, stage: int, cfg: dict, tokenizer) -> "DataLoader":
         """Build a DataLoader directly from the YAML config + stage number."""
-        stages  = list(cfg["curriculum"].values())
         mcfg    = cfg["model"]
         tcfg    = cfg["training"]
-        stage_cfg = stages[stage - 1]
+        stage_cfg = cfg["curriculum"][f"stage{stage}"]   # key-based (levels may omit stages)
         data_dir  = stage_cfg.get("data_dir", f"data/stage{stage}_language")
 
         ds = TextDataset(

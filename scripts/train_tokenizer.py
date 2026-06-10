@@ -218,28 +218,41 @@ def show_summary(prefix: str, vocab_size: int, unified_size: int,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir",   default="data/stage1_language")
+    parser.add_argument("--level",      type=int, default=None,
+                        help="Educational level 1-5 (sets vocab + data dir)")
+    parser.add_argument("--data_dir",   default=None,
+                        help="Override the stage-1 data dir to sample from")
     parser.add_argument("--output_dir", default="dist/tokenizer")
     parser.add_argument("--config",     default=None,
-                        help="Config path (languages source of truth)")
-    parser.add_argument("--profile",    default=None,
-                        help="Hardware profile: nano | m2max | test | …")
+                        help="Explicit config path (overrides --level)")
     parser.add_argument("--lang",       default=None,
                         help="Comma-separated override of config languages")
-    parser.add_argument("--vocab_size", type=int, default=65536)
+    parser.add_argument("--vocab_size", type=int, default=None,
+                        help="Override vocab size (default: the level's model.vocab_size)")
     parser.add_argument("--sample_mb",  type=int, default=500)
     args = parser.parse_args()
 
     # Languages: --lang override > config(model.languages) > ['en']
-    cfg = load_config(resolve_config_path(args.config, args.profile))
+    cfg = load_config(resolve_config_path(args.config, args.level))
     langs = ([l.strip() for l in args.lang.split(",")] if args.lang
              else get_languages(cfg))
-    console.print(f"  Languages: {', '.join(langs)}")
+    console.print(f"  Level: {cfg.get('level','custom')} ({cfg.get('name','')}) | "
+                  f"Languages: {', '.join(langs)}")
 
-    data_dir = Path(args.data_dir)
+    # Vocab target: explicit flag > level's model.vocab_size > 65536. The level
+    # sets a small "child" vocab at low levels; it is auto-capped to data size below.
+    vocab_target = args.vocab_size or (cfg.get("model", {}) or {}).get("vocab_size", 65536)
+
+    # Data dir: explicit > the level's stage-1 data dir > legacy default.
+    if args.data_dir:
+        data_dir = Path(args.data_dir)
+    else:
+        s1 = (cfg.get("curriculum", {}) or {}).get("stage1", {}) or {}
+        data_dir = Path(s1.get("data_dir", "data/stage1_language"))
     if not any(data_dir.glob("*.jsonl")):
         console.print(f"[red]ERROR:[/red] No .jsonl files in {data_dir}")
-        console.print("Run: python scripts/prepare_data.py --stage 1 first")
+        lvl = cfg.get("level", 1)
+        console.print(f"Run: python scripts/prepare_data.py --level {lvl} --stage 1 first")
         sys.exit(1)
 
     try:
@@ -275,7 +288,7 @@ def main():
         tmp_paths.append(lang_tmp[lang])
 
     results = []
-    vocab_size = args.vocab_size
+    vocab_size = vocab_target
 
     live.update(_renderable())
     with live:
@@ -305,11 +318,11 @@ def main():
             # ── Auto-cap vocab ────────────────────────────────────────────────
             total_chars = sum(os.path.getsize(p) for p in tmp_paths)
             max_safe    = max(500, int(total_chars / 200))
-            vocab_size  = min(args.vocab_size, max_safe)
-            if vocab_size < args.vocab_size:
+            vocab_size  = min(vocab_target, max_safe)
+            if vocab_size < vocab_target:
                 progress.console.print(
                     f"  [yellow]Vocab auto-reduced[/yellow] "
-                    f"{args.vocab_size} → {vocab_size} "
+                    f"{vocab_target} → {vocab_size} "
                     f"(corpus {total_chars/1e6:.1f} MB)"
                 )
 

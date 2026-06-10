@@ -16,19 +16,42 @@ from typing import List, Optional
 import yaml
 
 
-DEFAULT_CONFIG = "configs/rdmca_t2.yaml"
 TOKENIZER_INFO = "dist/tokenizer/tokenizer_info.json"
+
+# Educational LEVELS replace the old hardware profiles. A level's size is set by
+# the INFORMATION it teaches (vocab/context/width/depth); the hardware only
+# limits how high a level you can run. Levels 1..5 = preescolar..universidad.
+LEVELS_DIR = "configs/levels"
+MIN_LEVEL, MAX_LEVEL = 1, 5
+DEFAULT_LEVEL = 2                       # primaria — a sensible laptop default
+DEFAULT_CONFIG = f"{LEVELS_DIR}/level{DEFAULT_LEVEL}.yaml"
 
 SUPPORTED_BACKENDS = ("mlx", "torch")
 SUPPORTED_PRECISIONS = ("fp32", "bf16", "fp16")
 
 
+def level_config_path(level: int) -> str:
+    """Path to a level's config YAML (configs/levels/level{N}.yaml)."""
+    return f"{LEVELS_DIR}/level{int(level)}.yaml"
+
+
 def resolve_config_path(config: Optional[str] = None,
-                        profile: Optional[str] = None) -> str:
-    """A profile name wins over an explicit config path; else the default."""
-    if profile:
-        return f"configs/profiles/{profile}.yaml"
+                        level: Optional[int] = None) -> str:
+    """A `--level N` wins over an explicit `--config path`; else the default
+    level. Levels replace the old `--profile` selector."""
+    if level is not None:
+        lvl = int(level)
+        if not (MIN_LEVEL <= lvl <= MAX_LEVEL):
+            raise ValueError(
+                f"Level {lvl} out of range — choose {MIN_LEVEL}..{MAX_LEVEL}.")
+        return level_config_path(lvl)
     return config or DEFAULT_CONFIG
+
+
+def get_level(cfg: dict) -> Optional[int]:
+    """The level number declared in a config, or None for a custom config."""
+    lvl = cfg.get("level")
+    return int(lvl) if lvl is not None else None
 
 
 def load_config(path: str) -> dict:

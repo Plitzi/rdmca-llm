@@ -1,0 +1,91 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · LEVEL 3 — Secundaria (secondary school)                           ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  General knowledge, multi-digit/fraction arithmetic and simple algebra,    ║
+# ║  and the first causal reasoning. Needs a workstation-class GPU or a large  ║
+# ║  unified-memory Mac.                                                       ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+level: 3
+name: "Secundaria"
+backend: mlx                   # mlx | torch
+tier: workstation
+
+information:
+  summary: "Conocimiento general, aritmética multidígito/fracciones y álgebra simple, y razonamiento causal básico."
+  areas:
+    1: "Lenguaje: textos de conocimiento general (Wikipedia filtrada por legibilidad)."
+    2: "Patrones: razonamiento por analogía más exigente (ARC-Easy)."
+    3: "Matemáticas: multidígito, fracciones y álgebra simple."
+    4: "Causal: relaciones causa→efecto básicas."
+
+model:
+  d_model: 384
+  n_layers: 8
+  n_heads: 8                   # head_dim = 48
+  ffn_dim: 1536
+  context_len: 512
+  vocab_size: 16384
+  mrl_dims: [128, 256, 384]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en"]
+
+training:
+  precision: bf16
+  lr: 3.5e-4
+  lr_min: 3.5e-5
+  weight_decay: 0.1
+  batch_size: 8
+  grad_accumulation: 6
+  warmup_steps: 1000
+  save_every: 2000
+  eval_every: 5000
+  clip_grad_norm: 1.0
+
+resources:
+  est_params_m: 32             # live count ≈ 31.5M
+  est_train_mem_gb: 1.5
+  est_infer_mem_gb: 0.2
+  min_ram_gb: 8
+
+skip_gate: false
+gate:
+  max_perplexity: {1: 45.0, 2: 43.0, 3: 40.0, 4: 38.0}
+
+curriculum:
+  stage1:
+    name: "Language and communication"
+    entry_level: 1
+    n_tokens: 1_000_000_000
+    data_dir: "data/level3/stage1"
+    data:
+      sources: [wikipedia]            # full Wikipedia, but readability-filtered.
+      filter:
+        max_grade: 9               # ~secondary-school reading level.
+        max_word_len: 20
+  stage2:
+    name: "Perception and pattern recognition"
+    entry_level: 1
+    n_tokens: 150_000_000
+    data_dir: "data/level3/stage2"
+    data:
+      sources: [analogies, arc_easy]
+      filter: null
+  stage3:
+    name: "Abstraction and symbolic composition"
+    entry_level: 1
+    n_tokens: 400_000_000
+    data_dir: "data/level3/stage3"
+    data:
+      sources: [arithmetic]
+      filter:
+        arithmetic_level: 3            # 3 = multi-digit, fractions, simple algebra.
+  stage4:
+    name: "Causal and procedural reasoning"
+    entry_level: 3                     # causal reasoning enters here.
+    n_tokens: 200_000_000
+    data_dir: "data/level3/stage4"
+    data:
+      sources: [causal_synth]          # synthetic cause→effect statements.
+      filter: null

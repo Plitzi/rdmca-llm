@@ -19,12 +19,15 @@ pip install sentencepiece pyyaml numpy tqdm datasets pytest rich pillow soundfil
 pip install mlx mlx-lm     # Apple Silicon (fastest on Mac)
 pip install torch          # Linux/cloud (CUDA) or Mac (MPS/CPU)
 
-# 2. Exercise the WHOLE real pipeline on a little data (~10 min, `test` profile)
-python scripts/prepare_data.py    --profile test --stage 1 --limit 50
-python scripts/train_tokenizer.py --profile test --vocab_size 8000 --sample_mb 20
-python train_stage.py             --profile test --stage 1
-python chat.py                    --profile test --stage 1
+# 2. Exercise the WHOLE real pipeline at the most basic level (1 = preescolar)
+python scripts/prepare_data.py    --level 1 --stage 1
+python scripts/train_tokenizer.py --level 1
+python train_stage.py             --level 1 --stage 1
+python chat.py                    --level 1 --stage 1
 ```
+
+The level sets the model size, the data complexity and the resource use — pick the
+highest your hardware can run (a startup guard refuses a level that won't fit).
 
 ➡️ **Full step-by-step guide: [docs/GUIDE.md](docs/GUIDE.md)** (setup → backend/precision
 → languages → data → tokenizers → 5 stages → freeze/BCF → chat text/image/audio → daily
@@ -46,8 +49,19 @@ consolidation).
 | Safety | BCF + attack taxonomy (adversarial filter in consolidation) |
 | Hardware | Apple Silicon (MLX) · NVIDIA/CUDA & CPU/MPS (PyTorch) |
 
-Hardware profiles in `configs/profiles/`: `test` (smoke), `nano` (~26M),
-`m2max` (~109M), `a100`, `cluster`.
+**Educational levels** in `configs/levels/` (the size follows the *information*,
+not the hardware — your hardware just caps how high you can go):
+
+| Level | Grade | ~params | Learns |
+|---|---|---|---|
+| 1 | Preescolar | ~2M | basic conversation, simple words, counting & single-digit +/− |
+| 2 | Primaria | ~11M | sentences/paragraphs, 2-digit + − ×, simple patterns |
+| 3 | Secundaria | ~32M | general knowledge, multi-digit/algebra, basic causal reasoning |
+| 4 | Bachillerato | ~76M | advanced text, word-problem math (GSM8K), causal + ethics |
+| 5 | Universidad | ~200M | everything, **no filters** (full Wikipedia, MATH, full ethics) |
+
+Cognitive stages (Language, Patterns, Arithmetic, Causal, Ethics) each enter at a
+level: language/patterns/arithmetic from level 1; causal at 3; ethics at 4.
 
 ---
 

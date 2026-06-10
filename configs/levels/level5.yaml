@@ -1,0 +1,92 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · LEVEL 5 — Universidad (university)                                ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  Everything, with NO complexity filters: full Wikipedia, competition math  ║
+# ║  (MATH), full causal + procedural reasoning, and ethics. Specialized       ║
+# ║  hardware (multi-GPU / large VRAM). Defaults to the torch/CUDA backend.    ║
+# ║                                                                            ║
+# ║  This level REUSES the existing full-corpus dirs (data/stageN_*) — the     ║
+# ║  unfiltered data already downloaded — so no re-download is needed.         ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+level: 5
+name: "Universidad"
+backend: torch                 # multi-GPU / large-VRAM CUDA
+tier: cluster
+
+information:
+  summary: "Todo sin filtros: lenguaje completo, matemáticas de competición, razonamiento causal/procedural y ética completos."
+  areas:
+    1: "Lenguaje: Wikipedia completo, sin filtrar."
+    2: "Patrones: ARC completo (Easy + Challenge)."
+    3: "Matemáticas: aritmética + GSM8K + matemáticas de competición (MATH)."
+    4: "Causal/Procedural: corpus causal completo."
+    5: "Ética: corpus de ética + sondas BCF completas."
+
+model:
+  d_model: 768
+  n_layers: 16
+  n_heads: 12                  # head_dim = 64
+  ffn_dim: 3072
+  context_len: 2048
+  vocab_size: 32768
+  mrl_dims: [256, 512, 768]
+  dropout: 0.1
+  rope_theta: 10000.0
+  languages: ["en"]
+
+training:
+  precision: bf16
+  lr: 3.0e-4
+  lr_min: 3.0e-5
+  weight_decay: 0.1
+  batch_size: 8
+  grad_accumulation: 16
+  warmup_steps: 2000
+  save_every: 5000
+  eval_every: 10000
+  clip_grad_norm: 1.0
+
+resources:
+  est_params_m: 201            # live count ≈ 201.4M
+  est_train_mem_gb: 24
+  est_infer_mem_gb: 3
+  min_vram_gb: 40
+
+skip_gate: false
+gate:
+  max_perplexity: {1: 40.0, 2: 38.0, 3: 36.0, 4: 34.0, 5: 32.0}
+
+# At level 5 every stage is active, data is the FULL unfiltered corpus, and the
+# data dirs are the existing data/stageN_* (no graded subdir, no re-download).
+curriculum:
+  stage1:
+    name: "Language and communication"
+    entry_level: 1
+    n_tokens: 1_500_000_000
+    data_dir: "data/stage1_language"
+    data: {sources: [wikipedia], filter: null}        # null filter = everything.
+  stage2:
+    name: "Perception and pattern recognition"
+    entry_level: 1
+    n_tokens: 500_000_000
+    data_dir: "data/stage2_patterns"
+    data: {sources: [wikipedia, arc_easy, arc_challenge], filter: null}
+  stage3:
+    name: "Abstraction and symbolic composition"
+    entry_level: 1
+    n_tokens: 1_000_000_000
+    data_dir: "data/stage3_abstraction"
+    data: {sources: [wikipedia, arithmetic, gsm8k, math], filter: null}
+  stage4:
+    name: "Causal and procedural reasoning"
+    entry_level: 3
+    n_tokens: 1_000_000_000
+    data_dir: "data/stage4_causal"
+    data: {sources: [wikipedia, causal_synth], filter: null}
+  stage5:
+    name: "Cognitive ethics and BCF"
+    entry_level: 4
+    n_tokens: 500_000_000
+    data_dir: "data/stage5_ethics"
+    data: {sources: [wikipedia, ethics], filter: null}
