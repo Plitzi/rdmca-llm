@@ -18,6 +18,7 @@ uses/agent/
   run_agent.py            # wires the model + tools + skill into the loop
   tools/
     current_time.py       # example tool (TOOL: get_current_time)
+    todo.py               # example planning aid (TOOL: todo) — used when planning
   skills/
     time-helper/SKILL.md  # example skill (Claude-style frontmatter + steps)
 ```

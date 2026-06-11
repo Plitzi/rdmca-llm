@@ -112,7 +112,8 @@ def generate(model,
              context_len: int = 2048,
              stream: bool = True,
              decode_fn=None,
-             max_seconds: float | None = None) -> tuple[list[int], float]:
+             max_seconds: float | None = None,
+             stop_strings: tuple[str, ...] | None = None) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
 
@@ -164,6 +165,17 @@ def generate(model,
         if max_seconds is not None and (time.perf_counter() - t0) > max_seconds:
             break
 
+        # Stop-string check (e.g. role-tag turn-boundary leakage). Needs the
+        # decoded text, so it runs on the tokenizer path; we print only up to the
+        # boundary (in stream mode) and stop before emitting the leaked new turn.
+        if stop_strings and decode_fn is not None:
+            text = decode_fn(generated)
+            cut = agent.first_stop_index(text, stop_strings)
+            if cut is not None:
+                if stream:
+                    sys.stdout.write(text[len(printed):cut]); sys.stdout.flush()
+                break
+
         if stream:
             if decode_fn is not None:
                 text = decode_fn(generated)         # re-decode (subwords join cleanly)
@@ -184,6 +196,7 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
                       context_len: int, stream: bool = False,
                       think_prefix: str = "", answer_prefix: str = "",
                       max_seconds: float | None = None,
+                      answer_stop: tuple[str, ...] | None = agent.ANSWER_STOP_STRINGS,
                       ) -> tuple[str, list[int], float]:
     """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
 
@@ -208,7 +221,8 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
 
     if think_budget <= 0:
         _label(answer_prefix)
-        ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens, **sgen)
+        ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens,
+                            stop_strings=answer_stop, **sgen)
         return "", ids, tps
 
     enc = lambda s: tokenizer.encode(s, lang=lang, add_bos=False, add_eos=False)
@@ -225,7 +239,8 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
     closed = f"{agent.THINK_OPEN} {think_text} {agent.THINK_CLOSE}\n"
     _label(answer_prefix)
     answer_ids, tps_b = generate(model, list(prompt_ids) + enc(closed),
-                                 max_new_tokens=max_new_tokens, **sgen)
+                                 max_new_tokens=max_new_tokens,
+                                 stop_strings=answer_stop, **sgen)
     tps = next((t for t in (tps_b, tps_a) if t), 0.0)   # report a meaningful rate
     return think_text, answer_ids, tps
 
@@ -234,14 +249,41 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
 # Model loading
 # ──────────────────────────────────────────────────────────────────────────────
 
-_QUANT_BITS = {"none": None, "int8": 8, "int4": 4}
+# Quantization is not limited to a fixed menu: both backends do grouped-affine
+# weight quantization at any bit-width in this range. 4-bit is just the smallest
+# useful tier for limited-hardware testing, not the only option.
+_QUANT_MIN, _QUANT_MAX = 2, 8
 
 
-def _apply_quant(model, quant: str) -> None:
-    """Quantize model weights for limited hardware (int8 / int4). No-op for
-    'none'. Real grouped-affine quantization on both backends — see
-    engine.quantize in src/backend/{mlx,torch}_backend.py."""
-    bits = _QUANT_BITS.get(quant or "none")
+def parse_quant(value: str | int | None) -> int | None:
+    """Parse a --quant value into a weight bit-width, or None for no quantization.
+
+    Accepts 'none'/'off'/'' → None, or any bit-width as a plain number ('8') or
+    'int'-prefixed ('int4'), clamped to the supported 2–8 bit range. Usable as an
+    argparse `type=` (raises ArgumentTypeError on bad input)."""
+    if value is None or isinstance(value, int):
+        return value
+    s = value.strip().lower()
+    if s in ("none", "off", ""):
+        return None
+    s = s[3:] if s.startswith("int") else s
+    try:
+        bits = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid --quant {value!r}: use 'none' or a bit-width (e.g. 8, int4)")
+    if not (_QUANT_MIN <= bits <= _QUANT_MAX):
+        raise argparse.ArgumentTypeError(
+            f"--quant bit-width {bits} out of range — supported: {_QUANT_MIN}-{_QUANT_MAX}")
+    return bits
+
+
+def _apply_quant(model, quant) -> None:
+    """Quantize model weights to a given bit-width for limited hardware; no-op for
+    None/'none'. `quant` may be an int bit-width or a raw --quant string (parsed
+    here). Real grouped-affine quantization on both backends at any 2–8 bit width
+    — see engine.quantize in src/backend/{mlx,torch}_backend.py."""
+    bits = parse_quant(quant)
     if bits is None:
         return
     B = backend.current()
@@ -500,13 +542,18 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             elif not stream_on:
                 print(f"{response}\n  [warning: output is not valid JSON]")
         elif not stream_on:
-            print(response)
+            print(result["text"])           # role-tag leakage already trimmed
         print(f"\n  [{len(gen_ids)} tokens · {tps:.1f} tok/s · "
               f"temp={temperature} · top_p={top_p} · format={out_format} · "
               f"think={think_level} · stream={'on' if stream_on else 'off'}]")
 
-        # Add response to history
-        history.extend(gen_ids)
+        # Add response to history — store the *cleaned* reply so role-tag leakage
+        # doesn't compound across turns (re-encode the trimmed text on the tok path).
+        if tok_ready:
+            cleaned = agent.clean_answer(response)
+            history.extend(tokenizer.encode(cleaned, lang=lang, add_bos=False, add_eos=False))
+        else:
+            history.extend(gen_ids)
         last_stats = {
             "n_tokens": len(gen_ids), "tps": tps,
             "temperature": temperature, "top_p": top_p, "think": think_level,
@@ -562,9 +609,10 @@ Examples:
                              "more thinking generally means better answers")
     parser.add_argument("--stream",     action=argparse.BooleanOptionalAction, default=True,
                         help="Stream tokens as they generate (default: on; --no-stream to disable)")
-    parser.add_argument("--quant",       choices=("none", "int8", "int4"), default="none",
-                        help="Weight quantization for limited hardware: none (default), "
-                             "int8 (~4× smaller), int4 (~8× smaller)")
+    parser.add_argument("--quant",       type=parse_quant, default=None, metavar="none|N",
+                        help=f"Weight quantization bit-width: none (default) or "
+                             f"{_QUANT_MIN}-{_QUANT_MAX} bits (e.g. 8, int4). Smaller = less "
+                             f"memory; 4-bit (≈⅛ size) is the limited-hardware testing tier")
     parser.add_argument("--max-seconds", type=float, default=GEN_DEADLINE_S,
                         help=f"Per-generation wall-clock cap, anti-loop guard "
                              f"(default {GEN_DEADLINE_S:g}s; 0 = unlimited)")

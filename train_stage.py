@@ -376,6 +376,14 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     toks_step = bs * seq_len * grad_acc
     warmup    = tcfg["warmup_steps"]
     total_steps = n_tokens_target // toks_step
+    # Cap re-cycling of a small corpus: training a tiny corpus toward an oversized
+    # token target just re-reads it many times → overfit/parroting. Once we know
+    # the corpus size (after the first pass) we lower the effective target to at
+    # most `max_corpus_passes` reads, so the run completes (and the bar reaches
+    # 100%) against a budget the data can actually support.
+    max_passes = int(tcfg.get("max_corpus_passes", 3))
+    target     = n_tokens_target
+    capped     = False
     save_every  = tcfg["save_every"]
     eval_every  = tcfg["eval_every"]
 
@@ -399,7 +407,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
 
-        while tokens_seen < n_tokens_target:
+        while tokens_seen < target:
             # Update learning rate
             lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
                            warmup, total_steps)
@@ -420,6 +428,18 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             step         += 1
             tokens_seen  += toks_step
             running_loss += acc_loss / grad_acc
+
+            # After the first full pass, cap the effective target to the corpus
+            # size × max_passes (only if that's *below* the configured target).
+            if not capped and data_loader.epoch_tokens:
+                capped = True
+                cap = max_passes * data_loader.epoch_tokens
+                if cap < n_tokens_target:
+                    target = cap
+                    dash.set_target(target)
+                    dash.print(f"[corpus] {data_loader.epoch_tokens/1e6:.1f}M tokens/pass "
+                               f"— capping at {max_passes}× ({_fmt_tokens(cap)}) to avoid "
+                               f"overfitting the configured {_fmt_tokens(n_tokens_target)} target")
 
             # Recalculate tps every log_interval steps
             if step % log_interval == 0:
@@ -581,8 +601,11 @@ Examples:
     later = [s for s in active if s > args.stage]
     if passed:
         if skip_gate:
-            print(f"\nStage {args.stage} complete (smoke test). Pipeline verified.")
-            print(f"Next: python uses/chat/run_chat.py{lvl_flag} --stage {active[-1]}")
+            tag = "smoke test — pipeline verified" if level == 0 else "no graduation gate at this level"
+            print(f"\nStage {args.stage} complete ({tag}).")
+            if later:
+                print(f"Next stage: python train_stage.py{lvl_flag} --stage {later[0]}")
+            print(f"Or chat now: python uses/chat/run_chat.py{lvl_flag} --stage {active[-1]}")
         elif later:
             print(f"\nNext: python train_stage.py{lvl_flag} --stage {later[0]}")
         else:

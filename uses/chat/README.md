@@ -9,6 +9,7 @@ python uses/chat/run_chat.py --level 1 --stage 9 --format json   # JSON output
 python uses/chat/run_chat.py --level 1 --stage 9 --think high     # more reasoning
 python uses/chat/run_chat.py --level 1 --stage 9 --no-stream      # batched (no live tokens)
 python uses/chat/run_chat.py --level 1 --stage 9 --quant int4     # 4-bit weights (limited hardware)
+python uses/chat/run_chat.py --level 1 --stage 9 --quant 8        # any 2–8 bit width works too
 python uses/chat/run_chat.py --dummy                              # random weights (plumbing only)
 ```
 
@@ -61,12 +62,20 @@ Streaming needs a real tokenizer; it falls back to batched output otherwise.
 
 ### Quantization (limited hardware)
 
-`--quant int8|int4` quantizes the weights at load time so the model fits in less
-memory: **int8 ≈ ¼** and **int4 ≈ ⅛** of fp32 resident size. It's real
-grouped-affine quantization on both backends (MLX native; torch weight-only with
-packed nibbles at 4-bit). The output head stays in float (most quant-sensitive,
-and the MRL logic slices its weight directly). 4-bit trades some accuracy for the
-memory win — fine for testing on small machines.
+`--quant N` quantizes the weights at load time to **any 2–8 bit width** (accepts
+`int4`, `8`, etc.) so the model fits in less memory. It's real grouped-affine
+quantization on both backends, not a fallback. The output head stays in float
+(most quant-sensitive, and the MRL logic slices its weight directly).
+
+Memory per backend:
+- **MLX** packs at the true bit-width, so resident size scales with `bits`
+  (2/3/4/6/8 supported by MLX).
+- **torch** packs nibbles at 4-bit (**≈⅛** fp32); every other width stores one
+  byte per weight (**≈¼** fp32, same footprint regardless of width — only the
+  numerical precision changes). So **4-bit and 8-bit** are the memory sweet spots.
+
+4-bit (≈⅛ size) is the smallest useful tier for testing on small machines; it
+trades some accuracy for the memory win.
 
 ### Anti-loop guards
 

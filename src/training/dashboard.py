@@ -154,6 +154,15 @@ class TrainingDashboard:
         if self._live:
             self._live.update(self._build_layout())
 
+    def set_target(self, n_tokens_target: int) -> None:
+        """Adjust the token target (and progress-bar total) mid-run — e.g. when the
+        trainer caps re-cycling of a small corpus to a lower effective budget, so
+        the bar still completes at 100% against the real target."""
+        self.n_tokens_target = n_tokens_target
+        self._progress.update(self._task, total=n_tokens_target)
+        if self._live:
+            self._live.update(self._build_layout())
+
     def set_gate_result(self, score: float, passed: bool) -> None:
         self.gate_score  = score
         self.gate_passed = passed

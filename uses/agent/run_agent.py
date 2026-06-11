@@ -29,11 +29,12 @@ from uses.chat import run_chat as chat        # reuse model loading + generation
 from src import agent
 from src.config import resolve_config_path
 from uses.agent.tools.current_time import TOOL as CURRENT_TIME
+from uses.agent.tools.todo import TOOL as TODO
 
 # Tools available to the agent (add your own here). Deliberately NOT a calculator
 # — arithmetic is a learned skill (stage 3) the model should do itself; a tool for
 # it would mask whether the model actually learned arithmetic.
-TOOLS = [CURRENT_TIME]
+TOOLS = [CURRENT_TIME, TODO]    # TODO = planning aid the model uses when available
 
 # Skills available to the agent (Claude-style SKILL.md files).
 SKILLS_DIR = Path(__file__).resolve().parent / "skills"
@@ -103,8 +104,9 @@ def main() -> None:
                     help="Reasoning effort per step: off, low, medium (default), high")
     ap.add_argument("--stream", action=argparse.BooleanOptionalAction, default=True,
                     help="Stream each step live (default: on; --no-stream to disable)")
-    ap.add_argument("--quant", choices=("none", "int8", "int4"), default="none",
-                    help="Weight quantization for limited hardware: none, int8, int4")
+    ap.add_argument("--quant", type=chat.parse_quant, default=None, metavar="none|N",
+                    help="Weight quantization bit-width: none (default) or 2-8 bits "
+                         "(e.g. 8, int4). 4-bit (≈⅛ size) is the limited-hardware tier")
     ap.add_argument("--max-seconds", type=float, default=chat.GEN_DEADLINE_S,
                     help="Per-step wall-clock cap, anti-loop guard (0 = unlimited)")
     args = ap.parse_args()
@@ -125,7 +127,7 @@ def main() -> None:
     skill_md = load_skill(args.skill)
     print(f"  Tools: {[t.name for t in TOOLS]} | Skill: {args.skill if skill_md else '—'}"
           f" | Thinking: {args.think} | Stream: {'on' if args.stream else 'off'}"
-          f" | Quant: {args.quant}\n")
+          f" | Quant: {f'{args.quant}-bit' if args.quant else 'none'}\n")
     print(f"User: {args.query}")
 
     result = agent.run_agent(generate_fn, TOOLS, args.query,

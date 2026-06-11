@@ -33,6 +33,12 @@ class TextDataset:
         self.batch_size = batch_size
         self.shuffle    = shuffle
         self.rng        = random.Random(seed)
+        # Corpus-cycling telemetry: `passes` counts complete reads of the corpus,
+        # `epoch_tokens` is the token count of one full pass (set after the first
+        # epoch). The trainer uses these to cap re-cycling and avoid overfitting a
+        # small corpus toward an oversized token target.
+        self.passes       = 0
+        self.epoch_tokens: Optional[int] = None
         self._files     = self._find_files()
         if not self._files:
             raise FileNotFoundError(
@@ -95,13 +101,20 @@ class TextDataset:
         buf: List[int] = []
 
         while True:
+            epoch_count = 0
             for tok in self._iter_tokens():
                 buf.append(tok)
+                epoch_count += 1
                 if len(buf) >= tokens_needed:
                     arr = np.array(buf[:tokens_needed], dtype=np.int32)
                     arr = arr.reshape(self.batch_size, self.seq_len + 1)
                     yield arr
                     buf = buf[tokens_needed:]
+            # One full pass over the corpus finished; record its size once so the
+            # trainer can detect (and cap) re-cycling of a small corpus.
+            self.passes += 1
+            if self.epoch_tokens is None:
+                self.epoch_tokens = epoch_count
 
     def __iter__(self):
         return self.batches()
@@ -117,6 +130,16 @@ class DataLoader:
 
     def next_batch(self) -> np.ndarray:
         return next(self._iter)
+
+    @property
+    def passes(self) -> int:
+        """Number of complete passes over the corpus so far."""
+        return self._ds.passes
+
+    @property
+    def epoch_tokens(self) -> Optional[int]:
+        """Tokens in one full pass of the corpus (None until the first completes)."""
+        return self._ds.epoch_tokens
 
     @classmethod
     def from_config(cls, stage: int, cfg: dict, tokenizer) -> "DataLoader":

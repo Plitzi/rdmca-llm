@@ -114,7 +114,7 @@ curriculum:
     entry_level: 0
     n_tokens: 100_000_000
     data_dir: "data/level5/stage5"
-    data: {sources: [reasoning], filter: null}  # real CoT (GSM8K) as <think>…</think> + answer
+    data: {sources: [reasoning], filter: null}  # CoT (GSM8K) + planning & tool use (multi-step) in <think>…</think>
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
 # Como el cerebro, no todos los sectores se activan por token: el gate elige los

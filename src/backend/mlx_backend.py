@@ -149,11 +149,12 @@ def _set_precision(model, precision: str) -> None:
 
 def _quantize(model, bits: int = 4, group_size: int = 64,
               skip_names: tuple = ("head",)) -> None:
-    """In-place weight quantization (4- or 8-bit) for limited testing hardware.
+    """In-place weight quantization at any MLX-supported bit-width (2/3/4/6/8).
 
     Uses MLX grouped affine quantization on Linear/Embedding layers whose feature
     dimension is divisible by `group_size`; any layer that doesn't divide evenly
     (small tiers can hit this) is left in its float dtype rather than erroring.
+    MLX packs each weight at the true `bits` width, so memory scales with `bits`.
     `skip_names` (last path component) are left in float — e.g. the output head,
     which the MRL logic slices by `.weight` and which is the most quant-sensitive."""
     skipped = []

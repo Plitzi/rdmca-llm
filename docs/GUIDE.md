@@ -82,8 +82,10 @@ training:
   editing the config: `python train_stage.py --level 4 --stage 1 --precision bf16`
   (the guard recomputes with the chosen dtype; the announce prints it).
 - **Inference quantization** — for running (not training) on limited hardware, chat/agent
-  take `--quant int8|int4`: real grouped-affine quantization (≈¼ / ≈⅛ resident size)
-  via `engine.quantize` on both backends. See [uses/chat/](../uses/chat/).
+  take `--quant N` for any 2–8 bit width (e.g. `int4`, `8`): real grouped-affine
+  quantization via `engine.quantize` on both backends. MLX packs at the true width;
+  torch packs nibbles at 4-bit (≈⅛) and stores a byte per weight otherwise (≈¼), so
+  4-/8-bit are its memory sweet spots. See [uses/chat/](../uses/chat/).
 
 ## 4. Choose languages
 

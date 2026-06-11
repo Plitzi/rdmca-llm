@@ -5,8 +5,8 @@ Ways to consume a trained RDMCA model:
 - **[chat/](chat/)** — interactive conversation (text or JSON output, optional
   `<think>…</think>` reasoning).
 - **[agent/](agent/)** — agentic tool loop (Claude Code-style): the model emits
-  `Action: {…}`, a tool runs, an `Observation` is fed back, repeat. Ships one
-  example tool and one example skill.
+  `Action: {…}`, a tool runs, an `Observation` is fed back, repeat. Ships two
+  example tools (a clock + a `todo` planning aid) and one example skill.
 - **api/** — HTTP serving. _TODO (later)._
 
 ---
@@ -72,8 +72,9 @@ python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
   batch) so chat and agent feel fluid.
 - **Multi-round agent**: the agent runs several think→act→observe rounds until it
   answers (Claude Code-style); each round's reasoning + tool call is surfaced.
-- **Limited hardware**: `--quant int8|int4` loads quantized weights (≈¼ / ≈⅛ size,
-  real on both backends). For *training* bigger levels on the same machine, lower the
+- **Limited hardware**: `--quant N` loads weights quantized to any 2–8 bit width
+  (real on both backends); `--quant int4` (≈⅛ size) is the low-resource testing
+  tier, `int8` ≈¼ size. For *training* bigger levels on the same machine, lower the
   precision (`train_stage.py --precision bf16`) — the memory guard is precision-aware.
 - **Anti-loop**: a degenerate-thinking loop or runaway turn is stopped by a loop
   detector + `--max-seconds` deadline; genuine long reasoning is never truncated.

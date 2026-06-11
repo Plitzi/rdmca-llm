@@ -304,20 +304,115 @@ def _cot_transcript(question: str, answer: str) -> Optional[str]:
             f"The answer is {final}.")
 
 
+# A planning aid the agent can call WHEN AVAILABLE (mirrors uses/agent/tools/todo.py
+# and Claude Code's TodoWrite). Half the reasoning tool-transcripts expose it and
+# half don't, so the model learns to record a plan with `todo` only if the session
+# offers the tool — never to hallucinate a tool that isn't listed.
+_TODO_TOOL_DEF = {
+    "name": "todo",
+    "description": "Record a short plan of steps before acting (use when planning).",
+    "input_schema": {"type": "object",
+                     "properties": {"items": {"type": "array",
+                                              "items": {"type": "string"}}},
+                     "required": []},
+}
+
+
+def _reasoning_tool_transcript(ex: dict, use_todo: bool = False) -> Optional[str]:
+    """Reframe a *multi-step* hermes tool session into a reasoning-with-tools trace:
+    a <think>…</think> that states a PLAN (the real, ordered list of tools the
+    session uses) before the Action/Observation loop runs. This teaches the stage-5
+    behaviour the user asked for — think → plan → (use a `todo` tool if available)
+    → use tools → answer — using the real call sequence as the plan (nothing
+    invented). When `use_todo`, a `todo` tool is added to the listing and the plan
+    is recorded with it first. None unless ≥2 tool calls."""
+    tools, events = _hermes_events(ex)
+    ordered = list(dict.fromkeys(p["name"] for k, p in events
+                                 if k == "call" and p.get("name")))   # de-dup, keep order
+    if len(ordered) < 2:                       # planning only matters when multi-step
+        return None
+    plan = "; ".join(f"{i}) {n}" for i, n in enumerate(ordered, 1))
+
+    # Optionally expose a `todo` tool (only if we have a coherent tool listing to
+    # extend — never advertise a tool the rest of the transcript can't reference).
+    tools_listing, todo_on = tools, False
+    if use_todo and tools:
+        try:
+            arr = json.loads(tools)
+            arr.append(_TODO_TOOL_DEF)
+            tools_listing = json.dumps(arr, ensure_ascii=False)
+            todo_on = True
+        except Exception:
+            todo_on = False
+
+    lines = [f"System: {_AGENTIC_SYS}"]
+    if tools_listing:
+        lines.append(f"Tools: {tools_listing}")
+    injected = False
+    for kind, payload in events:
+        if kind == "user":
+            lines.append(f"User: {payload}")
+            if not injected:                   # plan right after the goal is stated
+                lines.append(f"Assistant: {_THINK_OPEN} To do this I will call, in order: "
+                             f"{plan}. {_THINK_CLOSE}")
+                if todo_on:                    # record the plan with the todo tool
+                    call = {"name": "todo", "input": {"items": ordered}}
+                    obs = {"plan": [{"content": n, "status": "pending"} for n in ordered],
+                           "remaining": len(ordered)}
+                    lines.append(f"Action: {json.dumps(call, ensure_ascii=False)}")
+                    lines.append(f"Observation: {json.dumps(obs, ensure_ascii=False)}")
+                injected = True
+        elif kind == "assistant":
+            lines.append(f"Assistant: {payload}")
+        elif kind == "call":
+            lines.append(f"Action: {json.dumps(payload, ensure_ascii=False)}")
+        elif kind == "result":
+            lines.append(f"Observation: {payload}")
+    return "\n".join(lines) if injected and len(lines) >= 5 else None
+
+
 def stream_reasoning(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
-    """Stream chain-of-thought traces (EN) from GSM8K as <think>…</think> + answer."""
+    """Stage-5 reasoning: blends three real signals so the model learns to think
+    before answering — (1) chain-of-thought (GSM8K), (2) basic planning and (3) tool
+    use (multi-step hermes sessions reframed with a <think> plan). Interleaved ~2
+    CoT : 1 plan+tools so step-by-step reasoning stays dominant. EN only."""
     if "en" not in {l.lower() for l in langs}:
         return
     from datasets import load_dataset
-    try:
-        ds = load_dataset("openai/gsm8k", "main", split="train", streaming=True)
-    except Exception as e:
-        print(f"    [reasoning] {e}")
-        return
-    for ex in ds:
-        text = _cot_transcript(ex.get("question", ""), ex.get("answer", ""))
-        if text:
-            yield {"text": text, "lang": "en"}
+
+    def _load(name, *args, **kw):
+        try:
+            return iter(load_dataset(name, *args, split="train", streaming=True, **kw))
+        except Exception as e:
+            print(f"    [reasoning] {name}: {e}")
+            return iter(())
+
+    cot_it  = _load("openai/gsm8k", "main")
+    tool_it = _load("NousResearch/hermes-function-calling-v1")
+    seen: set = set()
+    n_tool = 0
+    while True:
+        produced = False
+        for _ in range(2):                     # 2 chain-of-thought traces
+            ex = next(cot_it, None)
+            if ex is None:
+                break
+            text = _cot_transcript(ex.get("question", ""), ex.get("answer", ""))
+            if text:
+                produced = True
+                yield {"text": text, "lang": "en"}
+        ex = next(tool_it, None)               # 1 plan + tool-use trace
+        if ex is not None:
+            # Alternate: half the tool traces record the plan with a `todo` tool,
+            # half don't — so the model learns to use it only when it's available.
+            text = _reasoning_tool_transcript(ex, use_todo=(n_tool % 2 == 0))
+            if text and (h := hash(text)) not in seen:
+                seen.add(h)
+                n_tool += 1
+                produced = True
+                yield {"text": text, "lang": "en"}
+        if not produced:                       # both sources exhausted
+            return
 
 
 # ──────────────────────────── MCP protocol (real, EN) ───────────────────────

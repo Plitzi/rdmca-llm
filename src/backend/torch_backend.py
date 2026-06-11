@@ -148,13 +148,15 @@ def _set_precision(model, precision: str) -> None:
     model.to(device=DEVICE, dtype=_PRECISION[precision])
 
 
-# ── Weight-only group-affine quantization (4-/8-bit) ─────────────────────────
+# ── Weight-only group-affine quantization (2–8 bit) ──────────────────────────
 # A real quantizer for the torch backend (not a fallback): Linear/Embedding
-# weights are stored as grouped affine integers — uint8 at 8-bit, packed two
-# nibbles per byte at 4-bit — cutting resident weight memory ~4×/~8× vs fp32 so
-# the model fits on limited testing hardware. Weights are dequantized per
-# forward (standard weight-only scheme), matching the MLX backend's grouped
-# affine quantization so both backends behave the same.
+# weights are stored as grouped affine integers and dequantized per forward
+# (standard weight-only scheme), matching the MLX backend's grouped affine
+# quantization so both backends behave the same numerically at any bit-width.
+# Storage: 4-bit packs two nibbles per byte (~8× smaller than fp32); every other
+# width (2,3,5,6,7,8) stores one uint8 per weight (~4× smaller than fp32, and the
+# same footprint regardless of width — only the numerical precision changes).
+# 4-bit and 8-bit are therefore the memory sweet spots on this backend.
 def _quantize_affine(w: torch.Tensor, bits: int, group_size: int):
     """w:[rows, feat] → (q uint8 [rows, n_groups, g], scale, zero [rows, n_groups])."""
     rows, feat = w.shape

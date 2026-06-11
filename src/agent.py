@@ -47,7 +47,7 @@ def parse_output(text: str, fmt: str) -> dict:
     json → {"format": "json", "json": <obj|None>, "valid": bool, "raw": ...}
     """
     if normalize_format(fmt) == "text":
-        return {"format": "text", "text": text}
+        return {"format": "text", "text": clean_answer(text)}
     text = strip_thinking(text)                 # never parse JSON out of a scratchpad
     obj, valid = None, False
     m = _JSON_OBJ_RE.search(text)               # first {...} span in the output
@@ -131,6 +131,37 @@ def strip_thinking(text: str) -> str:
     if thinking is not None:
         return answer
     return _THINK_OPEN_RE.sub("", text).strip()
+
+
+# Role tags the training transcripts use to delimit turns (User:/Assistant:/…).
+# A turn's reply ends where the next such tag begins; small/undertrained models
+# tend to "keep going" and echo these, so we trim at a turn boundary.
+_ROLES = "User|Assistant|System|Tools?|Observation|Client|Server"
+# Newline-anchored boundary that starts a NEW turn → everything after it is leak.
+ANSWER_STOP_STRINGS = ("\nUser:", "\nAssistant:", "\nSystem:", "\nTools:",
+                       "\nObservation:", "\nClient:", "\nServer:")
+_ROLE_BOUNDARY_RE = re.compile(r"\n\s*(?:" + _ROLES + r")\s*:", re.IGNORECASE)
+_LEADING_ROLE_RE  = re.compile(r"^\s*(?:" + _ROLES + r")\s*:\s*", re.IGNORECASE)
+
+
+def clean_answer(text: str) -> str:
+    """Return just this turn's reply: drop the <think> scratchpad, a leading role
+    tag (a primed 'Assistant:'), and any text from where the model starts echoing
+    a new turn (a 'User:'/'System:'/… boundary). Defensive against the role-tag
+    leakage small models produce; safe no-op on clean output."""
+    text = strip_thinking(text)
+    text = _LEADING_ROLE_RE.sub("", text.lstrip(), count=1)
+    m = _ROLE_BOUNDARY_RE.search(text)
+    if m:
+        text = text[:m.start()]
+    return text.strip()
+
+
+def first_stop_index(text: str, stops=ANSWER_STOP_STRINGS) -> Optional[int]:
+    """Char index of the earliest stop string in `text`, or None. Lets a streaming
+    generator halt (and not print past) a turn-boundary leak as soon as it forms."""
+    hits = [i for i in (text.find(s) for s in stops) if i != -1]
+    return min(hits) if hits else None
 
 
 # ─────────────────────────────── agentic loop ───────────────────────────────
