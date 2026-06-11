@@ -514,6 +514,13 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 acc_loss += B.engine.item(loss)
                 grads = g
 
+            # Pre-clip gradient norm — sampled only on dashboard-refresh steps
+            # (it forces a device sync, so we don't pay it every step). Shown as a
+            # stability metric: sustained spikes mean the LR is too high.
+            grad_norm_val = None
+            if (step + 1) % dash_interval == 0:
+                grad_norm_val = B.engine.grad_norm(model, grads)
+
             # Clip gradients to a global norm (config: training.clip_grad_norm) to
             # tame the loss spikes that come from the occasional high-norm batch.
             if clip_norm:
@@ -552,7 +559,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                     last_tps = (dash_interval * toks_step) / elapsed
                 t_dash = time.time()
                 avg_loss = running_loss / max(step % log_interval or log_interval, 1)
-                dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
+                dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps,
+                            grad_norm=grad_norm_val, passes=data_loader.passes)
 
             # Checkpoint
             if step % save_every == 0:

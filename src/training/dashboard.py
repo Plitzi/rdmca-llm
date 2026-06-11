@@ -3,6 +3,7 @@ Training Dashboard — rich terminal UI for RDMCA stage training.
 Displays a live-updating panel with loss, speed, ETA, memory and gate status.
 """
 from __future__ import annotations
+import math
 import time
 from collections import deque
 from typing import Optional
@@ -137,17 +138,27 @@ class TrainingDashboard:
         self._loss   = 0.0
         self._lr     = 0.0
         self._tps    = 0.0
+        self._grad_norm: Optional[float] = None
+        self._passes: Optional[int] = None
+        self._best_loss = float("inf")
         self._t_start = time.time()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def update(self, step: int, tokens_seen: int, loss: float,
-               lr: float, tps: float) -> None:
+               lr: float, tps: float, grad_norm: float | None = None,
+               passes: int | None = None) -> None:
         self._step   = step
         self._tokens = tokens_seen
         self._loss   = loss
         self._lr     = lr
         self._tps    = tps
+        if grad_norm is not None:
+            self._grad_norm = grad_norm
+        if passes is not None:
+            self._passes = passes
+        if loss < self._best_loss:
+            self._best_loss = loss
         self._loss_hist.append(loss)
         self._tps_hist.append(tps)
         self._progress.update(self._task, completed=tokens_seen)
@@ -218,15 +229,32 @@ class TrainingDashboard:
             if n >= 1_000_000:     return f"{n/1e6:.1f}M"
             return f"{n/1e3:.0f}K"
 
-        stats.add_row("Step",   f"{self._step:,}")
-        stats.add_row("Tokens", f"{_fmt_tok(self._tokens)}  /  {_fmt_tok(self.n_tokens_target)}")
+        # Train perplexity proxy (exp of the loss) and best-loss-so-far.
+        try:
+            ppl = math.exp(self._loss) if self._loss < 30 else float("inf")
+        except (OverflowError, ValueError):
+            ppl = float("inf")
+        best = "" if self._best_loss == float("inf") else f" · best {self._best_loss:.4f}"
+
+        # ETA from the average throughput over the remaining tokens.
+        remaining = max(self.n_tokens_target - self._tokens, 0)
+        eta = _fmt_time(remaining / avg_tps) if avg_tps > 0 and remaining else "─"
+
+        stats.add_row("Step",       f"{self._step:,}")
+        stats.add_row("Tokens",     f"{_fmt_tok(self._tokens)}  /  {_fmt_tok(self.n_tokens_target)}")
         stats.add_row("Loss",       f"{self._loss:.4f}  {arr}  "
                                     f"[dim]{_sparkline(loss_vals)}[/dim]")
-        stats.add_row("Loss (avg)", f"{avg_loss:.4f}  [dim](last 20 steps)[/dim]")
+        stats.add_row("Loss (avg)", f"{avg_loss:.4f}  [dim](last 20{best})[/dim]")
+        stats.add_row("Perplexity", f"{ppl:.1f}  [dim]~exp(loss)[/dim]")
         stats.add_row("LR",         f"{self._lr:.2e}")
         stats.add_row("Speed",      f"{self._tps/1000:.1f} K tok/s  "
                                     f"[dim](avg {avg_tps/1000:.1f} K)[/dim]")
+        if self._grad_norm is not None:
+            stats.add_row("Grad norm", f"{self._grad_norm:.3f}")
         stats.add_row("Elapsed",    _fmt_time(elapsed))
+        stats.add_row("ETA",        eta)
+        if self._passes is not None:
+            stats.add_row("Corpus passes", f"{self._passes}")
         stats.add_row("GPU memory", _mem_str())
 
         if self.last_ckpt_step is not None:
