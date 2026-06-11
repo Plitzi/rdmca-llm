@@ -34,19 +34,26 @@ def _default_name() -> str:
     env = os.environ.get("RDMCA_BACKEND")
     if env:
         return env.lower()
-    try:
-        import mlx.core  # noqa: F401
-        return "mlx"
-    except ImportError:
-        return "torch"
+    return "mlx" if registry.is_available("mlx") else "torch"
 
 
 def select(name: str) -> Backend:
     """Activate a backend by name. Returns the active Backend. Re-selecting the
     same backend is a no-op; switching after model modules are imported is
-    unsupported (their base class is already bound) and emits a warning."""
+    unsupported (their base class is already bound) and emits a warning.
+
+    Pre-checks availability: if `name` can't be imported here (e.g. `mlx` on
+    Linux) it falls back to an installed backend instead of crashing on the heavy
+    import."""
     global _active
-    name = (name or "").lower()
+    requested = (name or "").lower()
+    name = registry.resolve(requested)          # fall back BEFORE any heavy import
+    if name != requested:
+        import warnings
+        warnings.warn(
+            f"Backend {requested!r} is not available here; falling back to {name!r}. "
+            "(Set `backend:` in the config or RDMCA_BACKEND to silence.)",
+            stacklevel=2)
     if _active is not None and _active.name == name:
         return _active
     if _active is not None and _active.name != name:
@@ -64,7 +71,7 @@ def current() -> Backend:
     """Return the active backend, lazily selecting a default if none was set."""
     global _active
     if _active is None:
-        _active = registry.build(_default_name())
+        select(_default_name())                 # routes through the availability pre-check
     return _active
 
 

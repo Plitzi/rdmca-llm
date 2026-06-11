@@ -334,6 +334,23 @@ def load_model(args):
         print("  Run training first to get meaningful generations.\n")
         return model, mcfg
 
+    # Behavioral stages (tool/MCP/skills) run as the FROZEN cognitive core + the
+    # trained LoRA sectors — so language/reasoning stays intact and tool/skill
+    # behaviour is added on top. Falls through to a plain checkpoint for cognitive
+    # stages (or before any freeze).
+    from src.model import sector_io
+    level = cfg.get("level")
+    root  = (Path("dist/checkpoints") if level is None
+             else Path("dist/checkpoints") / f"level{level}")
+    if not args.checkpoint and args.stage:
+        label = sector_io.load_for_inference(model, root, args.stage)
+        if label:
+            print(f"  Loading: {label}")
+            set_model_precision(model, precision)
+            _apply_quant(model, getattr(args, "quant", "none"))
+            B.engine.set_eval(model)
+            return model, mcfg
+
     # Find checkpoint — priority: final.npz > latest.json
     ckpt_path: Path | None = None
     if args.checkpoint:

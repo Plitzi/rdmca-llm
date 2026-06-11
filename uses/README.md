@@ -13,17 +13,20 @@ Ways to consume a trained RDMCA model:
 
 ## Which level should I use for real testing?
 
-**Use level 1.** It is the smallest *real* (non-smoke) level — ~2M params,
-trains on a laptop in a reasonable time, and exercises every real data source
-including the agentic stages (tool use, MCP, skills).
+**Use level 1.** It is the smallest *real* (non-smoke) level — ~10M params,
+sized so it can actually hold a simple conversation (TinyStories-scale), trains
+on a laptop in a reasonable time, and exercises every real data source including
+the agentic stages (tool use, MCP, skills).
 
 - **Level 0** is a throwaway *smoke* tier (2 layers, gibberish output) — only for
   verifying the pipeline runs, not for real behavior.
 - **Levels 2–5** are progressively larger and need much more data/compute
   (level 5 is cluster-grade, ~201M params). Move up once level 1 works.
 
-> Honesty note: at ~2M params, level 1 output is limited and imperfect. The
-> *pipeline and behaviors* are real; *quality* scales with level/compute.
+> Honesty note: level 1 talks simply and makes mistakes — but it should be
+> *coherent*, because the cognitive base is frozen before the behavioral stages
+> (tool/MCP/skills) train as sectors, so they can't overwrite its language.
+> *Quality* still scales with level/compute.
 
 ---
 

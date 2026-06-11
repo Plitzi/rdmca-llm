@@ -24,8 +24,10 @@ Usage:
   python train_stage.py --level 1 --stage 2
 
 Each stage must pass its graduation gate before the next can begin.
-Foundational core (stages 1-6: cognition + values) is frozen permanently after
-the ethics/BCF stage (stage 6); behavioral stages 7-9 train on top as sectors.
+The foundational core (cognition + values) is frozen permanently after the last
+ACTIVE cognitive stage — ethics/BCF (6) when present, else the highest base stage
+(e.g. reasoning (5) at level 1). Behavioral stages 7-9 then train on top as LoRA
+sectors (loaded + frozen core), so they never overwrite language/reasoning.
 """
 import os
 import sys
@@ -71,11 +73,27 @@ STAGE_NAMES = {
     9: "Skills",
 }
 
-# The foundational core (stages 1-6: cognition + values) is frozen permanently
-# after the BCF/ethics stage. Behavioral stages (7-9: tool use / MCP / skills)
-# train on top of the frozen base as sectors. This is the only place the freeze
-# point is defined — change it here if the curriculum order changes.
+# BCF_STAGE is the ethics stage and the LATEST possible freeze point. The actual
+# freeze happens after the last ACTIVE cognitive stage (`last_cognitive_stage`),
+# which is BCF_STAGE when ethics is present and an earlier stage otherwise (e.g.
+# reasoning (5) at level 1). Behavioral stages (>6) then train as LoRA sectors on
+# the frozen core. Change BCF_STAGE here if the curriculum order changes.
 BCF_STAGE = 6
+
+
+def last_cognitive_stage(cfg: dict) -> int | None:
+    """Highest ACTIVE stage that is part of the frozen cognitive base (≤ BCF_STAGE).
+    The core is frozen right after this stage: at L1 (no ethics) that's reasoning
+    (5), at L4+ it's ethics/BCF (6). Below that, behavioral stages add sectors."""
+    active = [int(k.replace("stage", "")) for k in (cfg.get("curriculum") or {})]
+    base = [s for s in active if s <= BCF_STAGE]
+    return max(base) if base else None
+
+
+def is_behavioral_stage(stage: int) -> bool:
+    """Behavioral stages (tool/MCP/skills, > BCF_STAGE) train as LoRA sectors on
+    the frozen core so they never overwrite language/reasoning."""
+    return stage > BCF_STAGE
 
 
 def stage_name(stage: int, cfg: dict | None = None) -> str:
@@ -291,6 +309,22 @@ def freeze_model(model, ckpt_dir: Path):
     print("=" * 60 + "\n")
 
 
+def _on_stage_complete(model, stage: int, cfg: dict, root: Path, ckpt_dir: Path,
+                       precision: str, adapter=None) -> None:
+    """Side effects when a stage finishes: a behavioral stage persists its trained
+    sector; the last cognitive stage trains the BCF head (if ethics is active)
+    and freezes the foundational core. This is the single freeze/sector seam."""
+    from src.model import sector_io
+    if is_behavioral_stage(stage):
+        if adapter is not None:
+            print(f"  Behavioral sector saved: {sector_io.save_sector(adapter, root, stage)}")
+        return
+    if stage == last_cognitive_stage(cfg):
+        if stage == BCF_STAGE:
+            train_bcf_head(model, ckpt_dir, precision)
+        freeze_model(model, root / "foundational")
+
+
 # ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
@@ -342,17 +376,35 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
           f"d_model={model_cfg.d_model} | layers={model_cfg.n_layers} | "
           f"vocab={model_cfg.vocab_size} | precision={precision}")
 
-    # Load the previous active stage's weights as the starting point, if present.
-    prev_n = prev_active_stage(stage, cfg)
-    if prev_n is not None:
-        prev_ckpt = root / f"stage{prev_n}" / "latest.json"
-        if prev_ckpt.exists():
-            with open(prev_ckpt) as f:
-                prev_state = json.load(f)
-            B.engine.load_weights(model, prev_state["checkpoint"])
-            print(f"  Loaded Stage {prev_n} weights as starting point")
-        else:
-            print(f"  No Stage {prev_n} checkpoint found — starting from random init")
+    # Starting weights. Cognitive stages continue from the previous active stage.
+    # Behavioral stages (tool/MCP/skills) instead load the FROZEN cognitive core
+    # and train a LoRA sector on top of it — so language/reasoning is preserved.
+    adapter = None
+    if is_behavioral_stage(stage):
+        from src.model import sector_io
+        core = sector_io.frozen_core_path(root)
+        if not core.exists():
+            print(f"ERROR: behavioral stage {stage} needs the frozen cognitive core, "
+                  f"but it is missing:\n  {core}")
+            print(f"  Train the cognitive base first (through stage "
+                  f"{last_cognitive_stage(cfg)}) — that freezes the core.")
+            sys.exit(1)
+        B.engine.load_weights(model, str(core))
+        set_model_precision(model, precision)
+        sid, adapter = sector_io.attach_for_training(model, stage)
+        print(f"  Loaded frozen core; training behavioral sector S{sid} "
+              f"({B.engine.param_count(adapter)/1e3:.0f}K trainable params) on the frozen base")
+    else:
+        prev_n = prev_active_stage(stage, cfg)
+        if prev_n is not None:
+            prev_ckpt = root / f"stage{prev_n}" / "latest.json"
+            if prev_ckpt.exists():
+                with open(prev_ckpt) as f:
+                    prev_state = json.load(f)
+                B.engine.load_weights(model, prev_state["checkpoint"])
+                print(f"  Loaded Stage {prev_n} weights as starting point")
+            else:
+                print(f"  No Stage {prev_n} checkpoint found — starting from random init")
 
     optimizer = B.engine.make_optimizer(
         model, lr=tcfg["lr"], weight_decay=tcfg["weight_decay"])
@@ -476,9 +528,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                         }, f, indent=2)
                     dash.print(f"[bold green]Stage {stage} COMPLETE — "
                                f"gate {score:.4f}[/bold green]")
-                    if stage == BCF_STAGE:
-                        train_bcf_head(model, ckpt_dir, precision)
-                        freeze_model(model, root / "foundational")
+                    _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
                     return True
 
         # Final dashboard update so it shows 100%
@@ -497,18 +547,14 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                            "checkpoint": ckpt_file,
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
             dash.print(f"[bold green]Stage {stage} COMPLETE (gate skipped)[/bold green]")
-            if stage == BCF_STAGE:
-                train_bcf_head(model, ckpt_dir, precision)
-                freeze_model(model, root / "foundational")
+            _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
             return True
 
         score, passed = evaluate_gate(model, stage, data_loader, cfg)
         dash.set_gate_result(score, passed)
         if passed:
             dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")
-            if stage == BCF_STAGE:
-                train_bcf_head(model, ckpt_dir, precision)
-                freeze_model(model, root / "foundational")
+            _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
         else:
             need = STAGE_GATES[stage][1] if stage in STAGE_GATES else None
             need_txt = f"(need {need:.2f}) " if need is not None else ""
@@ -557,9 +603,9 @@ Examples:
     if args.precision:
         cfg.setdefault("training", {})["precision"] = args.precision
     level = cfg.get("level", "?")
-    require_backend(cfg)              # selects the configured backend (mlx | torch)
+    active_backend = require_backend(cfg)   # selects mlx|torch (falls back if unavailable)
     print(f"  Level: {level} ({cfg.get('name','custom')}) | "
-          f"backend: {cfg.get('backend','mlx')} | config: {cfg_path} | "
+          f"backend: {active_backend} | config: {cfg_path} | "
           f"precision: {get_precision(cfg)}")
 
     # Is this stage active at this level? (entry_level ≤ level and present)

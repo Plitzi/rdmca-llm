@@ -27,13 +27,13 @@ information:
 
 # ── Model — dimensioned to the information above (tiny). ──────────────────────
 model:
-  d_model: 128                 # hidden width. Small vocab/short text ⇒ narrow.
-  n_layers: 4                  # transformer blocks (depth).
-  n_heads: 4                   # attention heads (head_dim = d_model/n_heads = 32).
-  ffn_dim: 512                 # SwiGLU inner dim (≈4·d_model).
-  context_len: 128             # max tokens of context — short for simple text.
-  vocab_size: 4096             # "child" vocabulary (the tokenizer is trained to this).
-  mrl_dims: [64, 128]          # Matryoshka prefix dims used by the MRL loss.
+  d_model: 256                 # hidden width — wide enough for coherent simple conversation.
+  n_layers: 6                  # transformer blocks (depth).
+  n_heads: 8                   # attention heads (head_dim = d_model/n_heads = 32).
+  ffn_dim: 1024                # SwiGLU inner dim (≈4·d_model).
+  context_len: 256             # max tokens of context — room for a short dialogue.
+  vocab_size: 8192             # child vocabulary, richer than a toy (tokenizer trained to this).
+  mrl_dims: [128, 256]         # Matryoshka prefix dims used by the MRL loss.
   dropout: 0.1
   rope_theta: 10000.0
   languages: ["en"]            # config-driven languages (edit to add "es").
@@ -57,10 +57,10 @@ training:
 # These are reference figures so you can compare levels at a glance. The actual
 # go/no-go decision is made at runtime by src/resources.py against real free RAM.
 resources:
-  est_params_m: 2              # ≈ millions of parameters (live count ≈ 2.1M).
-  est_train_mem_gb: 0.2        # ≈ peak training memory.
-  est_infer_mem_gb: 0.1        # ≈ inference memory.
-  min_ram_gb: 2                # informational minimum to run comfortably.
+  est_params_m: 10             # ≈ millions of parameters (live count ≈ 10.5M).
+  est_train_mem_gb: 0.6        # ≈ peak training memory.
+  est_infer_mem_gb: 0.2        # ≈ inference memory.
+  min_ram_gb: 3                # informational minimum to run comfortably.
 
 skip_gate: true                # no graduation gate at the basic level.
 
@@ -72,7 +72,7 @@ curriculum:
   stage1:
     name: "Language and communication"
     entry_level: 1             # language is the foundation — present from level 1.
-    n_tokens: 20_000_000       # ≈10× the 2.1M params for the foundation stage
+    n_tokens: 80_000_000       # foundation stage gets the bulk (~10.5M params, ~20× total)
     data_dir: "data/level1/stage1"
     data:
       sources: [tinystories, dialogue]   # simple stories + synthetic simple dialogue.
@@ -84,7 +84,7 @@ curriculum:
   stage2:
     name: "Perception and pattern recognition"
     entry_level: 1
-    n_tokens: 5_000_000
+    n_tokens: 20_000_000
     data_dir: "data/level1/stage2"
     data:
       sources: [analogies]       # synthetic simple analogies/sequences.
@@ -92,7 +92,7 @@ curriculum:
   stage3:
     name: "Abstraction and symbolic composition"
     entry_level: 1             # basic arithmetic from the very start.
-    n_tokens: 8_000_000
+    n_tokens: 30_000_000
     data_dir: "data/level1/stage3"
     data:
       sources: [arithmetic]
@@ -101,7 +101,7 @@ curriculum:
   stage7:
     name: "Action and tool use"
     entry_level: 0             # agentic from the start; improves as the model grows.
-    n_tokens: 5_000_000
+    n_tokens: 20_000_000
     data_dir: "data/level1/stage7"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
@@ -109,7 +109,7 @@ curriculum:
   stage8:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
-    n_tokens: 4_000_000
+    n_tokens: 15_000_000
     data_dir: "data/level1/stage8"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
@@ -117,7 +117,7 @@ curriculum:
   stage9:
     name: "Skills"
     entry_level: 0
-    n_tokens: 4_000_000
+    n_tokens: 15_000_000
     data_dir: "data/level1/stage9"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
@@ -125,7 +125,7 @@ curriculum:
   stage5:
     name: "Reasoning"
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
-    n_tokens: 6_000_000
+    n_tokens: 25_000_000
     data_dir: "data/level1/stage5"
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.

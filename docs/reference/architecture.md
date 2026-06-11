@@ -196,8 +196,10 @@ developmental order — **1 Language, 2 Patterns, 3 Abstraction/Arithmetic, 4 Ca
 5 Reasoning (chain-of-thought), 6 Ethics+BCF** — each with an `entry_level`:
 language/patterns/arithmetic and reasoning from level 1, causal at 3, ethics at 4.
 Reasoning (5) is the capstone cognition (it orchestrates the lower faculties), and the
-base **freezes at stage 6** (Ethics+BCF) so neither competence nor values drift in
-consolidation. Data is graded per level via `src/data/graded.py` (a Flesch-Kincaid
+base **freezes after the last active cognitive stage** — Ethics+BCF (6) when present,
+else the highest base stage (e.g. reasoning (5) at level 1) — so neither competence nor
+values drift, and the behavioral stages (7-9) train as LoRA sectors on the frozen core
+instead of overwriting it. Data is graded per level via `src/data/graded.py` (a Flesch-Kincaid
 readability gate + synthetic arithmetic/dialogue/analogy/causal generators, GSM8K CoT for
 reasoning, and graded corpora like TinyStories / Simple-English-Wikipedia); **level 5
 applies no filter** and reuses the full corpora.

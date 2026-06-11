@@ -109,8 +109,8 @@ def require_backend(cfg: dict) -> str:
         raise ValueError(
             f"Unknown backend '{name}'. Supported: {', '.join(SUPPORTED_BACKENDS)}")
     import src.backend as backend
-    backend.select(name)
-    return name
+    backend.select(name)            # may fall back (e.g. mlx → torch) if unavailable
+    return backend.name()           # the backend actually activated
 
 
 def get_precision(cfg: dict) -> str:

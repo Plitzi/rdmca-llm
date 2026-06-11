@@ -51,7 +51,7 @@ not the hardware — your hardware just caps how high you can go):
 
 | Level | Grade | ~params | Learns |
 |---|---|---|---|
-| 1 | Preescolar | ~2M | basic conversation, simple words, counting & single-digit +/− |
+| 1 | Preescolar | ~10M | basic conversation, simple words, counting & single-digit +/− |
 | 2 | Primaria | ~11M | sentences/paragraphs, 2-digit + − ×, simple patterns |
 | 3 | Secundaria | ~32M | general knowledge, multi-digit/algebra, basic causal reasoning |
 | 4 | Bachillerato | ~76M | advanced text, word-problem math (GSM8K), causal + ethics |
