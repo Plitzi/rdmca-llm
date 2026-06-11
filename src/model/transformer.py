@@ -203,6 +203,16 @@ class RDMCAFoundational(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg    = cfg
+        # TODO(multimodal / "M1"): embed + head are sized to cfg.vocab_size, which is
+        # the TEXT vocab (8192) — deliberately, to avoid wasting params and creating
+        # "phantom logits" over the unused image/audio ranges of the unified layout
+        # (text [0,8192) · image [8192,16384) · audio [16384,20480)). CONSEQUENCE:
+        # feeding an image/audio token id (≥8192) would index out of bounds. Text-only
+        # training is fine today, but BEFORE enabling multimodal, add a
+        # `model.extend_vocab(new_size)` that grows embed.weight + head.weight
+        # (new rows = mean(existing) + small noise) with a migration checkpoint — do
+        # NOT just train at the full 20480 vocab (that brings back the phantom-logit
+        # problem the text_vocab_size fix removed).
         self.embed  = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.drop   = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
