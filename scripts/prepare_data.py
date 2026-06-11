@@ -45,8 +45,6 @@ from typing import Iterator, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-TOKEN_BUDGET_M = {1: 1500, 2: 500, 3: 1000, 4: 1000, 5: 500}
-
 # HuggingFace token — optional but raises rate limits significantly.
 # Supplied via the HF_TOKEN environment variable (set it in .env — see
 # .env.example). Never prompted: missing just means slower downloads.
