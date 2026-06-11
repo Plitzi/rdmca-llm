@@ -132,6 +132,7 @@ def generate(model,
     generated: list[int] = []
     printed = ""
     repeat_run = 0
+    boundary_hit = False        # broke at a turn-boundary leak → don't flush past it
     t0 = time.perf_counter()
 
     EOS_ID = 3
@@ -174,16 +175,30 @@ def generate(model,
             if cut is not None:
                 if stream:
                     sys.stdout.write(text[len(printed):cut]); sys.stdout.flush()
+                    printed = text[:cut]
+                boundary_hit = True
                 break
 
         if stream:
             if decode_fn is not None:
                 text = decode_fn(generated)         # re-decode (subwords join cleanly)
-                sys.stdout.write(text[len(printed):])
-                sys.stdout.flush()
-                printed = text
+                # Emit only up to the safe boundary — hold back a trailing fragment
+                # that could still grow into a role tag (e.g. 'User' → 'User:'), so a
+                # forming turn boundary is never half-printed.
+                safe = agent.safe_stream_len(text)
+                if safe > len(printed):
+                    sys.stdout.write(text[len(printed):safe])
+                    sys.stdout.flush()
+                    printed = text[:safe]
             else:
                 print("▌", end="", flush=True)
+
+    # Flush any held-back tail (real text that never became a role tag). Skipped
+    # when we stopped at a boundary — everything past it is the leaked next turn.
+    if stream and decode_fn is not None and not boundary_hit:
+        text = decode_fn(generated)
+        if len(text) > len(printed):
+            sys.stdout.write(text[len(printed):]); sys.stdout.flush()
 
     elapsed = time.perf_counter() - t0
     tps = len(generated) / elapsed if elapsed > 0 else 0.0
@@ -227,9 +242,12 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
 
     enc = lambda s: tokenizer.encode(s, lang=lang, add_bos=False, add_eos=False)
     # Phase A — scratchpad. Prime with the opening tag so generation starts inside it.
+    # Stop if the model runs into a new turn (a 'User:'/… leak) — reasoning should
+    # never cross a turn boundary, same as the answer phase.
     _label(think_prefix)
     think_ids, tps_a = generate(model, list(prompt_ids) + enc(agent.THINK_OPEN),
-                                max_new_tokens=think_budget, **sgen)
+                                max_new_tokens=think_budget, stop_strings=answer_stop,
+                                **sgen)
     think_text = tokenizer.decode(think_ids) if think_ids else ""
     if agent.THINK_CLOSE in think_text:                 # model closed early
         think_text = think_text.split(agent.THINK_CLOSE)[0]

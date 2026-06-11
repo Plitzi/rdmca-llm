@@ -145,8 +145,13 @@ _ROLES = "User|Assistant|System|Tools?|Observation|Client|Server"
 # Newline-anchored boundary that starts a NEW turn → everything after it is leak.
 ANSWER_STOP_STRINGS = ("\nUser:", "\nAssistant:", "\nSystem:", "\nTools:",
                        "\nObservation:", "\nClient:", "\nServer:")
-_ROLE_BOUNDARY_RE = re.compile(r"\n\s*(?:" + _ROLES + r")\s*:", re.IGNORECASE)
 _LEADING_ROLE_RE  = re.compile(r"^\s*(?:" + _ROLES + r")\s*:\s*", re.IGNORECASE)
+# A turn boundary is a role tag — newline-anchored OR inline. Small/undertrained
+# models echo the next turn mid-line ("...not sure. User: ...") without a newline,
+# so a \n-anchored match alone leaves the whole run-on blob in the reply. Matched
+# case-sensitively (transcripts always capitalize the tag) to avoid cutting a
+# natural lowercase "user:" in ordinary prose.
+_ROLE_BOUNDARY_RE = re.compile(r"\b(?:" + _ROLES + r")\s*:")
 
 
 def clean_answer(text: str) -> str:
@@ -162,10 +167,36 @@ def clean_answer(text: str) -> str:
     return text.strip()
 
 
+_ROLE_NAMES = ("User", "Assistant", "System", "Tools", "Tool",
+               "Observation", "Client", "Server")
+
+
+def safe_stream_len(text: str) -> int:
+    """Length of `text` that is safe to stream right now. Holds back a trailing
+    fragment that could be the start of a role tag (e.g. a bare 'User' that the
+    next token may turn into 'User:'), so a forming turn boundary is never printed
+    before first_stop_index can cut it. Flush the remainder when generation ends."""
+    longest = 0
+    for r in _ROLE_NAMES:
+        tag = r + ":"
+        for k in range(min(len(tag), len(text)), 0, -1):
+            if text.endswith(tag[:k]):
+                j = len(text) - k
+                if j == 0 or not text[j - 1].isalnum():   # sits on a word boundary
+                    longest = max(longest, k)
+                break
+    return len(text) - longest
+
+
 def first_stop_index(text: str, stops=ANSWER_STOP_STRINGS) -> Optional[int]:
-    """Char index of the earliest stop string in `text`, or None. Lets a streaming
-    generator halt (and not print past) a turn-boundary leak as soon as it forms."""
+    """Char index of the earliest turn-boundary in `text`, or None. Lets a streaming
+    generator halt (and not print past) a turn-boundary leak as soon as it forms —
+    including an inline `User:`/`Assistant:` the model echoes without a newline. A
+    boundary at index 0 is ignored (that's the primed role tag, not a leak)."""
     hits = [i for i in (text.find(s) for s in stops) if i != -1]
+    m = _ROLE_BOUNDARY_RE.search(text)
+    if m and m.start() > 0:
+        hits.append(m.start())
     return min(hits) if hits else None
 
 
