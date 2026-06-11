@@ -36,21 +36,21 @@ model:
                                # the model see complete short stories + multi-turn chats.
   vocab_size: 8192             # child vocabulary, richer than a toy (tokenizer trained to this).
   mrl_dims: [128, 256]         # Matryoshka prefix dims used by the MRL loss.
-  dropout: 0.1
+  dropout: 0.05
   rope_theta: 10000.0
   languages: ["en"]            # config-driven languages (edit to add "es").
 
 # ── Training hyperparameters. ────────────────────────────────────────────────
 training:
   precision: bf16              # fp32 | bf16 | fp16 (default bf16).
-  lr: 5.0e-4                   # higher LR is fine for a tiny model.
+  lr: 3.0e-4                   # validated across transformer scales (Chinchilla, GPT-2, Pythia)
   lr_min: 5.0e-5
-  weight_decay: 0.1
+  weight_decay: 0.01             # 0.1 shrinks params to 30% norm over 24k steps; 0.01 is standard for <100M
   batch_size: 16               # big batch fits easily at this size.
   grad_accumulation: 1         # effective batch = batch_size × grad_accumulation
                                # (the loop now sums micro-batch grads — true
                                # accumulation). bs=16 is already plenty here, so 1.
-  warmup_steps: 200
+  warmup_steps: 500             # 2.0% of schedule (was 0.82%) — safer warmup→cosine transition
   save_every: 500
   eval_every: 1000
   clip_grad_norm: 1.0
@@ -120,7 +120,7 @@ curriculum:
   stage7:
     name: "Action and tool use"
     entry_level: 0             # agentic from the start; improves as the model grows.
-    n_tokens: 20_000_000
+    n_tokens: 200_000_000         # was 20M — 1.9 tok/param was severely under-budgeted; 200M ≈ 19 tok/param
     data_dir: "data/level1/stage7"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).

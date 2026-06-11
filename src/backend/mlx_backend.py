@@ -286,7 +286,7 @@ def _memory_stats() -> dict:
 _engine = SimpleNamespace(
     value_and_grad=lambda model, fn: mlx_nn.value_and_grad(model, fn),
     make_optimizer=lambda model, lr, weight_decay: mlx_optim.AdamW(
-        learning_rate=lr, weight_decay=weight_decay),
+        learning_rate=lr, weight_decay=weight_decay, bias_correction=True),
     optimizer_step=_optimizer_step,
     set_lr=lambda opt, lr: setattr(opt, "learning_rate", lr),
     eval=lambda *xs: mx.eval(*xs) if xs else None,

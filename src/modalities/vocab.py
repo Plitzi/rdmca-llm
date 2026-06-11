@@ -48,14 +48,19 @@ def tokenizer_symbols(langs: List[str]) -> List[str]:
             + list(CONTROL_SPECIALS))
 
 
-def build_modality_layout(text_vocab_size: int) -> Dict:
-    """Return offsets/sizes for each modality range and the unified total."""
+def build_modality_layout(text_vocab_size: int,
+                          image_vocab_size: int = IMAGE_VOCAB_SIZE,
+                          audio_vocab_size: int = AUDIO_VOCAB_SIZE) -> Dict:
+    """Return offsets/sizes for each modality range and the unified total. The
+    image/audio sizes default to the module constants but can be overridden to
+    match a VQ-VAE trained with a different codebook size (else the reserved range
+    wouldn't match the indices the VQ-VAE actually emits)."""
     img_off = text_vocab_size
-    aud_off = text_vocab_size + IMAGE_VOCAB_SIZE
-    total   = aud_off + AUDIO_VOCAB_SIZE
+    aud_off = text_vocab_size + image_vocab_size
+    total   = aud_off + audio_vocab_size
     return {
         "text":  {"offset": 0,       "size": text_vocab_size},
-        "image": {"offset": img_off, "size": IMAGE_VOCAB_SIZE},
-        "audio": {"offset": aud_off, "size": AUDIO_VOCAB_SIZE},
+        "image": {"offset": img_off, "size": image_vocab_size},
+        "audio": {"offset": aud_off, "size": audio_vocab_size},
         "total": total,
     }

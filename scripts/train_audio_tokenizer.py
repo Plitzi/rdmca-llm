@@ -48,7 +48,8 @@ def synthetic_corpus(n: int, sr: int) -> list:
 def load_wavs(audio_dir: str, n: int, sr: int) -> list:
     from src.modalities.perception import load_audio
     paths = [p for p in Path(audio_dir).rglob("*")
-             if p.suffix.lower() in (".wav", ".flac", ".ogg")]
+             if p.suffix.lower() in (".wav", ".flac", ".ogg",
+                                     ".mp3", ".aiff", ".aif", ".m4a")]
     return [load_audio(p, sr) for p in paths[:n]]
 
 

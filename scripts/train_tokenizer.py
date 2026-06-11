@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import resolve_config_path, load_config, get_languages
-from src.modalities.vocab import (MODALITY_SPECIALS, build_modality_layout,
-                                   tokenizer_symbols)
+from src.modalities.vocab import (MODALITY_SPECIALS, CONTROL_SPECIALS,
+                                   build_modality_layout, tokenizer_symbols)
 
 from rich.console import Console
 from collections import deque
@@ -74,17 +74,18 @@ def _renderable():
 # Text sample builder with rich progress bar
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_text_sample(data_dir, label: str, out_txt: str,
+def build_text_sample(files: list, label: str, out_txt: str,
                       max_mb: int, task_id, lang_filter: str = None,
                       default_lang: str = "en") -> int:
-    """Read JSONL files and write plain text to out_txt, updating shared progress.
+    """Read the given JSONL `files` and write plain text to out_txt, updating shared
+    progress. Returns the number of CHARACTERS written.
 
     When `lang_filter` is set, only records whose `lang` matches are written (a
     record with no `lang` counts as `default_lang`). This routes a mixed-language
     corpus into per-language samples by the record tag — the files themselves are
     not split by language (prepare_data writes one file per SOURCE, not per lang)."""
     max_bytes   = max_mb * 1024 * 1024
-    jsonl_files = sorted(data_dir.glob("*.jsonl"))
+    jsonl_files = sorted(files)
     total_size  = sum(f.stat().st_size for f in jsonl_files)
     progress.update(task_id, total=min(total_size, max_bytes))
 
@@ -141,7 +142,7 @@ def train_spm(combined_input: str, prefix: str,
     user_symbols = tokenizer_symbols(langs)
     params = dict(
         input=combined_input, model_prefix=prefix, vocab_size=vocab_size,
-        character_coverage=0.9999, model_type="bpe",
+        character_coverage=0.9995, model_type="bpe",
         pad_id=0, unk_id=1, bos_id=2, eos_id=3,
         user_defined_symbols=user_symbols,
         num_threads=num_threads,
@@ -314,13 +315,12 @@ def main():
             }
 
             primary = langs[0]
+            char_counts: dict = {}              # CHARS written per language (M5)
 
             def _build(lang: str, files: list) -> str:
-                class LangDir:
-                    def glob(self_, pat): return iter(files)
-                build_text_sample(LangDir(), lang, lang_tmp[lang],
-                                  args.sample_mb, task_ids[lang],
-                                  lang_filter=lang, default_lang=primary)
+                char_counts[lang] = build_text_sample(
+                    files, lang, lang_tmp[lang], args.sample_mb, task_ids[lang],
+                    lang_filter=lang, default_lang=primary)
                 progress.update(task_ids[lang],
                                 description=f"[green]Read {lang} ✓[/green]")
                 return lang
@@ -332,21 +332,23 @@ def main():
 
             # Drop languages that produced no text (e.g. an EN-only corpus when ES
             # is also configured) so SPM is not fed an empty file.
-            built_langs = [l for l, _ in langs_to_build
-                           if os.path.getsize(lang_tmp[l]) > 0]
+            built_langs = [l for l, _ in langs_to_build if char_counts.get(l, 0) > 0]
             if not built_langs:
                 raise RuntimeError("No text sampled for any configured language.")
             combined_input = ",".join(lang_tmp[l] for l in built_langs)
 
             # ── Auto-cap vocab ────────────────────────────────────────────────
-            total_chars = sum(os.path.getsize(p) for p in tmp_paths)
+            # Use real CHARACTER count (not file bytes — UTF-8 inflates multibyte
+            # scripts). The /200 heuristic keeps ≥~200 chars of evidence per piece
+            # so SentencePiece isn't asked for more pieces than the corpus supports.
+            total_chars = sum(char_counts.get(l, 0) for l in built_langs)
             max_safe    = max(500, int(total_chars / 200))
             vocab_size  = min(vocab_target, max_safe)
             if vocab_size < vocab_target:
                 progress.console.print(
                     f"  [yellow]Vocab auto-reduced[/yellow] "
                     f"{vocab_target} → {vocab_size} "
-                    f"(corpus {total_chars/1e6:.1f} MB)"
+                    f"(corpus {total_chars/1e6:.1f}M chars)"
                 )
 
             # ── Phase 2: train BPE (spinner in same live display) ─────────────
@@ -369,6 +371,11 @@ def main():
                 "mod_end":   sp.PieceToId("<mod_end>"),
             }
 
+            # Control delimiters (<think>, <tool_call>, …) — persisted so consumers
+            # read stable ids from here instead of the private sp.PieceToId, and so
+            # an order change (e.g. adding a language) can't silently shift them.
+            control_token_ids = {s: sp.PieceToId(s) for s in CONTROL_SPECIALS}
+
             # Unified vocab_size spans text ∪ image ∪ audio so the model's
             # embedding table covers every modality from the start.
             with open(Path(args.output_dir) / "tokenizer_info.json", "w") as f:
@@ -379,6 +386,7 @@ def main():
                     "languages": built_langs,
                     "lang_token_ids": lang_token_ids,
                     "modality_tokens": modality_tokens,
+                    "control_token_ids": control_token_ids,
                     "modality_layout": layout,
                 }, f, indent=2)
 

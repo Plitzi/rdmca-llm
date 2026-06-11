@@ -37,7 +37,8 @@ def load_images(images_dir, dataset, n, img_size):
     if images_dir:
         from PIL import Image
         paths = [p for p in Path(images_dir).rglob("*")
-                 if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp")]
+                 if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp",
+                                         ".tiff", ".tif", ".webp", ".gif")]
         for p in paths[:n]:
             arrs.append(_resize(np.asarray(Image.open(p).convert("RGB"),
                                            dtype=np.float32) / 255.0, img_size))
@@ -48,6 +49,9 @@ def load_images(images_dir, dataset, n, img_size):
         for ex in ds:
             if key is None:
                 key = "img" if "img" in ex else ("image" if "image" in ex else None)
+                if key is None:
+                    raise KeyError(f"Dataset '{dataset}' has no 'img'/'image' field. "
+                                   f"Available keys: {list(ex.keys())}")
             img = np.asarray(ex[key].convert("RGB"), dtype=np.float32) / 255.0
             arrs.append(_resize(img, img_size))
             if len(arrs) >= n:

@@ -27,6 +27,7 @@ class TextTokenizer:
         self.model_path = Path(model_path)
         self._sp = None
         self.lang_tokens: Dict[str, int] = {}
+        self.control_tokens: Dict[str, int] = {}
         self.text_vocab_size: int = DEFAULT_VOCAB_SIZE
         self._non_text_ids: set = set()
 
@@ -48,6 +49,10 @@ class TextTokenizer:
             return
         self.lang_tokens = {k: int(v) for k, v in
                             (info.get("lang_token_ids") or {}).items()}
+        # Control delimiters (<think>, <tool_call>, …) — read stable ids from the
+        # persisted info instead of relying on the private sp.PieceToId order.
+        self.control_tokens = {k: int(v) for k, v in
+                               (info.get("control_token_ids") or {}).items()}
         # IDs stripped before decoding to readable text: language tags +
         # modality boundary tokens (user-defined symbols that would otherwise
         # decode to their literal "<...>" string).

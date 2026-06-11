@@ -38,6 +38,14 @@ class MultimodalPerception:
         self.audio = audio_tok
         self.info = info or load_tokenizer_info() or {}
         layout = self.info.get("modality_layout", {})
+        # Offsets default to 0 only if the layout is missing — which would make
+        # image/audio token ids collide with text ids [0, Vt). Warn loudly so it's
+        # not a silent corruption when image/audio encoding is actually used.
+        if "modality_layout" not in self.info:
+            import warnings
+            warnings.warn("MultimodalPerception: no modality_layout in tokenizer_info "
+                          "— image/audio tokens will NOT be offset and will collide "
+                          "with text ids. Retrain the tokenizer before multimodal use.")
         self.img_offset = layout.get("image", {}).get("offset", 0)
         self.aud_offset = layout.get("audio", {}).get("offset", 0)
         mt = self.info.get("modality_tokens", {})
@@ -127,19 +135,40 @@ def load_image(src):
     return np.asarray(src)
 
 
+def _resample(wav: np.ndarray, file_sr: int, sr: int) -> np.ndarray:
+    """Resample a mono waveform to `sr`. logmel assumes `sr`, so feeding a file at
+    its native rate (e.g. 44.1 kHz) without this gives wrong mel frequencies."""
+    if file_sr == sr or len(wav) == 0:
+        return wav
+    n = int(round(len(wav) * sr / file_sr))
+    try:
+        from scipy.signal import resample
+        return resample(wav, n).astype(np.float32)
+    except ImportError:                                     # linear fallback (no scipy)
+        x = np.linspace(0, len(wav), num=n, endpoint=False)
+        return np.interp(x, np.arange(len(wav)), wav).astype(np.float32)
+
+
 def load_audio(src, sr: int = 16_000):
-    """Path/np → mono waveform np[T]. Returns src unchanged if already an array."""
+    """Path/np → mono waveform np[T] at `sr`. Returns src unchanged if already an
+    array. Resamples to `sr` so mel features are correct regardless of file rate."""
     if isinstance(src, np.ndarray):
         return src
     if isinstance(src, (str, Path)):
         try:
             import soundfile as sf
-            wav, _ = sf.read(str(src))
-            return wav.mean(axis=1) if wav.ndim > 1 else wav
+            wav, file_sr = sf.read(str(src))                # keep the file's rate
+            wav = wav.mean(axis=1) if wav.ndim > 1 else wav
+            return _resample(np.asarray(wav, dtype=np.float32), file_sr, sr)
         except ImportError:
+            if not str(src).lower().endswith(".wav"):       # wave only does .wav
+                raise RuntimeError(
+                    f"Reading {src} needs `soundfile` (pip install soundfile); the "
+                    "built-in `wave` fallback only supports .wav files.")
             import wave
             with wave.open(str(src), "rb") as w:
-                frames = w.readframes(w.getnframes())
-            return (np.frombuffer(frames, dtype=np.int16).astype(np.float32)
-                    / 32768.0)
+                file_sr = w.getframerate()
+                frames  = w.readframes(w.getnframes())
+            wav = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+            return _resample(wav, file_sr, sr)
     return np.asarray(src)

@@ -135,11 +135,10 @@ STAGE_KEYWORDS = {
         "norm", "norma", "social"],
 }
 
-# Empirically ~3.8 chars/token for prose (tinystories/dialogue) and much lower for
-# structured data (arithmetic ≈1.2). 4.5 over-counted chars (under-counted tokens)
-# by ~15-18% on prose; 3.5 is a closer prose-weighted estimate. Budgets remain
+# Empirically ~3.91 chars/token for prose (tinystories/dialogue) based on actual
+# tokenizer measurements (3.5 under-counted tokens by ~12%). Budgets remain
 # approximate for structured stages — the runtime corpus cap uses real token counts.
-CHARS_PER_TOKEN = 3.5
+CHARS_PER_TOKEN = 3.9
 
 
 def estimate_tokens(text: str) -> int:
