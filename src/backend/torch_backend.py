@@ -16,6 +16,7 @@ Design notes:
 """
 from __future__ import annotations
 import math
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -131,6 +132,22 @@ def _optimizer_step(opt, model, grads):
     opt.step()
 
 
+def _save_optimizer(opt, path: str) -> None:
+    """Persist optimizer state (AdamW m/v/step) so --resume continues with warm
+    moments. Torch-native blob (resume runs on the same backend)."""
+    tmp = str(path) + ".tmp"
+    torch.save(opt.state_dict(), tmp)
+    os.replace(tmp, str(path))
+
+
+def _load_optimizer(opt, path: str) -> bool:
+    """Restore optimizer state saved by _save_optimizer. Returns False if absent."""
+    if not os.path.exists(path):
+        return False
+    opt.load_state_dict(torch.load(str(path), map_location=DEVICE))
+    return True
+
+
 def _set_lr(opt, lr):
     for g in opt.param_groups:
         g["lr"] = lr
@@ -142,6 +159,28 @@ def _grad_norm(model, grads) -> float:
         if p.grad is not None:
             sq += float(p.grad.detach().pow(2).sum().item())
     return sq ** 0.5
+
+
+def _accumulate_grads(running, grads, model):
+    """True gradient accumulation. `grads` is the sentinel; the real gradients are
+    on p.grad (just produced by this micro-batch's backward, which value_and_grad
+    zeroed at its start). Snapshot and sum them across micro-batches into a dict."""
+    snap = {n: p.grad.detach().clone()
+            for n, p in model.named_parameters() if p.grad is not None}
+    if running is None:
+        return snap
+    for n, v in snap.items():
+        running[n] = running[n] + v if n in running else v
+    return running
+
+
+def _finalize_grads(running, scale: float, model):
+    """Write the accumulated (scaled) gradients back onto p.grad so optimizer_step
+    and clip_grads — which both read p.grad — operate on the summed gradient."""
+    for n, p in model.named_parameters():
+        if running is not None and n in running:
+            p.grad = running[n] * scale
+    return _GRAD_SENTINEL
 
 
 def _clip_grads(model, grads, max_norm: float):
@@ -286,12 +325,18 @@ def _save_weights(model, path: str) -> None:
     identical naming to the MLX backend, so checkpoints are cross-loadable."""
     flat = {k: v.detach().to(torch.float32).cpu().numpy()
             for k, v in model.state_dict().items()}
-    np.savez(str(path), **flat)
+    tmp = str(path) + ".tmp"           # atomic: write fully, then rename into place
+    with open(tmp, "wb") as f:         # file object → np.savez does NOT append .npz
+        np.savez(f, **flat)
+    os.replace(tmp, str(path))
 
 
 def _load_weights(model, path: str) -> None:
     data = np.load(str(path))
     sd = {k: torch.as_tensor(data[k]) for k in data.files}
+    from src.backend.base import warn_load_mismatch
+    warn_load_mismatch({n: tuple(p.shape) for n, p in model.state_dict().items()},
+                       {k: tuple(data[k].shape) for k in data.files}, str(path))
     model.load_state_dict(sd, strict=False)
     model.to(DEVICE)
 
@@ -380,6 +425,10 @@ _engine = SimpleNamespace(
     align_module=_align_module,
     grad_norm=_grad_norm,
     clip_grads=_clip_grads,
+    accumulate_grads=_accumulate_grads,
+    finalize_grads=_finalize_grads,
+    save_optimizer=_save_optimizer,
+    load_optimizer=_load_optimizer,
     param_count=lambda module: sum(p.numel() for p in module.parameters()),
     memory_stats=_memory_stats,
 )

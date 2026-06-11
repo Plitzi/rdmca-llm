@@ -4,13 +4,14 @@ facade. This is the reference implementation; `ops` signatures are MLX-native
 (`axis=`, `keepdims=`) and the Torch backend translates to match.
 """
 from __future__ import annotations
+import os
 from types import SimpleNamespace
 
 import numpy as np
 import mlx.core as mx
 import mlx.nn as mlx_nn
 import mlx.optimizers as mlx_optim
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_flatten, tree_map, tree_unflatten
 
 from src.backend.base import Backend
 
@@ -182,12 +183,50 @@ def _optimizer_step(opt, model, grads):
     mx.eval(model.parameters(), opt.state)
 
 
+def _save_optimizer(opt, path: str) -> None:
+    """Persist optimizer state (AdamW m/v/step) so --resume continues with warm
+    moments instead of cold ones (a cold restart spikes the loss). Saved as a flat
+    .npz of the state tree's array leaves."""
+    flat = {k: np.array(v.astype(mx.float32)) for k, v in tree_flatten(opt.state)
+            if isinstance(v, mx.array)}
+    if not flat:
+        return                                  # nothing stepped yet
+    tmp = str(path) + ".tmp"
+    with open(tmp, "wb") as f:
+        np.savez(f, **flat)
+    os.replace(tmp, str(path))
+
+
+def _load_optimizer(opt, path: str) -> bool:
+    """Restore optimizer state saved by _save_optimizer. Returns False if absent."""
+    if not os.path.exists(path):
+        return False
+    data = np.load(path)
+    opt.state = tree_unflatten([(k, mx.array(data[k])) for k in data.files])
+    return True
+
+
 def _grad_norm(model, grads) -> float:
     sq = 0.0
     for _, g in tree_flatten(grads):
         if isinstance(g, mx.array) and g.size > 0:
             sq += float((g * g).sum().item())
     return sq ** 0.5
+
+
+def _accumulate_grads(running, grads, model):
+    """Sum micro-batch gradient trees for true gradient accumulation. MLX's
+    value_and_grad returns a FRESH tree each call, so we add them ourselves."""
+    if running is None:
+        return grads
+    return tree_map(lambda a, b: a + b, running, grads)
+
+
+def _finalize_grads(running, scale: float, model):
+    """Scale the accumulated tree (typically by 1/grad_acc) before the step."""
+    if scale == 1.0:
+        return running
+    return tree_map(lambda a: a * scale, running)
 
 
 def _clip_grads(model, grads, max_norm: float):
@@ -205,11 +244,17 @@ def _save_weights(model, path: str) -> None:
     """Neutral checkpoint: a .npz of float32 numpy arrays keyed by param name.
     Loadable by any backend (same names) regardless of training precision."""
     flat = {k: np.array(v.astype(mx.float32)) for k, v in tree_flatten(model.parameters())}
-    np.savez(str(path), **flat)
+    tmp = str(path) + ".tmp"           # atomic: write fully, then rename into place
+    with open(tmp, "wb") as f:         # file object → np.savez does NOT append .npz
+        np.savez(f, **flat)
+    os.replace(tmp, str(path))
 
 
 def _load_weights(model, path: str) -> None:
     data = np.load(str(path))
+    from src.backend.base import warn_load_mismatch
+    warn_load_mismatch({k: tuple(v.shape) for k, v in tree_flatten(model.parameters())},
+                       {k: tuple(data[k].shape) for k in data.files}, str(path))
     model.load_weights([(k, mx.array(data[k])) for k in data.files], strict=False)
     mx.eval(model.parameters())
 
@@ -262,6 +307,10 @@ _engine = SimpleNamespace(
     align_module=lambda module, model: None,   # MLX unified memory: no-op
     grad_norm=_grad_norm,
     clip_grads=_clip_grads,
+    accumulate_grads=_accumulate_grads,
+    finalize_grads=_finalize_grads,
+    save_optimizer=_save_optimizer,
+    load_optimizer=_load_optimizer,
     param_count=_param_count,
     memory_stats=_memory_stats,
 )

@@ -96,6 +96,9 @@ class CausalSelfAttention(nn.Module):
         assert cfg.d_model % cfg.n_heads == 0
         self.n_heads  = cfg.n_heads
         self.head_dim = cfg.d_model // cfg.n_heads
+        # RoPE splits head_dim into half cos / half sin pairs; an odd head_dim would
+        # make x2 one element wider than cos/sin and break the rotation broadcast.
+        assert self.head_dim % 2 == 0, f"head_dim must be even for RoPE, got {self.head_dim}"
         self.scale    = self.head_dim ** -0.5
 
         self.q_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
@@ -104,9 +107,12 @@ class CausalSelfAttention(nn.Module):
         self.o_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
         self.dropout = nn.Dropout(cfg.dropout)
 
-        # RoPE tables (numpy host arrays — invisible to the param tree).
+        # RoPE tables (numpy host arrays — invisible to the param tree). Their
+        # backend-tensor form is built lazily and cached on first forward (L9).
         self._rope_cos, self._rope_sin = _rope_tables(
             self.head_dim, cfg.rope_theta, cfg.context_len)
+        self._rope_cos_t = None
+        self._rope_sin_t = None
 
         # Sector wiring (set by RDMCAFoundational.attach_sectors). Plain Python
         # attributes, ignored by both backends' parameter trees.
@@ -133,9 +139,13 @@ class CausalSelfAttention(nn.Module):
         k = k.reshape(Bsz, S, H, Hd)
         v = v.reshape(Bsz, S, H, Hd)
 
-        # Apply RoPE (convert host tables to backend tensors once per pass).
-        cos = ops.array(self._rope_cos[:S])
-        sin = ops.array(self._rope_sin[:S])
+        # Apply RoPE. Convert the host tables to backend tensors ONCE (cached) and
+        # slice per pass — re-creating them from numpy every forward churned memory.
+        if self._rope_cos_t is None:
+            self._rope_cos_t = ops.array(self._rope_cos)
+            self._rope_sin_t = ops.array(self._rope_sin)
+        cos = self._rope_cos_t[:S]
+        sin = self._rope_sin_t[:S]
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
@@ -269,8 +279,15 @@ class RDMCAFoundational(nn.Module):
 
         h = self(inputs)           # [B, S, d_model]
 
-        total = ops.array(0.0)
-        weights = [1.0 / d for d in self.cfg.mrl_dims]
+        # Accumulate into `total` lazily (start from the first weighted term) rather
+        # than from a float32 `ops.array(0.0)` — adding a float32 scalar to a bf16
+        # cross-entropy raises a dtype mismatch on the torch backend.
+        # Uniform weights across MRL prefixes. A 1/d weighting put ~67% of the loss
+        # on the smallest dim and only ~33% on the full dim — yet inference uses the
+        # FULL d_model head, so its upper columns were undertrained. Equal weight
+        # gives the full head a fair share (≥50%).
+        total   = None
+        weights = [1.0 for _ in self.cfg.mrl_dims]
         w_sum   = sum(weights)
 
         for w, d in zip(weights, self.cfg.mrl_dims):
@@ -281,7 +298,8 @@ class RDMCAFoundational(nn.Module):
                 targets.reshape(Bsz * S),
                 reduction="mean",
             )
-            total = total + (w / w_sum) * loss_d
+            term  = (w / w_sum) * loss_d
+            total = term if total is None else total + term
 
         return total
 

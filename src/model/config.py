@@ -22,6 +22,17 @@ class ModelConfig:
     dropout: float = 0.1
     rope_theta: float = 10000.0
 
+    def __post_init__(self):
+        # MRL prefixes must be ascending, unique and ≤ d_model — head_at_dim slices
+        # head.weight[:, :d], so a d > d_model would silently use the full matrix
+        # (breaking the Matryoshka premise) and a wrong order would mis-weight the loss.
+        if self.mrl_dims != sorted(set(self.mrl_dims)):
+            raise ValueError(f"mrl_dims must be ascending and unique, got {self.mrl_dims}")
+        if self.mrl_dims and self.mrl_dims[-1] > self.d_model:
+            raise ValueError(f"mrl_dims max ({self.mrl_dims[-1]}) exceeds d_model ({self.d_model})")
+        if self.d_model % self.n_heads != 0:
+            raise ValueError(f"d_model ({self.d_model}) not divisible by n_heads ({self.n_heads})")
+
 
 @dataclass
 class LoRAConfig:

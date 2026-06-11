@@ -25,6 +25,28 @@ AUDIO_VOCAB_SIZE = 4096
 # tags at tokenizer-training time.
 MODALITY_SPECIALS: List[str] = ["<mod:text>", "<mod:image>", "<mod:audio>", "<mod_end>"]
 
+# ── Control symbols (single source of truth) ─────────────────────────────────
+# Structural delimiters the curriculum data uses. They MUST be registered as
+# SentencePiece user-defined symbols, or BPE splits e.g. "<think>" into
+# ['▁<','th','ink','>'] — a combo the prose corpus never contains, so the stage
+# that introduces it (reasoning, tool use, …) can't learn a clean boundary.
+#
+# SCALABLE CONTRACT: when a new stage/source introduces a structural marker, add
+# it to the matching list here — `tokenizer_symbols()` is what train_tokenizer
+# feeds to SentencePiece, so every level's tokenizer covers every stage's tokens.
+REASONING_SPECIALS: List[str] = ["<think>", "</think>"]
+TOOL_SPECIALS:      List[str] = ["<tool_call>", "</tool_call>",
+                                 "<tool_response>", "</tool_response>"]
+CONTROL_SPECIALS:   List[str] = REASONING_SPECIALS + TOOL_SPECIALS
+
+
+def tokenizer_symbols(langs: List[str]) -> List[str]:
+    """All user-defined symbols a tokenizer must reserve: per-language tags +
+    modality boundaries + every stage's control delimiters. One call so the set
+    stays consistent across levels and grows automatically as stages add markers."""
+    return ([f"<lang:{l}>" for l in langs] + list(MODALITY_SPECIALS)
+            + list(CONTROL_SPECIALS))
+
 
 def build_modality_layout(text_vocab_size: int) -> Dict:
     """Return offsets/sizes for each modality range and the unified total."""

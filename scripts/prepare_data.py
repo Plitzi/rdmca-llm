@@ -135,7 +135,11 @@ STAGE_KEYWORDS = {
         "norm", "norma", "social"],
 }
 
-CHARS_PER_TOKEN = 4.5
+# Empirically ~3.8 chars/token for prose (tinystories/dialogue) and much lower for
+# structured data (arithmetic ≈1.2). 4.5 over-counted chars (under-counted tokens)
+# by ~15-18% on prose; 3.5 is a closer prose-weighted estimate. Budgets remain
+# approximate for structured stages — the runtime corpus cap uses real token counts.
+CHARS_PER_TOKEN = 3.5
 
 
 def estimate_tokens(text: str) -> int:
@@ -276,34 +280,50 @@ def stream_ethics_bilingual() -> Iterator[dict]:
 
 
 def write_jsonl(records: Iterator[dict], out_path: Path,
-                token_budget_m: int, verbose: bool = True) -> tuple[int, bool]:
+                token_budget_m: int, verbose: bool = True,
+                val_fraction: float = 0.02) -> tuple[int, bool]:
     """Write records to JSONL until the token budget is reached. Returns
     (tokens_written, exhausted) — `exhausted` is True when the source ran out
-    BEFORE the budget (so a smaller-than-budget file is complete, not partial)."""
+    BEFORE the budget (so a smaller-than-budget file is complete, not partial).
+
+    A small `val_fraction` of records is routed to a sibling `{stem}.val.jsonl`
+    held-out file (deterministic 1-in-K), so the gate can measure generalization on
+    data the model never trains on. The budget counts TRAINING tokens only."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    val_path  = out_path.with_suffix(".val.jsonl")
+    every_k   = int(round(1 / val_fraction)) if val_fraction > 0 else 0   # 1-in-K → val
     tokens_written = 0
     target = token_budget_m * 1_000_000
     n = 0
     t0 = time.time()
     exhausted = True                          # set False if we stop on the budget
 
-    with open(out_path, "w", encoding="utf-8") as f:
-        for rec in records:
-            text = rec.get("text", "")
-            if not text.strip():
-                continue
-            f.write(json.dumps({"text": text, "lang": rec.get("lang", "en")},
-                               ensure_ascii=False) + "\n")
-            tokens_written += estimate_tokens(text)
-            n += 1
-            if verbose and n % 10_000 == 0:
-                pct = min(tokens_written / target * 100, 100)
-                elapsed = time.time() - t0
-                print(f"    {tokens_written/1e6:.0f}M / {token_budget_m}M tokens "
-                      f"({pct:.1f}%)  {n:,} docs  {elapsed:.0f}s")
-            if tokens_written >= target:
-                exhausted = False
-                break
+    fval = open(val_path, "w", encoding="utf-8") if every_k else None
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            for rec in records:
+                text = rec.get("text", "")
+                if not text.strip():
+                    continue
+                row = json.dumps({"text": text, "lang": rec.get("lang", "en")},
+                                 ensure_ascii=False) + "\n"
+                n += 1
+                if fval and n % every_k == 0:        # held-out — not counted in budget
+                    fval.write(row)
+                    continue
+                f.write(row)
+                tokens_written += estimate_tokens(text)
+                if verbose and n % 10_000 == 0:
+                    pct = min(tokens_written / target * 100, 100)
+                    elapsed = time.time() - t0
+                    print(f"    {tokens_written/1e6:.0f}M / {token_budget_m}M tokens "
+                          f"({pct:.1f}%)  {n:,} docs  {elapsed:.0f}s")
+                if tokens_written >= target:
+                    exhausted = False
+                    break
+    finally:
+        if fval:
+            fval.close()
 
     return tokens_written, exhausted
 

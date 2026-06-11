@@ -17,53 +17,60 @@ from typing import Any
 
 from src.agent import Tool
 
-# Per-session plan (process-local; reset each run).
-_PLAN: list[dict] = []
 _VALID = ("pending", "in_progress", "done")
 
 
-def _todo(inp: dict) -> dict[str, Any]:
-    """Set or update the plan. `items` is a list of step strings or
-    {content, status} dicts; an empty/omitted `items` just returns the plan."""
-    items = inp.get("items")
-    if isinstance(items, list):
-        _PLAN.clear()
-        for it in items:
-            if isinstance(it, dict):
-                content = str(it.get("content", it.get("step", ""))).strip()
-                status  = str(it.get("status", "pending")).lower()
-            else:
-                content, status = str(it).strip(), "pending"
-            if content:
-                _PLAN.append({"content": content,
-                              "status": status if status in _VALID else "pending"})
-    return {"plan": list(_PLAN),
-            "remaining": sum(1 for s in _PLAN if s["status"] != "done")}
+def make_todo_tool() -> Tool:
+    """Build a fresh todo tool with its OWN plan state. Each call is independent —
+    a server handling concurrent sessions should make one per session rather than
+    share the module singleton (whose state would otherwise leak across runs)."""
+    plan: list[dict] = []                       # closure-local — not a module global
 
+    def _todo(inp: dict) -> dict[str, Any]:
+        """Set or update the plan. `items` is a list of step strings or
+        {content, status} dicts; an empty/omitted `items` just returns the plan."""
+        items = inp.get("items")
+        if isinstance(items, list):
+            plan.clear()
+            for it in items:
+                if isinstance(it, dict):
+                    content = str(it.get("content", it.get("step", ""))).strip()
+                    status  = str(it.get("status", "pending")).lower()
+                else:
+                    content, status = str(it).strip(), "pending"
+                if content:
+                    plan.append({"content": content,
+                                 "status": status if status in _VALID else "pending"})
+        return {"plan": list(plan),
+                "remaining": sum(1 for s in plan if s["status"] != "done")}
 
-TOOL = Tool(
-    name="todo",
-    description=("Record or update a short plan of steps for a multi-step task. "
-                 "Use it when planning, before acting. Each item has content and an "
-                 "optional status (pending|in_progress|done)."),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "items": {
-                "type": "array",
-                "description": "The ordered plan steps.",
+    return Tool(
+        name="todo",
+        description=("Record or update a short plan of steps for a multi-step task. "
+                     "Use it when planning, before acting. Each item has content and an "
+                     "optional status (pending|in_progress|done)."),
+        input_schema={
+            "type": "object",
+            "properties": {
                 "items": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string"},
-                        "status": {"type": "string",
-                                   "enum": list(_VALID)},
+                    "type": "array",
+                    "description": "The ordered plan steps.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string"},
+                            "status": {"type": "string",
+                                       "enum": list(_VALID)},
+                        },
+                        "required": ["content"],
                     },
-                    "required": ["content"],
-                },
-            }
+                }
+            },
+            "required": [],
         },
-        "required": [],
-    },
-    run=_todo,
-)
+        run=_todo,
+    )
+
+
+# Default singleton for the single-process CLI (one plan per process).
+TOOL = make_todo_tool()

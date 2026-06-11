@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
+from src.modalities.vocab import REASONING_SPECIALS
+
 OUTPUT_FORMATS = ("text", "json")
 
 # Short priming so the model emits JSON (mirrors the agentic stage). Kept brief
@@ -73,8 +75,8 @@ def parse_output(text: str, fmt: str) -> dict:
 # all and how large a token budget the scratchpad gets — analogous to Claude's
 # reasoning effort. Same hook every consumer (chat / agent / future API) reuses.
 THINKING_LEVELS = ("off", "low", "medium", "high")
-THINK_OPEN  = "<think>"          # MUST match the delimiters used by the
-THINK_CLOSE = "</think>"         # reasoning data (see src/data/graded.py).
+THINK_OPEN, THINK_CLOSE = REASONING_SPECIALS   # single source of truth (vocab.py);
+                                               # also registered as tokenizer symbols.
 
 # Fraction of the per-turn token budget (`max_tokens`) the scratchpad may use.
 # off → no thinking; high → up to the full budget (it closes at </think> sooner
@@ -269,7 +271,7 @@ def build_agent_prompt(tools: List[Tool], user: str,
 
 def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
               skill_md: Optional[str] = None, max_steps: int = 6,
-              think: str = "off") -> dict:
+              think: str = "off", max_context_chars: int = 8000) -> dict:
     """Drive the tool loop — multiple think→act→observe rounds until the model
     answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
     wraps the model; it may return a `<think>…</think>` scratchpad before the
@@ -277,12 +279,32 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
     ignores it). Returns
     {"final": <text|None>, "thinking": <text|None>,
      "steps": [{"thinking","action","observation"}, …]}.
-    """
+
+    The prompt is rebuilt each round as the static header (system+tools+skill+user)
+    plus as many RECENT step blocks as fit `max_context_chars`. Appending blindly
+    would grow the transcript without bound; the model's own context-length trim
+    then drops from the FRONT, silently discarding the system/tools spec. Keeping
+    the header and windowing the tail preserves the instructions instead."""
     registry = {t.name: t for t in tools}
-    transcript = build_agent_prompt(tools, user, skill_md, think)
+    header   = build_agent_prompt(tools, user, skill_md, think)
     steps: list = []
+
+    def _block(st: dict) -> str:
+        return (f"\nAction: {json.dumps(st['action'], ensure_ascii=False)}"
+                f"\nObservation: {json.dumps(st['observation'], ensure_ascii=False)}"
+                f"\nAssistant:")
+
+    def _transcript() -> str:
+        kept, total = [], len(header)
+        for st in reversed(steps):              # keep the most recent steps that fit
+            b = _block(st)
+            if kept and total + len(b) > max_context_chars:
+                break
+            kept.append(b); total += len(b)
+        return header + "".join(reversed(kept))
+
     for _ in range(max_steps):
-        out = generate_fn(transcript)
+        out = generate_fn(_transcript())
         thinking, answer = split_thinking(out)
         action = parse_action(answer)
         if action is None:                          # no tool call → final answer
@@ -296,7 +318,4 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
             except Exception as e:                  # tools must never crash the loop
                 obs = {"error": str(e)}
         steps.append({"thinking": thinking, "action": action, "observation": obs})
-        transcript += (f"\nAction: {json.dumps(action, ensure_ascii=False)}"
-                       f"\nObservation: {json.dumps(obs, ensure_ascii=False)}"
-                       f"\nAssistant:")
     return {"final": None, "steps": steps, "note": "max steps reached"}

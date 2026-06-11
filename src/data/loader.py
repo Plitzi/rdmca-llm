@@ -28,12 +28,16 @@ class TextDataset:
                  shuffle: bool = True,
                  seed: int = 42,
                  shuffle_buffer: int = 50000,
-                 source_weights: Optional[Dict[str, float]] = None):
+                 source_weights: Optional[Dict[str, float]] = None,
+                 val: bool = False):
         self.data_dir   = Path(data_dir)
         self.tokenizer  = tokenizer
         self.seq_len    = seq_len
         self.batch_size = batch_size
         self.shuffle    = shuffle
+        # val=True loads ONLY the held-out `*.val.jsonl` files; val=False loads the
+        # training files and EXCLUDES them — so the two never overlap.
+        self.val        = val
         self.rng        = random.Random(seed)
         # Records held in memory to randomize order across the interleaved file
         # stream (see _iter_records). Big enough to break up file-sized blocks.
@@ -57,8 +61,12 @@ class TextDataset:
             )
 
     def _find_files(self) -> List[Path]:
-        files = (list(self.data_dir.glob("*.jsonl")) +
-                 list(self.data_dir.glob("*.txt")))
+        if self.val:
+            files = list(self.data_dir.glob("*.val.jsonl"))     # held-out split only
+        else:
+            files = [f for f in self.data_dir.glob("*.jsonl")
+                     if not f.name.endswith(".val.jsonl")]       # training, exclude val
+            files += list(self.data_dir.glob("*.txt"))
         if self.shuffle:
             self.rng.shuffle(files)
         return files
@@ -220,13 +228,14 @@ class DataLoader:
     @classmethod
     def from_config(cls, stage: int, cfg: dict, tokenizer,
                     replay_dirs: Optional[List[str]] = None,
-                    replay_fraction: float = 0.0) -> "DataLoader":
+                    replay_fraction: float = 0.0, val: bool = False) -> "DataLoader":
         """Build a DataLoader directly from the YAML config + stage number.
 
         `replay_dirs` (earlier stages' corpora) + `replay_fraction` enable
         rehearsal: that fraction of batches comes from those dirs so a later
         cognitive stage keeps the earlier skills fresh. Missing replay dirs are
-        skipped silently."""
+        skipped silently. With `val=True` it loads only the held-out `*.val.jsonl`
+        split (no replay, no oversampling) for honest generalization measurement."""
         mcfg    = cfg["model"]
         tcfg    = cfg["training"]
         stage_cfg = cfg["curriculum"][f"stage{stage}"]   # key-based (levels may omit stages)
@@ -235,13 +244,16 @@ class DataLoader:
         data_dir  = stage_cfg.get("data_dir", default_dir)
         # Optional per-source oversampling, e.g. data.source_weights:{dialogue:3.0}
         # to push the conversational share of the training mixture up.
-        source_weights = (stage_cfg.get("data", {}) or {}).get("source_weights")
+        source_weights = None if val else (stage_cfg.get("data", {}) or {}).get("source_weights")
 
         def _ds(path: str) -> TextDataset:
             return TextDataset(data_dir=path, tokenizer=tokenizer,
                                seq_len=mcfg["context_len"],
                                batch_size=tcfg["batch_size"], shuffle=True,
-                               source_weights=source_weights)
+                               source_weights=source_weights, val=val)
+
+        if val:
+            return cls(_ds(data_dir))        # held-out split, no replay
 
         ds = _ds(data_dir)
         replay: List[TextDataset] = []

@@ -22,9 +22,9 @@ information:
 model:
   d_model: 256                 # wider than L1 — more vocabulary/structure to hold.
   n_layers: 6
-  n_heads: 8                   # head_dim = 32
+  n_heads: 4                   # head_dim = 64 (was 32 with 8 heads)
   ffn_dim: 1024
-  context_len: 256             # longer text than L1.
+  context_len: 512             # fit complete short docs (256 truncated most stories).
   vocab_size: 8192
   mrl_dims: [128, 256]
   dropout: 0.1

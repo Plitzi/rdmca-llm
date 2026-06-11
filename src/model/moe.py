@@ -31,6 +31,7 @@ class SectorGate(nn.Module):
     def __init__(self, d_model: int, n_experts: int, top_k: int = 2):
         super().__init__()
         self.n_experts = n_experts
+        self._top_k_target = top_k          # configured k; restored as experts grow
         self.top_k = min(top_k, n_experts)
         # No bias: a freshly grown expert (zero row) starts at logit 0 and the
         # sector itself is zero-output at init (LoRA B=0), so growth is smooth.
@@ -51,6 +52,10 @@ class SectorGate(nn.Module):
         in_dim = old.shape[1]
         new_w  = ops.concatenate([old, ops.zeros((delta, in_dim))], axis=0)
         self.n_experts += delta
+        # Restore k toward the configured target: if the gate was created with
+        # fewer experts than top_k (so top_k got capped), growing must lift it
+        # again — otherwise only the original capped number of experts is ever used.
+        self.top_k = min(self._top_k_target, self.n_experts)
         self.w = nn.Linear(in_dim, self.n_experts, bias=False)
         self.w.weight = nn.Parameter(new_w)
         return self.n_experts

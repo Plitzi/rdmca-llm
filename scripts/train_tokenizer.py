@@ -26,7 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import resolve_config_path, load_config, get_languages
-from src.modalities.vocab import MODALITY_SPECIALS, build_modality_layout
+from src.modalities.vocab import (MODALITY_SPECIALS, build_modality_layout,
+                                   tokenizer_symbols)
 
 from rich.console import Console
 from collections import deque
@@ -132,7 +133,12 @@ def train_spm(combined_input: str, prefix: str,
     """
     import json as _json, queue, subprocess, tempfile, threading
 
-    user_symbols = [f"<lang:{l}>" for l in langs] + list(MODALITY_SPECIALS)
+    # Single source of truth (src/modalities/vocab.py): per-language tags +
+    # modality boundaries + every stage's control delimiters (<think>, <tool_call>,
+    # …). Registered as user-defined symbols so they tokenize atomically instead of
+    # BPE-splitting into combos the corpus never contains. New stage marker → add it
+    # to vocab.CONTROL_SPECIALS and every level's tokenizer picks it up.
+    user_symbols = tokenizer_symbols(langs)
     params = dict(
         input=combined_input, model_prefix=prefix, vocab_size=vocab_size,
         character_coverage=0.9999, model_type="bpe",

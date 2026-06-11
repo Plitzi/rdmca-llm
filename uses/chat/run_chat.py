@@ -85,8 +85,17 @@ def _looping(generated: list) -> bool:
     return False
 
 
-def sample_top_p(logits, temperature: float, top_p: float) -> int:
-    logits_np = np.asarray(backend.current().ops.to_numpy(logits), dtype=np.float32)
+def sample_top_p(logits, temperature: float, top_p: float, top_k: int = 0,
+                 recent_ids=None, rep_penalty: float = 1.0) -> int:
+    logits_np = np.asarray(backend.current().ops.to_numpy(logits), dtype=np.float32).copy()
+    # Repetition penalty (HF-style): push down logits of recently emitted tokens
+    # so the model stops looping ("I'm sorry. I'm sorry. …"). Window-limited so it
+    # never blocks tokens that legitimately recur over a longer span.
+    if rep_penalty and rep_penalty != 1.0 and recent_ids:
+        idx = np.fromiter(set(int(i) for i in recent_ids), dtype=np.int64)
+        if idx.size:
+            vals = logits_np[idx]
+            logits_np[idx] = np.where(vals > 0, vals / rep_penalty, vals * rep_penalty)
     if temperature == 0.0:
         return int(np.argmax(logits_np))
     logits_np = logits_np / temperature
@@ -94,11 +103,13 @@ def sample_top_p(logits, temperature: float, top_p: float) -> int:
     probs = np.exp(logits_np)
     probs /= probs.sum()
     sorted_idx  = np.argsort(probs)[::-1]
+    if top_k and top_k > 0:                       # restrict to the top_k most likely
+        sorted_idx = sorted_idx[:top_k]
     sorted_prob = probs[sorted_idx]
     cumulative  = np.cumsum(sorted_prob)
     cutoff      = int(np.searchsorted(cumulative, top_p)) + 1
     top_idx     = sorted_idx[:cutoff]
-    top_prob    = sorted_prob[:cutoff]
+    top_prob    = probs[top_idx]
     top_prob   /= top_prob.sum()
     return int(np.random.choice(top_idx, p=top_prob))
 
@@ -113,7 +124,10 @@ def generate(model,
              stream: bool = True,
              decode_fn=None,
              max_seconds: float | None = None,
-             stop_strings: tuple[str, ...] | None = None) -> tuple[list[int], float]:
+             stop_strings: tuple[str, ...] | None = None,
+             top_k: int = 0,
+             rep_penalty: float = 1.0,
+             rep_window: int = 128) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
 
@@ -146,7 +160,9 @@ def generate(model,
         next_logits = logits[0, -1, :]    # [vocab]
         engine.eval(next_logits)
 
-        next_id = sample_top_p(next_logits, temperature, top_p)
+        next_id = sample_top_p(next_logits, temperature, top_p, top_k=top_k,
+                               recent_ids=generated[-rep_window:] if rep_penalty != 1.0 else None,
+                               rep_penalty=rep_penalty)
 
         if next_id == EOS_ID:
             break
@@ -212,6 +228,7 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
                       think_prefix: str = "", answer_prefix: str = "",
                       max_seconds: float | None = None,
                       answer_stop: tuple[str, ...] | None = agent.ANSWER_STOP_STRINGS,
+                      top_k: int = 0, rep_penalty: float = 1.0,
                       ) -> tuple[str, list[int], float]:
     """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
 
@@ -228,7 +245,8 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
     decode_fn = tokenizer.decode
     sgen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
                 context_len=context_len, stream=stream,
-                decode_fn=(decode_fn if stream else None), max_seconds=max_seconds)
+                decode_fn=(decode_fn if stream else None), max_seconds=max_seconds,
+                top_k=top_k, rep_penalty=rep_penalty)
 
     def _label(prefix):
         if stream and prefix:
@@ -240,7 +258,10 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
                             stop_strings=answer_stop, **sgen)
         return "", ids, tps
 
-    enc = lambda s: tokenizer.encode(s, lang=lang, add_bos=False, add_eos=False)
+    # Raw pieces only — NO `<lang:XX>` prefix. encode() would inject the language
+    # token mid-sequence (the model only saw it at the start), degrading the
+    # scratchpad/answer continuation. See TextTokenizer.encode_raw.
+    enc = lambda s: tokenizer.encode_raw(s)
     # Phase A — scratchpad. Prime with the opening tag so generation starts inside it.
     # Stop if the model runs into a new turn (a 'User:'/… leak) — reasoning should
     # never cross a turn boundary, same as the answer phase.
@@ -435,6 +456,8 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     lang       = args.lang
     temperature = args.temp
     top_p       = args.topp
+    top_k       = getattr(args, "topk", 0)
+    rep_penalty = getattr(args, "rep_penalty", 1.0)
     max_tokens  = args.maxtok
     out_format  = agent.normalize_format(getattr(args, "format", "text"))
     think_level = agent.normalize_thinking(getattr(args, "think", "medium"))
@@ -552,6 +575,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
                 stream=stream_on, max_seconds=deadline,
                 think_prefix="\n💭 thinking: ", answer_prefix="\nRDMCA: ",
+                top_k=top_k, rep_penalty=rep_penalty,
             )
         except Exception as e:
             print(f"\n  [error] {e}")
@@ -639,6 +663,13 @@ Examples:
                         help="Sampling temperature (default: 0.8)")
     parser.add_argument("--topp",       type=float, default=0.9,
                         help="Nucleus sampling p (default: 0.9)")
+    parser.add_argument("--topk",       type=int,   default=0,
+                        help="Top-k sampling cutoff (0 = off, the default)")
+    parser.add_argument("--rep-penalty", dest="rep_penalty", type=float, default=1.3,
+                        help="Repetition penalty over recent tokens (1.0 = off; "
+                             "default 1.3 curbs the loops small models fall into)")
+    parser.add_argument("--seed",       type=int, default=None,
+                        help="Seed the sampler RNG for reproducible generations")
     parser.add_argument("--maxtok",     type=int,   default=256,
                         help="Max new tokens per turn (default: 256)")
     parser.add_argument("--format",     choices=agent.OUTPUT_FORMATS, default="text",
@@ -658,6 +689,9 @@ Examples:
     parser.add_argument("--force",      action="store_true",
                         help="Run even if the resource guard says it won't fit (risk OOM)")
     args = parser.parse_args()
+
+    if args.seed is not None:           # reproducible sampling across runs
+        np.random.seed(args.seed)
 
     from src.config import resolve_config_path
     args.config = resolve_config_path(args.config, args.level)

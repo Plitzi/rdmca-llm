@@ -75,6 +75,16 @@ class TextTokenizer:
             ids = ids + [EOS_ID]
         return prefix + ids
 
+    def encode_raw(self, text: str) -> List[int]:
+        """Pieces ONLY — no BOS/EOS and no `<lang:XX>` prefix. Use when encoding a
+        mid-sequence fragment (e.g. the `<think>` delimiters in the chat loop):
+        encode() always injects the language token for a known language, which
+        mid-sequence inserts a `<lang:en>` the model only ever saw at the start of
+        a sequence — a spurious token that degrades continuation."""
+        if not self._sp:
+            raise RuntimeError("Tokenizer not loaded")
+        return list(self._sp.EncodeAsIds(text))
+
     def decode(self, ids: List[int]) -> str:
         if not self._sp:
             raise RuntimeError("Tokenizer not loaded")

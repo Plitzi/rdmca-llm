@@ -59,8 +59,28 @@ ENGINE_SURFACE = (
     "eval", "item", "set_precision", "quantize", "set_train", "set_eval",
     "save_weights", "load_weights", "state_dict", "load_state_dict",
     "set_trainable", "freeze_all", "register_submodules",
-    "grad_norm", "clip_grads", "param_count", "memory_stats",
+    "grad_norm", "clip_grads", "accumulate_grads", "finalize_grads",
+    "save_optimizer", "load_optimizer", "param_count", "memory_stats",
 )
+
+
+def warn_load_mismatch(model_shapes: dict, ckpt_shapes: dict, path: str = "") -> None:
+    """Warn when a checkpoint doesn't line up with the model — a `strict=False`
+    load (used so prev-stage/partial weights load) otherwise SILENTLY ignores
+    missing/extra/shape-mismatched params, e.g. loading another level's weights."""
+    import sys
+    mk, ck  = set(model_shapes), set(ckpt_shapes)
+    missing = mk - ck                                  # model expects, ckpt lacks → init
+    extra   = ck - mk                                  # ckpt has, model ignores
+    mism    = [k for k in (mk & ck) if tuple(model_shapes[k]) != tuple(ckpt_shapes[k])]
+    if missing or extra or mism:
+        tag = f" ({path})" if path else ""
+        print(f"  [load] checkpoint mismatch{tag}: {len(missing)} missing, "
+              f"{len(extra)} unexpected, {len(mism)} shape-mismatched — those params "
+              f"keep their current (uninitialized/previous) values.", file=sys.stderr)
+        for k in mism[:5]:
+            print(f"    shape {k}: model {tuple(model_shapes[k])} vs "
+                  f"ckpt {tuple(ckpt_shapes[k])}", file=sys.stderr)
 
 
 def check_surface(backend: Backend) -> list[str]:

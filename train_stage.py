@@ -137,31 +137,57 @@ def cosine_lr(step: int, base_lr: float, min_lr: float,
 
 
 def save_checkpoint(model, step: int, stage: int,
-                    tokens_seen: int, loss: float, ckpt_dir: Path):
+                    tokens_seen: int, loss: float, ckpt_dir: Path, optimizer=None):
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     fname = ckpt_dir / f"step_{step:08d}.npz"
     backend.current().engine.save_weights(model, str(fname))
+    if optimizer is not None:                   # warm-resume: save AdamW moments too
+        backend.current().engine.save_optimizer(optimizer, str(fname.with_suffix(".opt")))
     state = {
         "step": step, "stage": stage,
         "tokens_seen": tokens_seen, "loss": round(loss, 6),
         "timestamp": time.time(), "checkpoint": str(fname),
     }
-    with open(ckpt_dir / "latest.json", "w") as f:
+    tmp = ckpt_dir / "latest.json.tmp"          # atomic pointer update
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(tmp, ckpt_dir / "latest.json")
     print(f"  [ckpt] step={step:,} | {tokens_seen/1e6:.1f}M tokens | "
           f"loss={loss:.4f} -> {fname.name}")
 
 
-def load_checkpoint(model, ckpt_dir: Path):
+def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
     latest = ckpt_dir / "latest.json"
     if not latest.exists():
         return 0, 0
     with open(latest) as f:
         state = json.load(f)
     backend.current().engine.load_weights(model, state["checkpoint"])
+    warm = False
+    if optimizer is not None:                   # restore AdamW moments if saved
+        opt_path = Path(state["checkpoint"]).with_suffix(".opt")
+        warm = backend.current().engine.load_optimizer(optimizer, str(opt_path))
     print(f"  [resume] step={state['step']:,} | "
-          f"{state['tokens_seen']/1e6:.1f}M tokens | loss={state['loss']:.4f}")
+          f"{state['tokens_seen']/1e6:.1f}M tokens | loss={state['loss']:.4f}"
+          f" | optimizer={'warm' if warm else 'cold (no .opt — will spike briefly)'}")
     return state["step"], state["tokens_seen"]
+
+
+def _make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
+    """Return `n` fixed validation batches. Prefers a true held-out split
+    (`*.val.jsonl`, disjoint from training); falls back to the training stream
+    (comparable but not disjoint) when no split has been prepared."""
+    from src.modalities.text import TextTokenizer
+    from src.data.loader import DataLoader
+    try:
+        vloader = DataLoader.from_config(stage, cfg, TextTokenizer(), val=True)
+        batches = [vloader.next_batch() for _ in range(n)]
+        print(f"  [val] held-out split (*.val.jsonl) — {n} batches")
+        return batches
+    except (FileNotFoundError, KeyError):
+        print("  [val] no held-out split found — sampling from the training stream "
+              "(run prepare_data to generate *.val.jsonl for a disjoint gate)")
+        return [train_loader.next_batch() for _ in range(n)]
 
 
 def build_data_loader(stage: int, cfg: dict):
@@ -445,7 +471,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     start_step = 0
     tokens_seen = 0
     if resume:
-        start_step, tokens_seen = load_checkpoint(model, ckpt_dir)
+        start_step, tokens_seen = load_checkpoint(model, ckpt_dir, optimizer)
 
     # Re-apply precision: loading prev-stage / resume weights restores their
     # saved dtype, so cast once more before training in the configured precision.
@@ -473,23 +499,42 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     save_every  = tcfg["save_every"]
     eval_every  = tcfg["eval_every"]
 
+    # Anchor the LR horizon up front by estimating the corpus size from disk, so
+    # cosine decays toward the REAL (possibly cap-limited) end from step 1. Doing
+    # this only at runtime when the cap triggers would shift total_steps mid-run
+    # and make the schedule jump discontinuously (M3). The estimate is approximate
+    # (bytes/≈chars-per-token); it only sets the LR horizon, not the stop point.
+    stage_cfg = cfg["curriculum"][f"stage{stage}"]
+    _lvl  = cfg.get("level")
+    _ddir = Path(stage_cfg.get("data_dir",
+                 f"data/level{_lvl}/stage{stage}" if _lvl is not None
+                 else f"data/stage{stage}"))
+    _bytes = sum(f.stat().st_size for f in _ddir.glob("*.jsonl")) if _ddir.exists() else 0
+    _est_corpus = int(_bytes / 3.5)                      # ≈ chars/token (prose-weighted)
+    if _est_corpus:
+        eff_target  = min(n_tokens_target, max_passes * _est_corpus)
+        total_steps = max(eff_target // toks_step, 1)
+
     step = start_step
-    running_loss = 0.0
-    log_interval  = 100   # interval for the running-loss window reset
     dash_interval = 10    # update dashboard (and measure tok/s) every N steps
     t_dash = time.time()
     last_tps = 0.0
 
+    # MoE load-balance aux loss: with routing active (behavioral stages) the gate
+    # otherwise gets no gradient and experts collapse. aux_loss() is 0.0 when there
+    # is no routing (cognitive stages), so this is a no-op there.
+    aux_w = float((cfg.get("moe", {}) or {}).get("aux_loss_weight", 0.01))
+
     def loss_fn(mdl, toks):
-        return mdl.mrl_loss(toks)
+        return mdl.mrl_loss(toks) + aux_w * mdl.aux_loss()
 
     loss_and_grad_fn = B.engine.value_and_grad(model, loss_fn)
 
     # Fixed validation batches, sampled ONCE up front and reused for every gate
-    # eval. Previously the gate pulled fresh random batches from the training
-    # loader each time, so its perplexity bounced from measurement noise (and
-    # different evals weren't comparable). A frozen set makes the metric stable.
-    val_batches = [data_loader.next_batch() for _ in range(8)]
+    # eval (a frozen set keeps the metric stable/comparable across evals). Prefer a
+    # true HELD-OUT split (`*.val.jsonl`, never trained on) so the gate measures
+    # generalization; fall back to the training stream when no split was prepared.
+    val_batches = _make_val_batches(stage, cfg, data_loader, n=8)
 
     dash = TrainingDashboard(stage, n_tokens_target,
                              resume_step=start_step,
@@ -504,15 +549,24 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                            warmup, total_steps)
             B.engine.set_lr(optimizer, lr)
 
-            # Gradient accumulation
+            # Gradient accumulation — TRUE accumulation: sum the per-micro-batch
+            # gradients (mean over grad_acc) so the effective batch is really
+            # bs×grad_acc. ga==1 stays on a zero-overhead fast path.
             acc_loss = 0.0
-            grads = None
-            for _ in range(grad_acc):
+            if grad_acc == 1:
                 batch = B.ops.array(data_loader.next_batch())
-                loss, g = loss_and_grad_fn(model, batch)
+                loss, grads = loss_and_grad_fn(model, batch)
                 B.engine.eval(loss)
-                acc_loss += B.engine.item(loss)
-                grads = g
+                acc_loss = B.engine.item(loss)
+            else:
+                running = None
+                for _ in range(grad_acc):
+                    batch = B.ops.array(data_loader.next_batch())
+                    loss, g = loss_and_grad_fn(model, batch)
+                    B.engine.eval(loss)
+                    acc_loss += B.engine.item(loss)
+                    running = B.engine.accumulate_grads(running, g, model)
+                grads = B.engine.finalize_grads(running, 1.0 / grad_acc, model)
 
             # Pre-clip gradient norm — sampled only on dashboard-refresh steps
             # (it forces a device sync, so we don't pay it every step). Shown as a
@@ -530,7 +584,6 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
             step         += 1
             tokens_seen  += toks_step
-            running_loss += acc_loss / grad_acc
 
             # After the first full pass, cap the effective target to the corpus
             # size × max_passes (only if that's *below* the configured target).
@@ -538,38 +591,31 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 capped = True
                 cap = max_passes * data_loader.epoch_tokens
                 if cap < n_tokens_target:
-                    target = cap
-                    # Re-anchor the LR schedule to the real (capped) end, or cosine
-                    # would decay toward the original, larger target and never reach
-                    # lr_min before the run stops.
-                    total_steps = max(target // toks_step, 1)
+                    target = cap            # stop point; LR horizon was set up front
                     dash.set_target(target)
                     dash.print(f"[corpus] {data_loader.epoch_tokens/1e6:.1f}M tokens/pass "
                                f"— capping at {max_passes}× ({_fmt_tokens(cap)}) to avoid "
                                f"overfitting the configured {_fmt_tokens(n_tokens_target)} target")
-
-            # Reset the running-loss window every log_interval steps.
-            if step % log_interval == 0:
-                running_loss = 0.0
 
             # Dashboard refresh every dash_interval steps (smooth). Throughput is
             # measured over this same short window so the Speed field is populated
             # within the first dash_interval steps — otherwise it reads 0.0 tok/s
             # until step 100, which looks like a hung run (especially on the torch
             # MPS backend, whose cold first-step kernel compile is already slow).
+            # (The dashboard keeps its own loss moving-average from update() — no
+            # separate running_loss window is needed here.)
             if step % dash_interval == 0:
                 elapsed  = time.time() - t_dash
                 if elapsed > 0:
                     last_tps = (dash_interval * toks_step) / elapsed
                 t_dash = time.time()
-                avg_loss = running_loss / max(step % log_interval or log_interval, 1)
                 dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps,
                             grad_norm=grad_norm_val, passes=data_loader.passes)
 
             # Checkpoint
             if step % save_every == 0:
                 save_checkpoint(model, step, stage, tokens_seen,
-                               acc_loss / grad_acc, ckpt_dir)
+                               acc_loss / grad_acc, ckpt_dir, optimizer)
                 dash.set_checkpoint(step)
                 dash.print(f"[ckpt] step {step:,}")
 
@@ -582,7 +628,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 dash.set_gate_result(score, passed)
                 if passed and not skip_gate:
                     save_checkpoint(model, step, stage, tokens_seen,
-                                   acc_loss / grad_acc, ckpt_dir)
+                                   acc_loss / grad_acc, ckpt_dir, optimizer)
                     B.engine.save_weights(model, str(ckpt_dir / "final.npz"))
                     with open(ckpt_dir / "stage_complete.json", "w") as f:
                         json.dump({
@@ -600,7 +646,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
         # Budget exhausted
         save_checkpoint(model, step, stage, tokens_seen,
-                       acc_loss / grad_acc, ckpt_dir)
+                       acc_loss / grad_acc, ckpt_dir, optimizer)
 
         if skip_gate:
             # Smoke-test run (e.g. profile=test) — graduation gate not required

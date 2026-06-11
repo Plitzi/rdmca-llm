@@ -282,8 +282,10 @@ def stream_agentic(langs: List[str], limit_mb: Optional[int] = None) -> Iterator
 # working ending in "#### <final>"; we reframe each into the canonical thinking
 # transcript — a <think>…</think> scratchpad followed by the answer — so the
 # model learns to reason before answering (mirrors Claude's thinking blocks).
-# The delimiters MUST match src/agent.py THINK_OPEN / THINK_CLOSE.
-_THINK_OPEN, _THINK_CLOSE = "<think>", "</think>"
+# Single source of truth: the tokenizer registers these via vocab.CONTROL_SPECIALS,
+# and agent.THINK_OPEN/CLOSE use the same list — keep all three in sync through it.
+from src.modalities.vocab import REASONING_SPECIALS
+_THINK_OPEN, _THINK_CLOSE = REASONING_SPECIALS
 _GSM_FINAL_RE = re.compile(r"####\s*(.+?)\s*$", re.DOTALL)
 
 
