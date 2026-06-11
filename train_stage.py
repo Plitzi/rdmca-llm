@@ -208,13 +208,16 @@ def build_data_loader(stage: int, cfg: dict):
         sys.exit(1)
 
 
-def validation_perplexity(model, data_loader, n_batches: int = 8) -> float:
-    """Mean validation perplexity over n held-out batches."""
+def validation_perplexity(model, val_batches) -> float:
+    """Mean validation perplexity over a FIXED set of batches (the same arrays on
+    every call), so the gate metric is comparable across evals instead of jumping
+    around on a fresh random slice each time. (Sampled from the training stream up
+    front — comparable, though not a fully disjoint held-out split.)"""
     B = backend.current()
     losses = []
-    for _ in range(n_batches):
-        batch = B.ops.array(data_loader.next_batch())
-        loss  = model.eval_ce(batch)
+    for batch in val_batches:
+        b     = B.ops.array(batch)
+        loss  = model.eval_ce(b)
         B.engine.eval(loss)
         losses.append(B.engine.item(loss))
     return float(np.exp(np.mean(losses)))
@@ -227,7 +230,7 @@ DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0, 6: 35.0}
 
 
 def evaluate_gate(model, stage: int,
-                  data_loader=None, cfg: dict = None) -> tuple:
+                  val_batches=None, cfg: dict = None) -> tuple:
     """
     Graduation gate. Operative metric is real validation perplexity (a proxy
     that actually measures the model); task-specific benchmarks (BLiMP, ARC,
@@ -242,7 +245,7 @@ def evaluate_gate(model, stage: int,
     gate_cfg = (cfg or {}).get("gate", {})
     max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL.get(stage, 40.0))
 
-    ppl = validation_perplexity(model, data_loader)
+    ppl = validation_perplexity(model, val_batches)
     passed = ppl <= max_ppl
     print(f"  [gate] Stage {stage}: {desc}")
     print(f"  [gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "
@@ -449,6 +452,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     # Derived constants
     bs        = tcfg["batch_size"]
     grad_acc  = tcfg["grad_accumulation"]
+    clip_norm = tcfg.get("clip_grad_norm")     # global-norm grad clip (None = off)
     seq_len   = model_cfg.context_len
     toks_step = bs * seq_len * grad_acc
     warmup    = tcfg["warmup_steps"]
@@ -476,6 +480,12 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     loss_and_grad_fn = B.engine.value_and_grad(model, loss_fn)
 
+    # Fixed validation batches, sampled ONCE up front and reused for every gate
+    # eval. Previously the gate pulled fresh random batches from the training
+    # loader each time, so its perplexity bounced from measurement noise (and
+    # different evals weren't comparable). A frozen set makes the metric stable.
+    val_batches = [data_loader.next_batch() for _ in range(8)]
+
     dash = TrainingDashboard(stage, n_tokens_target,
                              resume_step=start_step,
                              resume_tokens=tokens_seen)
@@ -498,6 +508,11 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 B.engine.eval(loss)
                 acc_loss += B.engine.item(loss)
                 grads = g
+
+            # Clip gradients to a global norm (config: training.clip_grad_norm) to
+            # tame the loss spikes that come from the occasional high-norm batch.
+            if clip_norm:
+                grads = B.engine.clip_grads(model, grads, float(clip_norm))
 
             B.engine.optimizer_step(optimizer, model, grads)
 
@@ -546,7 +561,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             # training stops at the first eval_every (e.g. step 1000) far short of
             # the token budget. The stage then runs to its full budget.
             if step % eval_every == 0:
-                score, passed = evaluate_gate(model, stage, data_loader, cfg)
+                score, passed = evaluate_gate(model, stage, val_batches, cfg)
                 dash.set_gate_result(score, passed)
                 if passed and not skip_gate:
                     save_checkpoint(model, step, stage, tokens_seen,
@@ -582,7 +597,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
             return True
 
-        score, passed = evaluate_gate(model, stage, data_loader, cfg)
+        score, passed = evaluate_gate(model, stage, val_batches, cfg)
         dash.set_gate_result(score, passed)
         if passed:
             dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")

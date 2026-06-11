@@ -144,6 +144,14 @@ def _grad_norm(model, grads) -> float:
     return sq ** 0.5
 
 
+def _clip_grads(model, grads, max_norm: float):
+    """Global-norm gradient clipping. Grads live on the params (set by backward),
+    so this clips them in place via torch's utility; the sentinel is returned
+    unchanged so the call site stays backend-agnostic."""
+    torch_nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+    return grads
+
+
 def _set_precision(model, precision: str) -> None:
     model.to(device=DEVICE, dtype=_PRECISION[precision])
 
@@ -371,6 +379,7 @@ _engine = SimpleNamespace(
     register_submodules=_register_submodules,
     align_module=_align_module,
     grad_norm=_grad_norm,
+    clip_grads=_clip_grads,
     param_count=lambda module: sum(p.numel() for p in module.parameters()),
     memory_stats=_memory_stats,
 )

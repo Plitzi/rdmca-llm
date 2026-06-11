@@ -59,7 +59,7 @@ ENGINE_SURFACE = (
     "eval", "item", "set_precision", "quantize", "set_train", "set_eval",
     "save_weights", "load_weights", "state_dict", "load_state_dict",
     "set_trainable", "freeze_all", "register_submodules",
-    "grad_norm", "param_count", "memory_stats",
+    "grad_norm", "clip_grads", "param_count", "memory_stats",
 )
 
 

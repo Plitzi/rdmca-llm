@@ -190,6 +190,17 @@ def _grad_norm(model, grads) -> float:
     return sq ** 0.5
 
 
+def _clip_grads(model, grads, max_norm: float):
+    """Global-norm gradient clipping (returns the scaled grad tree). Mirrors
+    torch.nn.utils.clip_grad_norm_: if ‖g‖₂ > max_norm, scale all grads by
+    max_norm/‖g‖₂. No-op when already within the threshold."""
+    norm = _grad_norm(model, grads)
+    if norm <= max_norm or norm == 0.0:
+        return grads
+    factor = max_norm / (norm + 1e-6)
+    return tree_map(lambda g: g * factor if isinstance(g, mx.array) else g, grads)
+
+
 def _save_weights(model, path: str) -> None:
     """Neutral checkpoint: a .npz of float32 numpy arrays keyed by param name.
     Loadable by any backend (same names) regardless of training precision."""
@@ -250,6 +261,7 @@ _engine = SimpleNamespace(
     register_submodules=lambda parent, name, modules: None,
     align_module=lambda module, model: None,   # MLX unified memory: no-op
     grad_norm=_grad_norm,
+    clip_grads=_clip_grads,
     param_count=_param_count,
     memory_stats=_memory_stats,
 )
