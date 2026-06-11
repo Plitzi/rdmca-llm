@@ -245,7 +245,12 @@ def evaluate_gate(model, stage: int,
     gate_cfg = (cfg or {}).get("gate", {})
     max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL.get(stage, 40.0))
 
+    # Measure with dropout OFF (eval mode), then restore training mode — the gate
+    # is called mid-training, so validation must not see dropout noise.
+    B = backend.current()
+    B.engine.set_eval(model)
     ppl = validation_perplexity(model, val_batches)
+    B.engine.set_train(model)
     passed = ppl <= max_ppl
     print(f"  [gate] Stage {stage}: {desc}")
     print(f"  [gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "

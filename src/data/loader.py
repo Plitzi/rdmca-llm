@@ -26,13 +26,17 @@ class TextDataset:
                  seq_len: int = 2048,
                  batch_size: int = 8,
                  shuffle: bool = True,
-                 seed: int = 42):
+                 seed: int = 42,
+                 shuffle_buffer: int = 50000):
         self.data_dir   = Path(data_dir)
         self.tokenizer  = tokenizer
         self.seq_len    = seq_len
         self.batch_size = batch_size
         self.shuffle    = shuffle
         self.rng        = random.Random(seed)
+        # Records held in memory to randomize order across the interleaved file
+        # stream (see _iter_records). Big enough to break up file-sized blocks.
+        self.shuffle_buffer = shuffle_buffer
         # Corpus-cycling telemetry: `passes` counts complete reads of the corpus,
         # `epoch_tokens` is the token count of one full pass (set after the first
         # epoch). The trainer uses these to cap re-cycling and avoid overfitting a
@@ -53,26 +57,69 @@ class TextDataset:
             self.rng.shuffle(files)
         return files
 
-    def _iter_records(self) -> Iterator[dict]:
-        """Yield records from all files. JSONL rows are dicts; TXT lines become
-        {"text": line}. A record may carry pre-tokenized multimodal ids under
-        "tokens" (unified vocab) instead of "text"."""
-        files = list(self._files)
-        if self.shuffle:
-            self.rng.shuffle(files)
-        for path in files:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
+    def _records_in_file(self, path: Path) -> Iterator[dict]:
+        """Yield parsed records from ONE file, in file order. JSONL rows are dicts;
+        TXT lines become {"text": line}. A record may carry pre-tokenized multimodal
+        ids under "tokens" (unified vocab) instead of "text"."""
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if path.suffix == ".jsonl":
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
                         continue
-                    if path.suffix == ".jsonl":
-                        try:
-                            yield json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                    else:
-                        yield {"text": line}
+                else:
+                    yield {"text": line}
+
+    def _iter_records(self) -> Iterator[dict]:
+        """Yield records from all files, INTERLEAVED across sources.
+
+        Reading one file fully and then the next (the old behavior) means the
+        model trains on a whole distribution — e.g. ~19M tokens of pure dialogue —
+        and then switches to another (pure stories), so it catastrophically forgets
+        the first within a single epoch (measured: held-out perplexity jumped from
+        ~67 to ~108 exactly at the file boundary). Instead we draw records from all
+        files at once, weighted by file size so they drain together (no single-
+        source tail), then pass them through a shuffle buffer for local randomness.
+        With shuffle=False we keep the simple sequential read (deterministic)."""
+        files = list(self._files)
+        if not self.shuffle:
+            for path in files:
+                yield from self._records_in_file(path)
+            return
+
+        self.rng.shuffle(files)
+        iters   = [self._records_in_file(p) for p in files]
+        # Size-proportional weights so a big file isn't exhausted long before a
+        # small one (which would re-create a single-source block at the tail).
+        weights = [max(p.stat().st_size, 1) for p in files]
+        active  = list(range(len(iters)))
+
+        def _draw() -> Optional[dict]:
+            while active:
+                i = self.rng.choices(active, weights=[weights[j] for j in active])[0]
+                try:
+                    return next(iters[i])
+                except StopIteration:
+                    active.remove(i)
+            return None
+
+        buf: List[dict] = []
+        K = max(self.shuffle_buffer, 1)
+        while True:
+            rec = _draw()
+            if rec is None:
+                break
+            buf.append(rec)
+            if len(buf) >= K:
+                j = self.rng.randrange(len(buf))
+                buf[j], buf[-1] = buf[-1], buf[j]
+                yield buf.pop()
+        self.rng.shuffle(buf)
+        yield from buf
 
     def _iter_tokens(self) -> Iterator[int]:
         """Yield token IDs from the full corpus (text or pre-tokenized multimodal)."""
