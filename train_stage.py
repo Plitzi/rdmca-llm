@@ -532,11 +532,14 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 dash.set_checkpoint(step)
                 dash.print(f"[ckpt] step {step:,}")
 
-            # Gate evaluation
+            # Gate evaluation. On skip_gate levels (no graduation gate) the score
+            # is shown for information only — it must NOT end the stage early, or
+            # training stops at the first eval_every (e.g. step 1000) far short of
+            # the token budget. The stage then runs to its full budget.
             if step % eval_every == 0:
                 score, passed = evaluate_gate(model, stage, data_loader, cfg)
                 dash.set_gate_result(score, passed)
-                if passed:
+                if passed and not skip_gate:
                     save_checkpoint(model, step, stage, tokens_seen,
                                    acc_loss / grad_acc, ckpt_dir)
                     B.engine.save_weights(model, str(ckpt_dir / "final.npz"))

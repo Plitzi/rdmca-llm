@@ -356,6 +356,12 @@ def _full_corpus_streamers(stage: int, langs: List[str],
     }
 
 
+# Sources that are free prose and SHOULD be readability-graded. Everything else
+# (dialogue, tool/skill/MCP JSON, arithmetic, analogies, causal) is conversational
+# or structured and must NOT be grade-filtered — see the gate below.
+_READABILITY_FILTERED = {"tinystories", "simple_wikipedia", "wikipedia"}
+
+
 def prepare_stage_for_level(level: int, stage: int, cfg: dict,
                             langs: List[str], limit_mb: Optional[int] = None) -> None:
     """Prepare graded data for one (level, stage), reading the level config's
@@ -402,7 +408,12 @@ def prepare_stage_for_level(level: int, stage: int, cfg: dict,
         if it is None:
             print(f"  [skip] unknown source '{src}'")
             continue
-        if flt:                                        # readability gate (None ⇒ keep all)
+        # Readability (Flesch-Kincaid grade) gating only makes sense for free
+        # PROSE. Applying grade≤2 to real human dialogue decimated it (it nearly
+        # always scores above a preschool grade), starving the model of the
+        # conversational `User:/Assistant:` format — so only prose sources are
+        # graded; conversational/structured ones pass through.
+        if flt and src in _READABILITY_FILTERED:       # None / non-prose ⇒ keep all
             it = (rec for rec in it if graded.passes_filter(rec.get("text", ""), flt))
         tokens = write_jsonl(it, out_path, per_source_m)
         print(f"  {src}: {tokens/1e6:.1f}M tokens → {out_path.name}")
