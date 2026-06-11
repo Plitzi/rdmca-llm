@@ -539,6 +539,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 cap = max_passes * data_loader.epoch_tokens
                 if cap < n_tokens_target:
                     target = cap
+                    # Re-anchor the LR schedule to the real (capped) end, or cosine
+                    # would decay toward the original, larger target and never reach
+                    # lr_min before the run stops.
+                    total_steps = max(target // toks_step, 1)
                     dash.set_target(target)
                     dash.print(f"[corpus] {data_loader.epoch_tokens/1e6:.1f}M tokens/pass "
                                f"— capping at {max_passes}× ({_fmt_tokens(cap)}) to avoid "

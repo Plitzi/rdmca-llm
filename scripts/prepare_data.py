@@ -6,34 +6,30 @@ if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(
     os.execv(_venv, [_venv] + sys.argv)
 
 """
-RDMCA Data Preparation Script — config-driven language set
-===========================================================
-Downloads and processes all curriculum stage datasets for the languages in
-the config (`model.languages`), or a `--lang` override.
-Output: data/level{L}/stage{N}/  in .jsonl format  {"text": "...", "lang": "<code>"}
+RDMCA Data Preparation Script — config-driven, per level + stage
+================================================================
+Writes the training corpus for each curriculum stage of a LEVEL, using the
+sources, complexity filter and token budget declared in that level's config
+(`configs/levels/levelN.yaml`). Output:
+  data/level{L}/stage{N}/{source}.jsonl   {"text": "...", "lang": "<code>"}
+plus a {source}.meta.json sidecar recording token count + whether the source
+was exhausted (used to decide if a re-run can skip it).
 
-Strategy
---------
-Wikipedia (one dump per configured language) is the backbone for all stages.
-Each article is tagged with its language and routed to the correct stage
-by category keywords (bilingual — same keywords trigger in both languages).
-Small task-specific datasets are mixed in for domain-specific stages.
+Where the data comes from is per-source, resolved in `src/data/graded.py`:
+  - Lower levels use simple/graded sources (tinystories, dialogue, arithmetic,
+    analogies, agentic/MCP/skills, reasoning) — small, conversational/structured.
+  - Higher levels add the FULL corpora (Wikipedia per configured language, ARC,
+    GSM8K, MATH, ethics), with Wikipedia routed to a stage by category keywords
+    (STAGE_KEYWORDS) and prose readability-graded (Flesch-Kincaid).
 
-Stage → Wikipedia categories:
-  1  Language    — everything (general language baseline)
-  2  Patterns    — ciencia/science, lógica/logic, analogía/analogy
-  3  Abstraction — matemáticas/mathematics, lógica/logic, álgebra/algebra
-  4  Causal      — ingeniería/engineering, medicina/medicine, física/physics
-  5  Ethics      — ética/ethics, filosofía/philosophy, derecho/law
-
-Token targets (total EN+ES):
-  Stage 1: 1.5B   Stage 2: 500M   Stage 3: 1B   Stage 4: 1B   Stage 5: 500M
+Token budgets come from each stage's `n_tokens` in the config (NOT hardcoded
+here), split across the stage's sources.
 
 Usage:
-  python scripts/prepare_data.py --stage all
-  python scripts/prepare_data.py --stage 1
-  python scripts/prepare_data.py --stage 1 --limit 100   # 100MB test run
-  python scripts/prepare_data.py --stage 1 --lang en     # English only
+  python scripts/prepare_data.py --level 1 --stage all
+  python scripts/prepare_data.py --level 1 --stage 1
+  python scripts/prepare_data.py --level 1 --stage 1 --limit 100  # 100MB test
+  python scripts/prepare_data.py --level 1 --stage 1 --lang en    # English only
 """
 import argparse
 import json
@@ -77,6 +73,22 @@ def _validate_jsonl(path: Path, token_budget_m: int) -> tuple[bool, str]:
     """
     if not path.exists() or path.stat().st_size == 0:
         return False, "file is empty or missing"
+
+    # Prefer the completeness sidecar written by write_jsonl: a source that was
+    # EXHAUSTED is complete even if smaller than the budget (so we don't endlessly
+    # re-download e.g. dialogue, which simply has fewer tokens than its budget).
+    meta = path.with_suffix(".meta.json")
+    if meta.exists():
+        try:
+            m = json.loads(meta.read_text())
+            toks_m = m.get("tokens", 0) / 1e6
+            if m.get("exhausted") or m.get("tokens", 0) >= token_budget_m * 1e6 * 0.9:
+                kind = "exhausted" if m.get("exhausted") else "complete"
+                return True, f"~{toks_m:.0f}M tokens ({kind})"
+            return False, (f"partial ~{toks_m:.0f}M (< 90% of {token_budget_m}M) "
+                           "— re-downloading")
+        except (json.JSONDecodeError, OSError):
+            pass   # fall back to the size heuristic below
 
     # Validate first line is parseable JSONL
     try:
@@ -200,28 +212,6 @@ def stream_wikipedia(lang: str = "en",
             ds = _load_wikipedia_with_retry(lang)
 
 
-def stream_arc(split: str = "train") -> Iterator[dict]:
-    """ARC Easy + Challenge (EN) — Stage 2."""
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        return
-    for subset in ("ARC-Easy", "ARC-Challenge"):
-        try:
-            ds = load_dataset("allenai/ai2_arc", subset, split=split)
-            for ex in ds:
-                q       = ex["question"]
-                labels  = ex["choices"]["label"]
-                texts   = ex["choices"]["text"]
-                answer  = ex.get("answerKey", "")
-                options = "  ".join(f"{l}: {t}" for l, t in zip(labels, texts))
-                correct = next((t for l, t in zip(labels, texts) if l == answer), "")
-                yield {"text": f"Question: {q}\nOptions: {options}\nAnswer: {correct}",
-                       "lang": "en"}
-        except Exception as e:
-            print(f"    [arc] {subset}: {e}")
-
-
 def stream_gsm8k_bilingual(split: str = "train") -> Iterator[dict]:
     """GSM8K (EN) + mGSM Spanish — Stage 3."""
     try:
@@ -286,13 +276,16 @@ def stream_ethics_bilingual() -> Iterator[dict]:
 
 
 def write_jsonl(records: Iterator[dict], out_path: Path,
-                token_budget_m: int, verbose: bool = True) -> int:
-    """Write records to JSONL until token budget is reached. Returns tokens written."""
+                token_budget_m: int, verbose: bool = True) -> tuple[int, bool]:
+    """Write records to JSONL until the token budget is reached. Returns
+    (tokens_written, exhausted) — `exhausted` is True when the source ran out
+    BEFORE the budget (so a smaller-than-budget file is complete, not partial)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tokens_written = 0
     target = token_budget_m * 1_000_000
     n = 0
     t0 = time.time()
+    exhausted = True                          # set False if we stop on the budget
 
     with open(out_path, "w", encoding="utf-8") as f:
         for rec in records:
@@ -309,9 +302,10 @@ def write_jsonl(records: Iterator[dict], out_path: Path,
                 print(f"    {tokens_written/1e6:.0f}M / {token_budget_m}M tokens "
                       f"({pct:.1f}%)  {n:,} docs  {elapsed:.0f}s")
             if tokens_written >= target:
+                exhausted = False
                 break
 
-    return tokens_written
+    return tokens_written, exhausted
 
 
 def _arc_subset(subset: str):
@@ -413,8 +407,13 @@ def prepare_stage_for_level(level: int, stage: int, cfg: dict,
         # graded; conversational/structured ones pass through.
         if flt and src in _READABILITY_FILTERED:       # None / non-prose ⇒ keep all
             it = (rec for rec in it if graded.passes_filter(rec.get("text", ""), flt))
-        tokens = write_jsonl(it, out_path, per_source_m)
-        print(f"  {src}: {tokens/1e6:.1f}M tokens → {out_path.name}")
+        tokens, exhausted = write_jsonl(it, out_path, per_source_m)
+        # Sidecar: records completeness so a re-run can tell "source exhausted"
+        # (complete, smaller than budget) from "download interrupted" (partial).
+        out_path.with_suffix(".meta.json").write_text(json.dumps(
+            {"tokens": tokens, "budget_m": per_source_m, "exhausted": exhausted}))
+        note = "exhausted" if exhausted else "budget reached"
+        print(f"  {src}: {tokens/1e6:.1f}M tokens ({note}) → {out_path.name}")
 
     print(f"  Stage {stage} ready in {out_dir}/")
 

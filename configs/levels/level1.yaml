@@ -83,6 +83,10 @@ curriculum:
     data_dir: "data/level1/stage1"
     data:
       sources: [tinystories, dialogue]   # simple stories + synthetic simple dialogue.
+      # Oversample dialogue: the raw corpus is ~72% stories / ~28% dialogue by size,
+      # which biases the model toward narrating instead of conversing. Weighting
+      # dialogue up (×3) shifts the training mixture toward ~conversational parity.
+      source_weights: {dialogue: 3.0}
       filter:
         # Flesch-Kincaid US grade ceiling (words/sentence + syllables/word).
         # Lower = simpler reading level. ~2 ≈ a 7-year-old's reading level.

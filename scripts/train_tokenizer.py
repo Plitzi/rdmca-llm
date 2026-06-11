@@ -74,8 +74,14 @@ def _renderable():
 # ──────────────────────────────────────────────────────────────────────────────
 
 def build_text_sample(data_dir, label: str, out_txt: str,
-                      max_mb: int, task_id) -> int:
-    """Read JSONL files and write plain text to out_txt, updating shared progress."""
+                      max_mb: int, task_id, lang_filter: str = None,
+                      default_lang: str = "en") -> int:
+    """Read JSONL files and write plain text to out_txt, updating shared progress.
+
+    When `lang_filter` is set, only records whose `lang` matches are written (a
+    record with no `lang` counts as `default_lang`). This routes a mixed-language
+    corpus into per-language samples by the record tag — the files themselves are
+    not split by language (prepare_data writes one file per SOURCE, not per lang)."""
     max_bytes   = max_mb * 1024 * 1024
     jsonl_files = sorted(data_dir.glob("*.jsonl"))
     total_size  = sum(f.stat().st_size for f in jsonl_files)
@@ -88,9 +94,12 @@ def build_text_sample(data_dir, label: str, out_txt: str,
             with open(jsonl, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
-                        text = json.loads(line).get("text", "").strip()
+                        rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if lang_filter is not None and rec.get("lang", default_lang) != lang_filter:
+                        continue
+                    text = rec.get("text", "").strip()
                     if not text:
                         continue
                     out.write(text + "\n")
@@ -267,16 +276,13 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     prefix = str(Path(args.output_dir) / "rdmca_spm")
 
-    # One sample stream per configured language (files tagged *_<lang>.jsonl).
-    # If no per-language files exist, fall back to all jsonl under the first lang.
-    langs_to_build = []
-    for lang in langs:
-        files = list(data_dir.glob(f"*_{lang}.jsonl"))
-        if files:
-            langs_to_build.append((lang, files))
-    if not langs_to_build:
-        langs_to_build = [(langs[0], list(data_dir.glob("*.jsonl")))]
-    if not any(f for _, f in langs_to_build):
+    # One sample stream per configured language, routed by each record's `lang`
+    # tag (prepare_data writes one file per SOURCE, not per language, so we filter
+    # records — not filenames — by language). Languages with no records are dropped
+    # after the read so SentencePiece never gets an empty input.
+    all_jsonl = list(data_dir.glob("*.jsonl"))
+    langs_to_build = [(lang, all_jsonl) for lang in langs]
+    if not all_jsonl:
         console.print("[red]ERROR:[/red] No language files found.")
         sys.exit(1)
 
@@ -301,11 +307,14 @@ def main():
                 for lang, _ in langs_to_build
             }
 
+            primary = langs[0]
+
             def _build(lang: str, files: list) -> str:
                 class LangDir:
                     def glob(self_, pat): return iter(files)
                 build_text_sample(LangDir(), lang, lang_tmp[lang],
-                                  args.sample_mb, task_ids[lang])
+                                  args.sample_mb, task_ids[lang],
+                                  lang_filter=lang, default_lang=primary)
                 progress.update(task_ids[lang],
                                 description=f"[green]Read {lang} ✓[/green]")
                 return lang
@@ -315,7 +324,13 @@ def main():
                         {pool.submit(_build, l, f): l for l, f in langs_to_build}):
                     fut.result()
 
-            combined_input = ",".join(lang_tmp[l] for l, _ in langs_to_build)
+            # Drop languages that produced no text (e.g. an EN-only corpus when ES
+            # is also configured) so SPM is not fed an empty file.
+            built_langs = [l for l, _ in langs_to_build
+                           if os.path.getsize(lang_tmp[l]) > 0]
+            if not built_langs:
+                raise RuntimeError("No text sampled for any configured language.")
+            combined_input = ",".join(lang_tmp[l] for l in built_langs)
 
             # ── Auto-cap vocab ────────────────────────────────────────────────
             total_chars = sum(os.path.getsize(p) for p in tmp_paths)
@@ -329,7 +344,7 @@ def main():
                 )
 
             # ── Phase 2: train BPE (spinner in same live display) ─────────────
-            built_langs = [l for l, _ in langs_to_build]
+            # built_langs computed above (languages that produced text).
             train_spm(combined_input, prefix, vocab_size,
                       langs=built_langs,
                       num_threads=os.cpu_count() or 4)

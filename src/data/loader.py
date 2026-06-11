@@ -8,7 +8,7 @@ import json
 import os
 import random
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 
@@ -27,7 +27,8 @@ class TextDataset:
                  batch_size: int = 8,
                  shuffle: bool = True,
                  seed: int = 42,
-                 shuffle_buffer: int = 50000):
+                 shuffle_buffer: int = 50000,
+                 source_weights: Optional[Dict[str, float]] = None):
         self.data_dir   = Path(data_dir)
         self.tokenizer  = tokenizer
         self.seq_len    = seq_len
@@ -37,6 +38,11 @@ class TextDataset:
         # Records held in memory to randomize order across the interleaved file
         # stream (see _iter_records). Big enough to break up file-sized blocks.
         self.shuffle_buffer = shuffle_buffer
+        # Per-source sampling weights, keyed by file stem (e.g. {"dialogue": 3.0}).
+        # Multiplies the size-proportional draw weight so a small but important
+        # source (dialogue) can be oversampled relative to a large one (stories),
+        # shifting the mixture the model trains on without needing more raw data.
+        self.source_weights = source_weights or {}
         # Corpus-cycling telemetry: `passes` counts complete reads of the corpus,
         # `epoch_tokens` is the token count of one full pass (set after the first
         # epoch). The trainer uses these to cap re-cycling and avoid overfitting a
@@ -92,19 +98,29 @@ class TextDataset:
             return
 
         self.rng.shuffle(files)
+        n       = len(files)
         iters   = [self._records_in_file(p) for p in files]
-        # Size-proportional weights so a big file isn't exhausted long before a
-        # small one (which would re-create a single-source block at the tail).
-        weights = [max(p.stat().st_size, 1) for p in files]
-        active  = list(range(len(iters)))
+        # Draw weight = file size × the source's configured weight. Size keeps the
+        # files draining together (no single-source tail / catastrophic forgetting);
+        # source_weights lets a small source be oversampled into the mixture.
+        weights = [max(p.stat().st_size, 1) * float(self.source_weights.get(p.stem, 1.0))
+                   for p in files]
+        idx     = list(range(n))
+        done    = [False] * n          # each source has been read fully ≥ once
 
         def _draw() -> Optional[dict]:
-            while active:
-                i = self.rng.choices(active, weights=[weights[j] for j in active])[0]
+            # Run until EVERY file has been read through at least once. A source
+            # that exhausts early (small, or oversampled) is RESTARTED so it keeps
+            # appearing throughout the epoch instead of leaving a single-source tail.
+            while not all(done):
+                i = self.rng.choices(idx, weights=weights)[0]
                 try:
                     return next(iters[i])
                 except StopIteration:
-                    active.remove(i)
+                    done[i] = True
+                    if all(done):
+                        return None
+                    iters[i] = self._records_in_file(files[i])   # cycle
             return None
 
         buf: List[dict] = []
@@ -217,11 +233,15 @@ class DataLoader:
         lvl       = cfg.get("level")                      # per-level layout: data/level{N}/stage{S}
         default_dir = f"data/level{lvl}/stage{stage}" if lvl is not None else f"data/stage{stage}"
         data_dir  = stage_cfg.get("data_dir", default_dir)
+        # Optional per-source oversampling, e.g. data.source_weights:{dialogue:3.0}
+        # to push the conversational share of the training mixture up.
+        source_weights = (stage_cfg.get("data", {}) or {}).get("source_weights")
 
         def _ds(path: str) -> TextDataset:
             return TextDataset(data_dir=path, tokenizer=tokenizer,
                                seq_len=mcfg["context_len"],
-                               batch_size=tcfg["batch_size"], shuffle=True)
+                               batch_size=tcfg["batch_size"], shuffle=True,
+                               source_weights=source_weights)
 
         ds = _ds(data_dir)
         replay: List[TextDataset] = []
