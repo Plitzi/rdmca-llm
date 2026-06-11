@@ -314,7 +314,11 @@ def load_model(args):
     import json as _j
     tok_info = Path("dist/tokenizer/tokenizer_info.json")
     if tok_info.exists():
-        actual_vocab = _j.loads(tok_info.read_text())["vocab_size"]
+        # Use the real text vocab (IDs the tokenizer actually emits), NOT the full
+        # multimodal layout size — see the same fix in train_stage.py. Must match
+        # the size the checkpoint was trained at, or the embedding/head won't load.
+        _info = _j.loads(tok_info.read_text())
+        actual_vocab = _info.get("text_vocab_size", _info["vocab_size"])
         if actual_vocab != model_dict.get("vocab_size"):
             model_dict["vocab_size"] = actual_vocab
 

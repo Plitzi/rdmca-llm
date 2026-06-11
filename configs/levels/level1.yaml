@@ -45,7 +45,12 @@ training:
   lr_min: 5.0e-5
   weight_decay: 0.1
   batch_size: 16               # big batch fits easily at this size.
-  grad_accumulation: 2         # effective batch = batch_size × grad_accumulation.
+  grad_accumulation: 1         # NOTE: the loop does NOT sum grads across micro-batches
+                               # (each value_and_grad returns that micro-batch's grad and
+                               # only the last is applied) — so ga>1 does not enlarge the
+                               # effective batch; on torch it just wastes a backward, and
+                               # on MLX it inflates the token counter so the n_tokens budget
+                               # is reached with half the real gradient updates. Keep at 1.
   warmup_steps: 200
   save_every: 500
   eval_every: 1000

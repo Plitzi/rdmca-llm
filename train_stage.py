@@ -373,7 +373,12 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     if tok_info.exists():
         with open(tok_info) as f:
             info = json.load(f)
-        actual_vocab = info["vocab_size"]
+        # The unified multimodal layout reserves IDs 0..20479 (text+image+audio),
+        # but the text tokenizer only ever emits IDs < text_vocab_size (8192).
+        # Sizing the embedding/head to the full 20480 leaves ~60% of rows without
+        # gradient and lets phantom image/audio logits steal softmax mass, which
+        # produces incoherent text. Train the text head at the real text vocab.
+        actual_vocab = info.get("text_vocab_size", info["vocab_size"])
         if actual_vocab != mcfg.get("vocab_size"):
             print(f"  [vocab] Using tokenizer vocab_size={actual_vocab} "
                   f"(config had {mcfg.get('vocab_size')})")
@@ -461,9 +466,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     step = start_step
     running_loss = 0.0
-    log_interval  = 100   # interval for tps calculation
-    dash_interval = 10    # update dashboard every N steps (smooth)
-    t0 = time.time()
+    log_interval  = 100   # interval for the running-loss window reset
+    dash_interval = 10    # update dashboard (and measure tok/s) every N steps
     t_dash = time.time()
     last_tps = 0.0
 
@@ -513,15 +517,20 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                                f"— capping at {max_passes}× ({_fmt_tokens(cap)}) to avoid "
                                f"overfitting the configured {_fmt_tokens(n_tokens_target)} target")
 
-            # Recalculate tps every log_interval steps
+            # Reset the running-loss window every log_interval steps.
             if step % log_interval == 0:
-                elapsed  = time.time() - t0
-                last_tps = (log_interval * toks_step) / elapsed
                 running_loss = 0.0
-                t0 = time.time()
 
-            # Dashboard refresh every dash_interval steps (smooth)
+            # Dashboard refresh every dash_interval steps (smooth). Throughput is
+            # measured over this same short window so the Speed field is populated
+            # within the first dash_interval steps — otherwise it reads 0.0 tok/s
+            # until step 100, which looks like a hung run (especially on the torch
+            # MPS backend, whose cold first-step kernel compile is already slow).
             if step % dash_interval == 0:
+                elapsed  = time.time() - t_dash
+                if elapsed > 0:
+                    last_tps = (dash_interval * toks_step) / elapsed
+                t_dash = time.time()
                 avg_loss = running_loss / max(step % log_interval or log_interval, 1)
                 dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
 
