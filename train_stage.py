@@ -141,7 +141,9 @@ def save_checkpoint(model, step: int, stage: int,
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     fname = ckpt_dir / f"step_{step:08d}.npz"
     backend.current().engine.save_weights(model, str(fname))
-    if optimizer is not None:                   # warm-resume: save AdamW moments too
+    if optimizer is not None:                   # warm-resume: save AdamW moments too,
+        # per-checkpoint (step_NNNN.opt) so a rollback to any step restores its
+        # optimizer moments, not just the latest. Costs ~2× the weights per ckpt.
         backend.current().engine.save_optimizer(optimizer, str(fname.with_suffix(".opt")))
     state = {
         "step": step, "stage": stage,
@@ -164,8 +166,8 @@ def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
         state = json.load(f)
     backend.current().engine.load_weights(model, state["checkpoint"])
     warm = False
-    if optimizer is not None:                   # restore AdamW moments if saved
-        opt_path = Path(state["checkpoint"]).with_suffix(".opt")
+    if optimizer is not None:                   # restore AdamW moments if saved (the
+        opt_path = Path(state["checkpoint"]).with_suffix(".opt")   # step's own .opt
         warm = backend.current().engine.load_optimizer(optimizer, str(opt_path))
     print(f"  [resume] step={state['step']:,} | "
           f"{state['tokens_seen']/1e6:.1f}M tokens | loss={state['loss']:.4f}"
@@ -636,8 +638,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                             "tokens_seen": tokens_seen, "gate_score": score,
                             "timestamp": time.time(),
                         }, f, indent=2)
-                    dash.print(f"[bold green]Stage {stage} COMPLETE — "
-                               f"gate {score:.4f}[/bold green]")
+                    dash.print(f"✓ Stage {stage} COMPLETE — gate {score:.4f}")
                     _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
                     return True
 
@@ -656,14 +657,14 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                            "tokens_seen": tokens_seen, "gate_score": None,
                            "checkpoint": ckpt_file,
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
-            dash.print(f"[bold green]Stage {stage} COMPLETE (gate skipped)[/bold green]")
+            dash.print(f"✓ Stage {stage} COMPLETE (gate skipped)")
             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
             return True
 
         score, passed = evaluate_gate(model, stage, val_batches, cfg)
         dash.set_gate_result(score, passed)
         if passed:
-            dash.print(f"[bold green]Stage {stage} COMPLETE — gate {score:.4f}[/bold green]")
+            dash.print(f"✓ Stage {stage} COMPLETE — gate {score:.4f}")
             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
         else:
             need = STAGE_GATES[stage][1] if stage in STAGE_GATES else None

@@ -57,7 +57,7 @@ curriculum:
   stage1:
     name: "Language and communication"
     entry_level: 1
-    n_tokens: 110_000_000
+    n_tokens: 300_000_000      # > L1 (200M): primaria is a higher grade than preescolar
     data_dir: "data/level2/stage1"
     data:
       sources: [simple_wikipedia, dialogue]   # Simple-English Wikipedia + synthetic dialogue.

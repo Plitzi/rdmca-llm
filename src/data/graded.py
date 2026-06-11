@@ -595,6 +595,12 @@ _DIALOGUE_CORPORA: Dict[str, List[tuple]] = {
          lambda ex: [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]),
         ("knkarthick/dialogsum",
          lambda ex: _parse_person_dialogue(ex.get("dialogue", ""))),
+        # General everyday chit-chat (greetings, small talk) — balances the
+        # empathetic/support skew of the corpora above (which biases replies toward
+        # an apologetic tone). Turns alternate speakers; first→User, second→Assistant.
+        ("daily_dialog",
+         lambda ex: [("A" if i % 2 == 0 else "B", u)
+                     for i, u in enumerate(ex.get("dialog") or [])]),
     ],
 }
 
@@ -665,6 +671,28 @@ def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterato
             yield rec
 
 
+def stream_instruct(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Simple instruction→response pairs (Alpaca, EN) framed as User:/Assistant: so
+    the model learns to ANSWER a request directly — the conversational corpora are
+    empathetic/narrative and don't teach 'reply to what was asked'. Long answers are
+    skipped to keep entries digestible for the small early levels."""
+    if "en" not in langs:
+        return
+    try:
+        from datasets import load_dataset
+        ds = load_dataset("tatsu-lab/alpaca", split="train", streaming=True)
+        for ex in ds:
+            instr = (ex.get("instruction") or "").strip()
+            inp   = (ex.get("input") or "").strip()
+            out   = (ex.get("output") or "").strip()
+            if not instr or not out or len(out) > 600:      # keep short, simple Q&A
+                continue
+            user = f"{instr}\n{inp}" if inp else instr
+            yield {"text": f"User: {user}\nAssistant: {out}", "lang": "en"}
+    except Exception as e:
+        print(f"    [instruct] {e}")
+
+
 def stream_simple_wikipedia(limit_mb: Optional[int] = None) -> Iterator[dict]:
     """Simple English Wikipedia — short, plain-language articles. Level 2."""
     try:
@@ -691,6 +719,8 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
     approx_examples = max(n_tokens // 6, 1000)
     if key == "tinystories":
         return stream_tinystories(limit_mb)
+    if key in ("instruct", "instructions"):     # instruction→response (answer directly)
+        return stream_instruct(langs, limit_mb)
     if key in ("dialogue", "daily_dialog"):     # real human conversation corpora
         return stream_dialogue(langs, limit_mb)
     if key == "simple_wikipedia":

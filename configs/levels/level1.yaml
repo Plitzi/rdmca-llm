@@ -54,7 +54,7 @@ training:
   save_every: 500
   eval_every: 1000
   clip_grad_norm: 1.0
-  max_corpus_passes: 3         # cap re-reads of a small corpus (anti-overfit). If the
+  max_corpus_passes: 4         # cap re-reads of a small corpus (anti-overfit). If the
                                # corpus × this < n_tokens, the stage stops here (default 3).
   rehearsal_fraction: 0.15     # cognitive stages mix this fraction of earlier-stage data
                                # (rehearsal) so new faculties don't erode conversation (default 0.15).
@@ -78,19 +78,28 @@ curriculum:
   stage1:
     name: "Language and communication"
     entry_level: 1             # language is the foundation — present from level 1.
-    n_tokens: 80_000_000       # foundation stage gets the bulk (~10.5M params, ~20× total)
+    n_tokens: 200_000_000      # ~19× tokens/params — the run plateaued at ~80M on the
+                               # OLD narrow data; broader data + more tokens is what
+                               # makes L1 actually usable (its whole purpose as a base).
     data_dir: "data/level1/stage1"
     data:
-      sources: [tinystories, dialogue]   # simple stories + synthetic simple dialogue.
-      # Oversample dialogue: the raw corpus is ~72% stories / ~28% dialogue by size,
-      # which biases the model toward narrating instead of conversing. Weighting
-      # dialogue up (×3) shifts the training mixture toward ~conversational parity.
-      source_weights: {dialogue: 3.0}
+      # RICH but BASIC variety — the four registers a usable base needs:
+      #   tinystories      → simple narrative / literature (grammar, story flow)
+      #   dialogue         → conversation: empathetic + general chit-chat (daily_dialog)
+      #   instruct         → answer-a-request directly (short Alpaca Q&A)
+      #   simple_wikipedia → factual/expository, plain language (world-knowledge vocab)
+      # Variety of REGISTER + topic — not just more tokens — is what lets a tiny
+      # model converse and understand rather than only be grammatical.
+      sources: [tinystories, dialogue, instruct, simple_wikipedia]
+      # Oversample conversation/instruction so the model learns to converse/answer,
+      # not just narrate or recite (stories+wiki dominate by raw size). Tunable.
+      source_weights: {dialogue: 2.5, instruct: 2.5}
       filter:
-        # Flesch-Kincaid US grade ceiling (words/sentence + syllables/word).
-        # Lower = simpler reading level. ~2 ≈ a 7-year-old's reading level.
-        max_grade: 2
-        max_word_len: 12           # also drop texts with very long words.
+        # Flesch-Kincaid grade ceiling, applied to PROSE sources (tinystories,
+        # simple_wikipedia). Raised 2→4 (still elementary) so simple factual prose
+        # contributes real vocabulary breadth instead of being almost all dropped.
+        max_grade: 4
+        max_word_len: 14
   stage2:
     name: "Perception and pattern recognition"
     entry_level: 1

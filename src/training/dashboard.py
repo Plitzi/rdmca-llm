@@ -10,7 +10,7 @@ from typing import Optional
 
 import src.backend as backend
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -103,6 +103,11 @@ class TrainingDashboard:
 
         self._console      = Console()
         self._live: Optional[Live] = None
+        self._is_tty       = self._console.is_terminal      # animate only on a TTY
+        # Recent log lines shown UNDER the pinned dashboard (one redraw region, so
+        # switching terminals/tmux panes never leaves the panel half-drawn). On a
+        # non-TTY (piped to a file) we print lines normally so the file keeps them.
+        self._log: deque[str] = deque(maxlen=10)
 
         # Stats history
         self._loss_hist: deque[float] = deque(maxlen=50)
@@ -184,21 +189,26 @@ class TrainingDashboard:
         self.last_ckpt_step = step
 
     def print(self, msg: str) -> None:
-        """Print a message above the live panel."""
-        if self._live:
-            self._live.console.log(msg)
+        """Record a log line. On a TTY it appears in the panel's log area (under the
+        dashboard); piped to a file it is printed plainly so the file keeps it."""
+        if self._is_tty and self._live:
+            self._log.append(msg)
+            self._live.update(self._build_layout())
+        else:
+            self._console.print(msg)
 
     # ── Context manager ───────────────────────────────────────────────────────
 
     def __enter__(self) -> "TrainingDashboard":
-        self._live = Live(
-            self._build_layout(),
-            console=self._console,
-            refresh_per_second=10,
-            screen=False,
-            vertical_overflow="visible",
-        )
-        self._live.__enter__()
+        if self._is_tty:                        # animate only on a real terminal
+            self._live = Live(
+                self._build_layout(),
+                console=self._console,
+                refresh_per_second=10,
+                screen=False,
+                vertical_overflow="visible",
+            )
+            self._live.__enter__()
         return self
 
     def __exit__(self, *args) -> None:
@@ -289,8 +299,18 @@ class TrainingDashboard:
 
         title = (f"[bold]Stage {self.stage}[/bold]  "
                  f"[dim]{self.stage_name}[/dim]")
-        return Panel(layout, title=title, border_style="bright_blue",
-                     padding=(0, 1))
+        panel = Panel(layout, title=title, border_style="bright_blue",
+                      padding=(0, 1))
+
+        # Dashboard pinned ON TOP; recent log lines BELOW it — both in one Group so
+        # the whole block redraws together (robust to terminal/pane switches).
+        if not self._log:
+            return panel
+        # Render logs as plain Text (no markup parsing) so literal tags like
+        # "[ckpt]"/"[gate]" are shown verbatim instead of being eaten as styles.
+        log_panel = Panel(Text("\n".join(self._log)), title="[dim]log[/dim]",
+                          border_style="dim", padding=(0, 1))
+        return Group(panel, log_panel)
 
 
 def _fmt_time(seconds: float) -> str:

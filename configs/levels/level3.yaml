@@ -58,7 +58,7 @@ curriculum:
   stage1:
     name: "Language and communication"
     entry_level: 1
-    n_tokens: 260_000_000
+    n_tokens: 450_000_000      # > L2 (300M): secundaria, bigger model (~32M params)
     data_dir: "data/level3/stage1"
     data:
       sources: [wikipedia]            # full Wikipedia, but readability-filtered.
