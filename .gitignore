@@ -26,6 +26,7 @@ dist/tokenizer/*.json
 
 # ── Training data (large downloads) ───────────────────────────────────────────
 data/**/*.jsonl
+data/**/*.meta.json
 
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log
