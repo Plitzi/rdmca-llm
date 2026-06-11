@@ -31,13 +31,18 @@ def normalize_format(fmt: Optional[str]) -> str:
 
 
 def wrap_prompt(prompt: str, fmt: str, think: str = "off") -> str:
-    """Prepare the prompt text for the chosen output format and thinking level."""
+    """Frame one chat turn the way the training data is formatted: a `User:` line
+    and a trailing `Assistant:` so the model continues as the assistant. This is
+    the SAME `User:/Assistant:` convention used by the dialogue/reasoning/agentic
+    corpora — priming bare text (no role) is why an undertrained model just rambles
+    instead of replying. The leading newline lets turns concatenate cleanly in the
+    running history."""
     prompt = prompt.rstrip()
     if normalize_thinking(think) != "off":
         prompt += THINK_INSTRUCTION
     if normalize_format(fmt) == "json":
         prompt += _JSON_PRIMER
-    return prompt
+    return f"\nUser: {prompt}\nAssistant:"
 
 
 def parse_output(text: str, fmt: str) -> dict:

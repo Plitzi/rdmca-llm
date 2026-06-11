@@ -553,8 +553,11 @@ def stream_tinystories(limit_mb: Optional[int] = None) -> Iterator[dict]:
 # two-party A:/B: transcript. The legacy `daily_dialog` is script-based and no
 # longer loads on datasets>=3, so we use parquet-native everyday-chat corpora.
 def _format_dialogue(turns: List[tuple]) -> Optional[str]:
-    """Normalize (speaker, text) turns to a two-party "A:/B:" transcript.
-    Returns None for empty or 3+ speaker conversations (kept strictly dyadic)."""
+    """Normalize (speaker, text) turns to a "User:/Assistant:" transcript — the
+    SAME turn convention the reasoning/agentic/MCP data and the chat runtime use,
+    so a model trained on dialogue is primed to reply as the assistant. The first
+    speaker is the User, the second the Assistant. Returns None for empty or 3+
+    speaker conversations (kept strictly dyadic)."""
     label: Dict[str, str] = {}
     lines: List[str] = []
     for spk, txt in turns:
@@ -564,7 +567,7 @@ def _format_dialogue(turns: List[tuple]) -> Optional[str]:
         if spk not in label:
             if len(label) >= 2:                    # third speaker → drop conversation
                 return None
-            label[spk] = "A" if not label else "B"
+            label[spk] = "User" if not label else "Assistant"
         lines.append(f"{label[spk]}: {txt}")
     return "\n".join(lines) if len(lines) >= 2 else None
 
@@ -600,8 +603,8 @@ _OASST_REPOS = ("OpenAssistant/oasst1", "OpenAssistant/oasst2")
 
 
 def _stream_oasst(langs: set) -> Iterator[dict]:
-    """Reconstruct OpenAssistant message trees into A:/B: transcripts, one per
-    leaf path, keeping monolingual paths whose language is requested."""
+    """Reconstruct OpenAssistant message trees into User:/Assistant: transcripts,
+    one per leaf path, keeping monolingual paths whose language is requested."""
     from datasets import load_dataset
     for repo in _OASST_REPOS:
         try:
