@@ -121,14 +121,27 @@ class TextDataset:
 
 
 class DataLoader:
-    """Wraps TextDataset with token counting; yields fixed-shape batches."""
+    """Wraps TextDataset with token counting; yields fixed-shape batches.
 
-    def __init__(self, dataset: TextDataset):
+    Optional REHEARSAL: a list of `replay` datasets (earlier stages' corpora) and
+    a `replay_fraction` ∈ [0,1]. That fraction of batches is drawn from a random
+    replay dataset instead of the primary one, so training a later cognitive stage
+    keeps refreshing earlier skills (esp. conversation) and the frozen core does
+    not forget them before the freeze. Pass/token telemetry tracks the PRIMARY
+    dataset only (replay is supplementary)."""
+
+    def __init__(self, dataset: TextDataset, replay: Optional[List[TextDataset]] = None,
+                 replay_fraction: float = 0.0, seed: int = 1234):
         self._ds       = dataset
         self._iter     = dataset.batches()
         self.tokens_per_batch = dataset.batch_size * dataset.seq_len
+        self._replay_iters = [d.batches() for d in (replay or [])]
+        self._replay_fraction = float(replay_fraction) if self._replay_iters else 0.0
+        self._rng = random.Random(seed)
 
     def next_batch(self) -> np.ndarray:
+        if self._replay_iters and self._rng.random() < self._replay_fraction:
+            return next(self._rng.choice(self._replay_iters))
         return next(self._iter)
 
     @property
@@ -142,8 +155,15 @@ class DataLoader:
         return self._ds.epoch_tokens
 
     @classmethod
-    def from_config(cls, stage: int, cfg: dict, tokenizer) -> "DataLoader":
-        """Build a DataLoader directly from the YAML config + stage number."""
+    def from_config(cls, stage: int, cfg: dict, tokenizer,
+                    replay_dirs: Optional[List[str]] = None,
+                    replay_fraction: float = 0.0) -> "DataLoader":
+        """Build a DataLoader directly from the YAML config + stage number.
+
+        `replay_dirs` (earlier stages' corpora) + `replay_fraction` enable
+        rehearsal: that fraction of batches comes from those dirs so a later
+        cognitive stage keeps the earlier skills fresh. Missing replay dirs are
+        skipped silently."""
         mcfg    = cfg["model"]
         tcfg    = cfg["training"]
         stage_cfg = cfg["curriculum"][f"stage{stage}"]   # key-based (levels may omit stages)
@@ -151,11 +171,16 @@ class DataLoader:
         default_dir = f"data/level{lvl}/stage{stage}" if lvl is not None else f"data/stage{stage}"
         data_dir  = stage_cfg.get("data_dir", default_dir)
 
-        ds = TextDataset(
-            data_dir=data_dir,
-            tokenizer=tokenizer,
-            seq_len=mcfg["context_len"],
-            batch_size=tcfg["batch_size"],
-            shuffle=True,
-        )
-        return cls(ds)
+        def _ds(path: str) -> TextDataset:
+            return TextDataset(data_dir=path, tokenizer=tokenizer,
+                               seq_len=mcfg["context_len"],
+                               batch_size=tcfg["batch_size"], shuffle=True)
+
+        ds = _ds(data_dir)
+        replay: List[TextDataset] = []
+        for d in (replay_dirs or []):
+            try:
+                replay.append(_ds(d))
+            except FileNotFoundError:
+                continue                                  # earlier stage not prepared → skip
+        return cls(ds, replay=replay, replay_fraction=replay_fraction)

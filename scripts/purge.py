@@ -7,15 +7,22 @@ prepared training corpora, runtime memory and logs. It never touches your
 inputs: configs, `.env`, source code, `data/benchmarks/` (BCF probes you
 provide), or the shared HuggingFace download cache.
 
+Data pipeline (two distinct artifacts — don't confuse them):
+  HF cache (raw downloads)  →  prepare_data  →  data/level* (prepared corpora)  →  train
+  • --data / --keep-data act on the PREPARED corpora (prepare_data's output).
+  • --hf-cache acts on the RAW DOWNLOADS (prepare_data's input). Dropping it forces
+    a re-download from the network; keeping data/level* only skips re-preparing.
+
 Targets (pick any combination, or --all):
   --checkpoints   dist/checkpoints/  + dist/snapshots/   (trained weights, frozen core, sectors)
   --tokenizer     dist/tokenizer/    + dist/tokenizer*.bak (SentencePiece + image/audio VQ-VAE)
-  --data          data/level*/        (prepared graded corpora — NOT benchmarks/runtime)
+  --data          data/level*/        (PREPARED corpora — output of prepare_data; not benchmarks/runtime)
   --runtime       data/runtime/       (experiences.jsonl, ltss.db — consolidation memory)
   --logs          logs/               (daemon.log, cycle_*.json, human_queue.jsonl)
-  --hf-cache      ~/.cache/huggingface/{datasets,hub}  (shared HF download cache;
-                  honors HF_HOME / HF_DATASETS_CACHE / HF_HUB_CACHE). Opt-in only —
-                  NOT included in --all, shared across projects, slow to refill.
+  --hf-cache      ~/.cache/huggingface/{datasets,hub}  (RAW HF downloads — prepare_data's
+                  input; honors HF_HOME / HF_DATASETS_CACHE / HF_HUB_CACHE). Opt-in only —
+                  NOT in --all, shared across projects, slow to refill (re-downloads).
+  --keep-data     with --all, KEEP data/level* (skip re-preparing). Independent of --hf-cache.
 
 Scope with --level N to limit --checkpoints and --data to one level
 (tokenizer/runtime/logs/hf-cache are global and always purged in full when selected).
@@ -29,6 +36,7 @@ confirmation. Use --dry-run to only preview, or --yes to skip the prompt.
 Examples:
   python scripts/purge.py --all --dry-run            # preview a full wipe
   python scripts/purge.py --all --yes                # full fresh start
+  python scripts/purge.py --all --keep-data --yes    # fresh weights/tokenizer, keep prepared data
   python scripts/purge.py --checkpoints --data --level 1   # redo level 1 only
   python scripts/purge.py --tokenizer --checkpoints  # keep prepared data, retrain
   python scripts/purge.py --all --hf-cache --yes     # wipe everything incl. HF cache
@@ -141,6 +149,9 @@ def main() -> None:
     ap.add_argument("--hf-cache", dest="hf_cache", action="store_true",
                     help="Also delete the shared HuggingFace download cache "
                          "(datasets + hub). Opt-in only — NOT included in --all; slow to refill.")
+    ap.add_argument("--keep-data", action="store_true",
+                    help="With --all, do NOT purge prepared corpora (data/level*) — "
+                         "re-use the already-prepared data and skip re-preparing.")
     ap.add_argument("--level", type=int, default=None,
                     help="Limit --checkpoints/--data to one level (else all levels)")
     ap.add_argument("--dry-run", action="store_true", help="Preview only; delete nothing")
@@ -148,6 +159,8 @@ def main() -> None:
     args = ap.parse_args()
 
     selected = [t for t in TARGET_NAMES if args.all or getattr(args, t)]
+    if args.keep_data:                               # explicit opt-out of data purge
+        selected = [t for t in selected if t != "data"]
     if args.hf_cache:                                # opt-in, never via --all
         selected.append("hf_cache")
     if not selected:

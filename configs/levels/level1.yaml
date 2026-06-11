@@ -52,6 +52,8 @@ training:
   clip_grad_norm: 1.0
   max_corpus_passes: 3         # cap re-reads of a small corpus (anti-overfit). If the
                                # corpus × this < n_tokens, the stage stops here (default 3).
+  rehearsal_fraction: 0.15     # cognitive stages mix this fraction of earlier-stage data
+                               # (rehearsal) so new faculties don't erode conversation (default 0.15).
 
 # ── Resource estimates (documented; the live guard recomputes from `model`). ──
 # These are reference figures so you can compare levels at a glance. The actual

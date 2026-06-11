@@ -176,10 +176,30 @@ def build_data_loader(stage: int, cfg: dict):
         print("ERROR: tokenizer not found at dist/tokenizer/rdmca_spm.model")
         print("  Run: python scripts/train_tokenizer.py --level <N>")
         sys.exit(1)
+    # Rehearsal: cognitive stages after the first mix in a fraction of earlier
+    # base stages' data, so learning a new faculty (e.g. reasoning) does not erode
+    # earlier ones (esp. conversation) before the core is frozen. Behavioral stages
+    # need none — they train sectors on the already-frozen core.
+    replay_dirs: list[str] = []
+    frac = 0.0
+    if not is_behavioral_stage(stage):
+        frac = float(cfg.get("training", {}).get("rehearsal_fraction", 0.15))
+        if frac > 0:
+            cur = cfg.get("curriculum", {})
+            earlier = sorted(s for s in (int(k.replace("stage", "")) for k in cur)
+                             if s < stage and s <= BCF_STAGE)
+            for s in earlier:
+                d = cur[f"stage{s}"].get("data_dir") or f"data/level{cfg.get('level')}/stage{s}"
+                if Path(d).exists():
+                    replay_dirs.append(d)
     try:
-        loader = DataLoader.from_config(stage, cfg, tokenizer)
+        loader = DataLoader.from_config(stage, cfg, tokenizer,
+                                        replay_dirs=replay_dirs, replay_fraction=frac)
         data_dir = cfg["curriculum"][f"stage{stage}"].get("data_dir")   # key-based (stages may be non-contiguous)
         print(f"  [data] Real data loader: {data_dir}")
+        if replay_dirs:
+            print(f"  [rehearsal] mixing {frac:.0%} replay from {len(replay_dirs)} earlier "
+                  f"stage(s) to retain prior skills (e.g. conversation)")
         return loader
     except FileNotFoundError as e:
         print(f"ERROR: {e}")
