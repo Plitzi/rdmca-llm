@@ -95,6 +95,22 @@ class AmbiguityHandler:
         self._persist_entry(entry)
         return "queue"
 
+    def queue_for_review(self, experience: Experience, score: float,
+                         rationale: str = "") -> None:
+        """Escalate an experience to the human queue directly (used by the
+        confidence-gated validator, not just by sector-ambiguity). `score` is the
+        ambiguity/uncertainty in [0,1]."""
+        entry = QueueEntry(
+            experience_uid=experience.uid,
+            text_preview=experience.text[:200],
+            ambiguity_score=float(score),
+            added_at=time.time(),
+            defer_count=self._get_defer_count(experience.uid),
+            rationale=rationale,
+        )
+        self._queue.append(entry)
+        self._persist_entry(entry)
+
     def expire_old_entries(self) -> int:
         """Remove queue entries older than QUEUE_EXPIRY_DAYS. Returns count."""
         cutoff = time.time() - QUEUE_EXPIRY_DAYS * 86400

@@ -85,6 +85,7 @@ class ConsolidationPipeline:
                  tokenizer=None,
                  semantic_router=None,
                  sector_router=None,
+                 validator=None,
                  lr: float = 1e-4):
         self.buffer       = buffer
         self.ltss         = ltss
@@ -103,6 +104,12 @@ class ConsolidationPipeline:
         # provided, the pipeline falls back to exp.sector_assignment.
         self.semantic_router = semantic_router
         self.sector_router   = sector_router
+
+        # Optional confidence-gated knowledge validator (validation.py). When set, it
+        # decides each experience's fate by how confidently it can be validated
+        # (self / research / peer-model / human) — generalising the sector-ambiguity
+        # routing. When None, the pipeline uses ambiguity-only routing (legacy).
+        self.validator = validator
 
         # Optional learning components. When `model` (with sectors attached)
         # and `tokenizer` are provided, the pipeline performs real masked
@@ -205,6 +212,7 @@ class ConsolidationPipeline:
                 coh = 0.0
             if coh >= LTSS_DUPLICATE_COH:
                 ltss_flagged += 1
+            exp.coherence = coh                 # kept for the confidence validator (step 6)
             consistent.append((exp, score))
 
         # --- Step 5: MRF ---
@@ -227,13 +235,26 @@ class ConsolidationPipeline:
             if self.sector_router is not None:
                 exp.sector_assignment = (self.sector_router.assign(affinities)
                                          or exp.sector_assignment)
-            verdict = self.ambiguity.handle(exp, affinities, cycle_id)
-            if verdict == "clear":
-                final.append(exp)
-            elif verdict == "defer":
-                deferred += 1
+            if self.validator is not None:
+                # Confidence-gated validation: trust own knowledge, else seek
+                # research / a peer model, else escalate to a human.
+                decision = self.validator.decide(exp, getattr(exp, "coherence", 0.0))
+                if decision.fate == "consolidate":
+                    final.append(exp)
+                elif decision.fate == "defer":
+                    deferred += 1
+                elif decision.fate == "discard":
+                    self.adv_buffer.append(exp)
+                else:                            # queue → human review
+                    human_queued += 1
             else:
-                human_queued += 1
+                verdict = self.ambiguity.handle(exp, affinities, cycle_id)
+                if verdict == "clear":
+                    final.append(exp)
+                elif verdict == "defer":
+                    deferred += 1
+                else:
+                    human_queued += 1
 
         # Group by routed sector — kept for stats/PGQ only (training is MoE-joint).
         sector_groups: Dict[int, List[Experience]] = {}

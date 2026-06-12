@@ -45,6 +45,81 @@ def test_attention_rejects_odd_head_dim():
         RDMCAFoundational(cfg)
 
 
+def test_experience_log_only_saves_signal_bearing_turns():
+    """A turn with no feedback is NOT saved (no benefit); a corrected turn learns the
+    CORRECTION, not the model's wrong answer."""
+    from src.memory.experience_log import log_experience, load_experiences, detect_correction
+    with tempfile.TemporaryDirectory() as td:
+        p = str(Path(td) / "e.jsonl")
+        assert log_experience("hi", "hello", feedback="neutral", path=p) is False
+        assert log_experience("2+2?", "4", feedback="accepted", path=p) is True
+        assert log_experience("cap of France?", "London", feedback="corrected",
+                              correction="Paris", path=p) is True
+        recs = load_experiences(p)
+        assert len(recs) == 2                                  # neutral was dropped
+        corr = next(r for r in recs if r["feedback"] == "corrected")
+        assert "Paris" in corr["text"] and "London" not in corr["text"]
+    # implicit correction detection (EN + ES), no false positives on a new topic
+    assert detect_correction("no, it is Paris") and detect_correction("eso está mal")
+    assert not detect_correction("what about Spain?")
+
+
+def test_relevance_feedback_overrides_utility():
+    """A `corrected` experience must score higher R⁺ than the same content unlabeled —
+    feedback is the ground-truth Utility (error-driven learning gets the boost)."""
+    from src.relevance.engine import RelevanceEngine
+    from src.memory.episodic_buffer import Experience
+    re = RelevanceEngine(ltss=None)
+    re.update_state(np.zeros(64, dtype=np.float32))
+    emb = np.random.randn(64).astype(np.float32)
+    neutral   = Experience(text="x", embedding=emb, feedback="neutral");   neutral.episodic_context = []
+    corrected = Experience(text="x", embedding=emb, feedback="corrected"); corrected.episodic_context = []
+    assert re.score(corrected) > re.score(neutral)
+
+
+def test_confidence_validator_routes_by_knowledge():
+    """The confidence-gated validator: human-labelled or high-coherence → self-approve;
+    mid → defer (no external source); very low → escalate to human."""
+    from src.consolidation.validation import (ExperienceValidator, HumanReviewSource,
+                                              SelfKnowledgeSource)
+
+    class _Exp:
+        def __init__(self, feedback="neutral"):
+            import uuid as _u
+            self.feedback = feedback; self.uid = str(_u.uuid4()); self.text = "x"
+
+    class _FakeQueue:
+        def __init__(self): self.queued = []
+        def queue_for_review(self, exp, score, rationale=""): self.queued.append(exp.uid)
+
+    q = _FakeQueue()
+    v = ExperienceValidator(human_source=HumanReviewSource(q))   # no external sources
+
+    # human-corrected → authoritative → consolidate (coherence irrelevant)
+    assert v.decide(_Exp("corrected"), coherence=0.0).fate == "consolidate"
+    # neutral + high coherence (consistent with prior knowledge) → consolidate
+    assert v.decide(_Exp("neutral"), coherence=0.9).fate == "consolidate"
+    # neutral + mid coherence, nothing external available → defer (retry)
+    assert v.decide(_Exp("neutral"), coherence=0.5).fate == "defer"
+    # neutral + very low coherence → escalate to human queue
+    d = v.decide(_Exp("neutral"), coherence=0.1)
+    assert d.fate == "queue" and d.source == "human" and len(q.queued) == 1
+
+
+def test_validator_external_stubs_are_inert_until_configured():
+    """Unconfigured peer-model / web-research sources are skipped, not crash."""
+    from src.consolidation.validation import (default_validator, PeerModelSource,
+                                              WebResearchSource)
+    assert PeerModelSource().available() is False
+    assert WebResearchSource().available() is False
+    v = default_validator(ambiguity_handler=None)               # no human either
+
+    class _Exp:
+        feedback = "neutral"; uid = "u"; text = "x"
+    # mid confidence, all external inert, no human → defer (no crash)
+    assert v.decide(_Exp(), coherence=0.5).fate == "defer"
+
+
 def test_output_head_is_weight_tied_to_embedding():
     """The output projection must REUSE embed.weight (weight tying): no separate
     'head' param in the tree, and head_at_dim(h, d) == h[:, :d] @ embed.weight[:, :d].T."""

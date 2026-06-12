@@ -57,6 +57,21 @@ def utility(e_emb: np.ndarray, grad_buffer: Optional[np.ndarray]) -> float:
     return max(0.0, cosine_similarity(e_emb, grad_buffer))
 
 
+# Ground-truth Utility from explicit/implicit user feedback. The paper's U is the
+# "estimated contribution to task performance" (§5.1) approximated by gradient
+# alignment — but when the user actually told us, that IS the ground truth, so it
+# overrides the proxy. Mirrors human learning: a corrected error drives the most
+# plasticity (prediction error), a confirmed success reinforces less, and an
+# unlabeled turn carries no signal.
+_FEEDBACK_UTILITY = {"corrected": 1.0, "accepted": 0.7, "neutral": None}
+
+
+def feedback_utility(feedback: str) -> Optional[float]:
+    """Return the ground-truth U for a feedback label, or None to fall back to the
+    gradient-alignment proxy (neutral / unknown)."""
+    return _FEEDBACK_UTILITY.get(feedback)
+
+
 def coherence(e_emb: np.ndarray, ltss) -> float:
     """C(e,s) — max cosine similarity among top-5 LTSS neighbors. §5.1"""
     results = ltss.search(e_emb, k=5)
@@ -116,7 +131,11 @@ class RelevanceEngine:
         s = self._state_emb if self._state_emb is not None else np.zeros_like(e)
 
         N   = novelty(e, s)
-        U   = utility(e, self._grad_buffer)
+        # Prefer ground-truth feedback for Utility; fall back to the gradient proxy
+        # when the turn is unlabeled. A `corrected` experience (U=1.0) thus gets a
+        # strong R⁺ boost — error-driven learning, the highest-value signal.
+        fb_u = feedback_utility(getattr(experience, "feedback", "neutral"))
+        U   = fb_u if fb_u is not None else utility(e, self._grad_buffer)
         C   = coherence(e, self.ltss) if self.ltss else 0.5
         Rep = repetition(e, experience.episodic_context)   # additive (spacing effect)
         P   = penalty_score(experience)

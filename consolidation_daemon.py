@@ -172,7 +172,8 @@ def run_consolidation(cfg: dict) -> None:
     for r, e in zip(records, embs):
         buffer.add(Experience(text=r.get("text", ""),
                               embedding=e.astype(np.float32),
-                              modality=r.get("modality", "text")))
+                              modality=r.get("modality", "text"),
+                              feedback=r.get("feedback", "neutral")))
 
     ltss = LTSS(emb_dim=d_model)
     re = RelevanceEngine(ltss=ltss)
@@ -185,11 +186,17 @@ def run_consolidation(cfg: dict) -> None:
         B.engine.load_weights(bcf, str(bcf_path))
         B.engine.set_precision(bcf, get_precision(cfg))
 
+    from src.consolidation.validation import default_validator
+    ambiguity = AmbiguityHandler()
     pipeline = ConsolidationPipeline(
         buffer=buffer, ltss=ltss, re=re, bcf=bcf, sectors=model.sectors,
-        snapshot_mgr=SectorSnapshotManager(), ambiguity=AmbiguityHandler(),
+        snapshot_mgr=SectorSnapshotManager(), ambiguity=ambiguity,
         pgq=PGQ(), model=model, tokenizer=tokenizer,
         semantic_router=SemanticTokenRouter(d_model), sector_router=SectorRouter(),
+        # Confidence-gated validation: self-approve when consistent with prior
+        # knowledge, else escalate to the human queue. The peer-model / web-research
+        # channels stay inert until a client/tool is configured (default_validator).
+        validator=default_validator(ambiguity_handler=ambiguity),
     )
     entry = pipeline.run()
     _save_sectors(model, root)

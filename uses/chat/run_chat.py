@@ -43,6 +43,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -50,7 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root on pa
 
 import src.backend as backend
 from src import agent
-from src.memory.experience_log import log_experience
+from src.memory.experience_log import log_experience, detect_correction
 from src.config import require_backend, get_precision, load_config
 
 # Model/tokenizer modules are imported lazily inside load_model() — only AFTER
@@ -446,6 +447,7 @@ BANNER = """
 ║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256     ║
 ║  /think off|low|medium|high   /format text|json      ║
 ║  /stream on|off  /stats  /reset  /quit               ║
+║  /ok  (last answer was good)   /fix <correct answer> ║
 ╚══════════════════════════════════════════════════════╝"""
 
 
@@ -466,6 +468,22 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
     last_stats: dict   = {}
+    # The previous turn, held back until we know its outcome (accepted/corrected/none).
+    # We only persist a turn as a learning experience once it has a feedback signal —
+    # a turn the user just moved on from is NOT saved (no benefit). See experience_log.
+    pending: Optional[dict] = None
+
+    def _resolve_pending(feedback: str, correction: Optional[str] = None) -> None:
+        nonlocal pending
+        if not pending:
+            print("  (no previous answer to mark)")
+            return
+        wrote = log_experience(pending["prompt"], pending["response"],
+                               feedback=feedback, correction=correction,
+                               lang=pending["lang"], modality="text")
+        if wrote:
+            print(f"  ✓ saved as a learning experience ({feedback}).")
+        pending = None
 
     tok_ready = tokenizer.ready
     if not tok_ready:
@@ -540,10 +558,31 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 history.clear()
                 print("  History cleared.")
 
+            elif cmd == "/ok":                       # explicit: last answer was good
+                _resolve_pending("accepted")
+
+            elif cmd == "/fix":                      # explicit: here is the right answer
+                correction = prompt[len("/fix"):].strip()
+                if not correction:
+                    print("  Usage: /fix <the correct answer>")
+                else:
+                    _resolve_pending("corrected", correction)
+
             else:
                 print(f"  Unknown command: {cmd}")
 
             continue
+
+        # ── Implicit feedback on the PREVIOUS turn ────────────────────────
+        # If this new message reads as a correction, save the previous turn as a
+        # `corrected` experience (this message IS the correction) — then still answer
+        # it as a normal turn. If it's just a new topic, the previous turn carried no
+        # learning signal, so we drop it (silence ≠ acceptance → nothing is saved).
+        if pending is not None:
+            if detect_correction(prompt):
+                _resolve_pending("corrected", prompt)
+            else:
+                pending = None
 
         # ── Encode prompt (primed for the chosen output format + thinking) ─
         enc_prompt = agent.wrap_prompt(prompt, out_format, think=think_level)
@@ -622,9 +661,13 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             "temperature": temperature, "top_p": top_p, "think": think_level,
         }
 
-        # Record the interaction as an experience for daily consolidation.
+        # Hold this turn back as a *candidate* experience: it is saved for daily
+        # consolidation ONLY once it earns a learning signal — the user types /ok
+        # (accepted), /fix <answer> (corrected), or the next message reads as a
+        # correction. A turn the user just moves on from is never saved (no benefit).
         if tok_ready:
-            log_experience(prompt, lang=lang, modality="text")
+            pending = {"prompt": prompt, "response": agent.clean_answer(response),
+                       "lang": lang}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

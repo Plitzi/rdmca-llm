@@ -595,12 +595,13 @@ _DIALOGUE_CORPORA: Dict[str, List[tuple]] = {
          lambda ex: [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]),
         ("knkarthick/dialogsum",
          lambda ex: _parse_person_dialogue(ex.get("dialogue", ""))),
-        # General everyday chit-chat (greetings, small talk) — balances the
-        # empathetic/support skew of the corpora above (which biases replies toward
-        # an apologetic tone). Turns alternate speakers; first→User, second→Assistant.
-        ("daily_dialog",
-         lambda ex: [("A" if i % 2 == 0 else "B", u)
-                     for i, u in enumerate(ex.get("dialog") or [])]),
+        # General everyday chit-chat — balances the empathetic/support skew of the
+        # corpora above (which biases replies toward an apologetic tone, e.g. "hi" →
+        # "I'm sorry…"). SODA is parquet-native social-commonsense dialogue; we zip its
+        # parallel `speakers`/`dialogue` lists into (speaker, utterance) turns.
+        # (The legacy `daily_dialog` was script-based and no longer loads on datasets≥3.)
+        ("allenai/soda",
+         lambda ex: list(zip(ex.get("speakers") or [], ex.get("dialogue") or []))),
     ],
 }
 

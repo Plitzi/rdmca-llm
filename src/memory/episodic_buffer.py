@@ -23,6 +23,9 @@ class Experience:
     text: str
     embedding: np.ndarray
     modality: str = "text"          # text | image | audio | mixed
+    feedback: str = "neutral"       # neutral | accepted | corrected — the user's
+                                    # reaction; drives the Relevance Engine's Utility
+                                    # (a corrected error is the highest-value signal).
     timestamp: float = field(default_factory=time.time)
     uid: str = field(default_factory=lambda: str(uuid.uuid4()))
     relevance_score: float = 0.0
