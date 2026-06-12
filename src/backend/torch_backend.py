@@ -414,6 +414,34 @@ def _memory_stats() -> dict:
     return {"peak": 0, "active": 0}
 
 
+def _make_optimizer(model, lr, weight_decay, states=None):
+    """AdamW with a selectable optimizer-state precision.
+
+    `states`:
+      • None / 'bf16' / 'default' → torch AdamW. Its moments (exp_avg/exp_avg_sq)
+        are created as `zeros_like(param)`, so with the model cast to bf16 they are
+        ALREADY bf16 (~2 bytes/state) — the fp32→bf16 saving the report describes is
+        thus already in effect here.
+      • 'int8' / '8bit' → bitsandbytes 8-bit AdamW (block-wise quantized states,
+        ~1 byte/state) — a further saving on big CUDA runs. OPT-IN and graceful:
+        falls back to bf16-state AdamW (with a warning) when bitsandbytes is missing
+        or there is no CUDA device, so it never becomes a hard dependency."""
+    if states and str(states).lower() in ("int8", "8bit", "8-bit"):
+        reason = None
+        try:
+            import bitsandbytes as bnb
+            if torch.cuda.is_available():
+                return bnb.optim.AdamW8bit(model.parameters(), lr=lr,
+                                           weight_decay=weight_decay)
+            reason = "no CUDA device"
+        except Exception as e:                       # not installed / import error
+            reason = f"bitsandbytes unavailable ({e})"
+        import warnings
+        warnings.warn(f"optimizer_states='int8' requested but unused ({reason}); "
+                      "using bf16-state AdamW.")
+    return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+
 def _set_seed(seed: int) -> None:
     """Seed every RNG that affects a training run (Python, numpy, torch CPU+CUDA),
     so weight init + dropout + sampling are reproducible across runs."""
@@ -427,8 +455,7 @@ def _set_seed(seed: int) -> None:
 
 _engine = SimpleNamespace(
     value_and_grad=_value_and_grad,
-    make_optimizer=lambda model, lr, weight_decay: torch.optim.AdamW(
-        model.parameters(), lr=lr, weight_decay=weight_decay),
+    make_optimizer=_make_optimizer,
     optimizer_step=_optimizer_step,
     set_lr=_set_lr,
     eval=lambda *xs: None,

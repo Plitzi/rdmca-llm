@@ -311,7 +311,10 @@ def _set_seed(seed: int) -> None:
 
 _engine = SimpleNamespace(
     value_and_grad=lambda model, fn: mlx_nn.value_and_grad(model, fn),
-    make_optimizer=lambda model, lr, weight_decay: mlx_optim.AdamW(
+    # MLX AdamW keeps its moments in the PARAM dtype (already bf16 when the model is
+    # bf16 → ~2 bytes/state). There is no native 8-bit optimizer, so a `states=int8`
+    # request is accepted but simply stays bf16 (the saving is on the CUDA backend).
+    make_optimizer=lambda model, lr, weight_decay, states=None: mlx_optim.AdamW(
         learning_rate=lr, weight_decay=weight_decay, bias_correction=True),
     optimizer_step=_optimizer_step,
     set_lr=lambda opt, lr: setattr(opt, "learning_rate", lr),

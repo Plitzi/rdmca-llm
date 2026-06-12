@@ -458,8 +458,12 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             else:
                 print(f"  No Stage {prev_n} checkpoint found — starting from random init")
 
+    # optimizer_states: bf16 (default — already in effect since the model is bf16)
+    # or int8 (bitsandbytes 8-bit AdamW on CUDA, a further memory saving for big runs;
+    # opt-in, falls back to bf16 with a warning when unavailable).
     optimizer = B.engine.make_optimizer(
-        model, lr=tcfg["lr"], weight_decay=tcfg["weight_decay"])
+        model, lr=tcfg["lr"], weight_decay=tcfg["weight_decay"],
+        states=tcfg.get("optimizer_states"))
 
     start_step = 0
     tokens_seen = 0
@@ -479,6 +483,19 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     clip_norm = tcfg.get("clip_grad_norm")     # global-norm grad clip (None = off)
     seq_len   = model_cfg.context_len
     toks_step = bs * seq_len * grad_acc
+
+    # On resume, fast-forward the data stream past what the interrupted run already
+    # consumed — otherwise the loader restarts at token 0 and re-trains the early
+    # data while never reaching the rest (issue C3). The dataset + replay draws are
+    # fully seeded, so replaying start_step×grad_acc batches lands EXACTLY where the
+    # run stopped. One-time re-tokenization cost (an indexed loader would skip it).
+    if resume and start_step > 0:
+        n_skip = start_step * grad_acc
+        print(f"  [resume] fast-forwarding data stream past {n_skip:,} batches "
+              f"({start_step:,} steps)…")
+        skipped = data_loader.skip(n_skip)
+        if skipped < n_skip:
+            print(f"  [resume] stream shorter than expected — skipped {skipped:,}.")
     warmup    = tcfg["warmup_steps"]
     total_steps = n_tokens_target // toks_step
     # Cap re-cycling of a small corpus: training a tiny corpus toward an oversized

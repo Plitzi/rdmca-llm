@@ -299,6 +299,23 @@ class DataLoader:
             return next(self._rng.choice(self._replay_iters))
         return next(self._iter)
 
+    def skip(self, n_batches: int) -> int:
+        """Fast-forward the stream by `n_batches`, discarding them — used on --resume
+        so training continues from where it stopped instead of re-reading the corpus
+        from the start (issue C3). Because the dataset AND the replay-vs-primary draw
+        are fully seeded, replaying the same number of batches reproduces the exact
+        stream position (same primary/replay interleaving). Returns how many were
+        actually skipped (< n_batches only if the stream ended, which is rare for the
+        cycling corpus). Cost is one-time re-tokenization of the skipped span."""
+        skipped = 0
+        for _ in range(max(0, int(n_batches))):
+            try:
+                self.next_batch()
+            except StopIteration:
+                break
+            skipped += 1
+        return skipped
+
     @property
     def passes(self) -> int:
         """Number of complete passes over the corpus so far."""
