@@ -199,7 +199,11 @@ class TrainingDashboard:
                 console=self._console,
                 refresh_per_second=10,
                 screen=False,
-                vertical_overflow="visible",
+                # "crop" (not "visible"): on a terminal repaint/resize — e.g. switching
+                # tabs/tmux panes — "visible" lets the frame overflow and redraw below the
+                # stale one, duplicating the panel (you'd see "Stage 1" twice). "crop"
+                # keeps Live within the known viewport so it clears + repaints cleanly.
+                vertical_overflow="crop",
             )
             self._live.__enter__()
         return self
