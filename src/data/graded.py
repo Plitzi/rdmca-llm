@@ -533,16 +533,74 @@ def stream_skills(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[
         yield {"text": text, "lang": "en"}
 
 
+# ── Conversational enrichment: system personas, mood, story-on-request ───────
+# These shape REGISTER, not facts. A fraction of the conversational/instruction
+# data is given a `System:` persona so the model learns to CONDITION on a system
+# prompt (real system-prompt support); emotional dialogues carry a `(mood: …)`
+# annotation on that SAME channel so tone is driven by an explicit, neutral-by-
+# default mood (src/modalities/moods.py); and a fraction of stories are reframed
+# as a request so narration is something the model does ON DEMAND, not only as
+# free continuation. All plain ASCII — no new tokenizer symbols.
+import hashlib
+from src.modalities.moods import emotion_to_mood, mood_system_phrase
+
+_SYSTEM_PERSONAS: List[str] = [
+    "You are a helpful, friendly assistant. Answer simply and directly.",
+    "You are a kind assistant who talks to young children. Keep words simple.",
+    "You are a cheerful helper. Be warm and encouraging.",
+    "You are a calm, patient assistant. Explain things gently.",
+    "You are a concise assistant. Give short, clear answers.",
+    "You are a curious, playful assistant who loves to chat.",
+    "You are a storyteller who tells short, simple stories.",
+    "You are a thoughtful assistant. Be honest and clear.",
+]
+
+_STORY_PROMPTS: List[str] = [
+    "Tell me a story.", "Can you tell me a short story?",
+    "Tell me a little story please.", "I want to hear a story.",
+    "Tell me a bedtime story.",
+]
+
+
+def _hash01(key: str) -> float:
+    """Deterministic value in [0,1) keyed on text — stable selection across runs."""
+    return int(hashlib.md5(key.encode("utf-8")).hexdigest()[:8], 16) / 0x100000000
+
+
+def _persona_for(key: str) -> str:
+    return _SYSTEM_PERSONAS[int(_hash01(key) * len(_SYSTEM_PERSONAS)) % len(_SYSTEM_PERSONAS)]
+
+
+def _prepend_system(text: str, persona: str, mood: str = "neutral") -> str:
+    """Add a `System:` line (with an optional non-neutral `(mood: …)` tag) above a
+    User:/Assistant: transcript so the model learns to condition on it."""
+    tag = mood_system_phrase(mood)
+    sys_line = f"System: {persona}" + (f" {tag}" if tag else "")
+    return f"{sys_line}\n{text}"
+
+
 # ──────────────────────────── HF graded corpora ─────────────────────────────
-def stream_tinystories(limit_mb: Optional[int] = None) -> Iterator[dict]:
-    """TinyStories — short, simple children's stories (EN). Level 1 language."""
+def stream_tinystories(limit_mb: Optional[int] = None,
+                       story_request_frac: float = 0.25) -> Iterator[dict]:
+    """TinyStories — short, simple children's stories (EN). Level 1 language.
+    A fraction are reframed as a `User: <story prompt>` → `Assistant: <story>` turn
+    (completion-masked at train time) so the model learns to TELL a story when
+    asked, not only to continue prose."""
     try:
         from datasets import load_dataset
         ds = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
         for ex in ds:
             t = ex.get("text", "")
-            if t.strip():
-                yield {"text": t, "lang": "en"}
+            if not t.strip():
+                continue
+            if _hash01(t) < story_request_frac:                 # reframe as a request
+                # NO system prompt: telling a story should be a NATURAL response to
+                # the request, not a behaviour that needs a persona to unlock.
+                prompt = _STORY_PROMPTS[int(_hash01("p" + t) * len(_STORY_PROMPTS))
+                                        % len(_STORY_PROMPTS)]
+                yield {"text": f"User: {prompt}\nAssistant: {t.strip()}", "lang": "en"}
+            else:
+                yield {"text": t, "lang": "en"}                 # plain narrative (grammar)
     except Exception as e:
         print(f"    [tinystories] {e}")
 
@@ -677,7 +735,12 @@ def _stream_empathetic_balanced(per_emotion_cap: int = 700) -> Iterator[dict]:
         text = _format_dialogue(turns)
         if text:
             counts[emo] += 1
-            yield {"text": text, "lang": "en"}
+            # Annotate the SYSTEM channel with this dialogue's mood so the model
+            # learns to set tone from an explicit, neutral-by-default mood (the
+            # runtime mood head injects the same `(mood: …)` at inference).
+            mood = emotion_to_mood(emo)
+            yield {"text": _prepend_system(text, _persona_for(text), mood),
+                   "mood": mood, "lang": "en"}
 
 
 def _interleave(*streams: Iterator[dict]) -> Iterator[dict]:
@@ -725,11 +788,13 @@ def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterato
             yield rec
 
 
-def stream_instruct(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+def stream_instruct(langs: List[str], limit_mb: Optional[int] = None,
+                    system_frac: float = 0.4) -> Iterator[dict]:
     """Simple instruction→response pairs (Alpaca, EN) framed as User:/Assistant: so
     the model learns to ANSWER a request directly — the conversational corpora are
-    empathetic/narrative and don't teach 'reply to what was asked'. Long answers are
-    skipped to keep entries digestible for the small early levels."""
+    empathetic/narrative and don't teach 'reply to what was asked'. A fraction get a
+    `System:` persona so the model also learns to CONDITION on a system prompt. Long
+    answers are skipped to keep entries digestible for the small early levels."""
     if "en" not in langs:
         return
     try:
@@ -742,7 +807,10 @@ def stream_instruct(langs: List[str], limit_mb: Optional[int] = None) -> Iterato
             if not instr or not out or len(out) > 600:      # keep short, simple Q&A
                 continue
             user = f"{instr}\n{inp}" if inp else instr
-            yield {"text": f"User: {user}\nAssistant: {out}", "lang": "en"}
+            text = f"User: {user}\nAssistant: {out}"
+            if _hash01(instr) < system_frac:                # condition on a system prompt
+                text = _prepend_system(text, _persona_for(instr))
+            yield {"text": text, "lang": "en"}
     except Exception as e:
         print(f"    [instruct] {e}")
 

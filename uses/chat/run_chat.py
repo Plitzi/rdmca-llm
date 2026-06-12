@@ -51,8 +51,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root on pa
 
 import src.backend as backend
 from src import agent
-from src.memory.experience_log import log_experience, detect_correction
+from src.memory.experience_log import log_experience, detect_correction, load_experiences
 from src.config import require_backend, get_precision, load_config
+from src.modalities.text import BOS_ID
+from src.modalities.moods import MOODS
+from src.observability import ContextReport, count_tokens
 
 # Model/tokenizer modules are imported lazily inside load_model() — only AFTER
 # require_backend() has selected the backend — so model classes bind to it.
@@ -446,9 +449,22 @@ BANNER = """
 ║           RDMCA Interactive Chat                     ║
 ║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256     ║
 ║  /think off|low|medium|high   /format text|json      ║
+║  /system <prompt>   /mood <name|auto|off>            ║
+║  /context  (full token/context breakdown)            ║
 ║  /stream on|off  /stats  /reset  /quit               ║
 ║  /ok  (last answer was good)   /fix <correct answer> ║
 ╚══════════════════════════════════════════════════════╝"""
+
+
+def _load_mood_head(model, args, mcfg):
+    """Load this stage's mood head via the shared loader (None ⇒ stay neutral)."""
+    from src.model.mood import load_mood_head
+    head = load_mood_head(mcfg.d_model, level=getattr(args, "level", None),
+                          stage=getattr(args, "stage", None),
+                          checkpoint=getattr(args, "checkpoint", None))
+    if head is not None:
+        print("  Mood head: loaded — conversation mood tracking on (neutral default)")
+    return head
 
 
 def chat_loop(model, mcfg, tokenizer, args) -> None:
@@ -467,7 +483,25 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     deadline    = getattr(args, "max_seconds", GEN_DEADLINE_S) or None   # 0 → unlimited
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
-    last_stats: dict   = {}
+    last_report = None                 # ContextReport of the last turn (/context, billing)
+    grounding_tokens = len(getattr(args, "mm_prefix", []) or [])   # injected memory/grounding
+    # System prompt + conversation mood. The system line opens every generation
+    # (BOS + lang + `System: <persona> (mood: …)` + turns), refreshed each turn so
+    # a shifting mood is reflected while staying at the front (in-distribution).
+    system_text = (getattr(args, "system", None) or "").strip()
+    # mood_off: moods disabled entirely → always neutral, focused on answering the
+    # question (a calm, direct assistant). Otherwise: a pinned mood, or automatic
+    # tracking when a mood head is loaded (neutral by default).
+    mood_off     = bool(getattr(args, "no_mood", False))
+    mood_head    = None if mood_off else _load_mood_head(model, args, mcfg)
+    mood_pin     = getattr(args, "mood", None)              # None ⇒ track automatically
+    current_mood = mood_pin if (mood_pin in MOODS and not mood_off) else "neutral"
+    mood_auto    = (not mood_off) and (mood_pin not in MOODS) and (mood_head is not None)
+    # Conversation-aware running mood (memory across turns), neutral by default.
+    from src.model.mood import MoodTracker
+    mood_tracker = MoodTracker(mood_head)
+    if mood_off:
+        print("  Mood: off — neutral, focused on answering.")
     # The previous turn, held back until we know its outcome (accepted/corrected/none).
     # We only persist a turn as a learning experience once it has a feedback signal —
     # a turn the user just moved on from is NOT saved (no benefit). See experience_log.
@@ -543,19 +577,46 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 stream = parts[1].lower() in ("on", "true", "1", "yes")
                 print(f"  Streaming → {'on' if stream else 'off'}")
 
-            elif cmd == "/stats":
-                if last_stats:
-                    print(f"  Tokens generated : {last_stats['n_tokens']}")
-                    print(f"  Speed            : {last_stats['tps']:.1f} tok/s")
-                    print(f"  Temperature      : {last_stats['temperature']}")
-                    print(f"  Top-p            : {last_stats['top_p']}")
-                    print(f"  Thinking         : {last_stats['think']}")
-                    print(f"  Streaming        : {'on' if stream else 'off'}")
+            elif cmd in ("/stats", "/context"):
+                if last_report is not None:
+                    print(last_report.render())
                 else:
                     print("  No generation yet.")
 
+            elif cmd == "/system":
+                system_text = prompt[len("/system"):].strip()
+                print(f"  System prompt → {system_text!r}" if system_text
+                      else "  System prompt cleared.")
+
+            elif cmd == "/mood":
+                arg = parts[1].lower() if len(parts) > 1 else ""
+                if not arg:
+                    src = "off" if mood_off else ("auto" if mood_auto else "pinned")
+                    print(f"  Mood: {current_mood} ({src}). "
+                          f"Set with /mood <{'|'.join(MOODS)}>, /mood auto, or /mood off.")
+                elif arg == "off":
+                    mood_off, mood_auto, current_mood = True, False, "neutral"
+                    print("  Mood → off (always neutral, focused on answering).")
+                elif arg == "auto":
+                    mh = _load_mood_head(model, args, mcfg) if mood_head is None else mood_head
+                    if mh is None:
+                        print("  No mood head loaded — mood stays neutral.")
+                    else:
+                        mood_head, mood_off, mood_auto = mh, False, True
+                        mood_tracker.head = mh
+                        mood_tracker.reset()
+                        print("  Mood → auto (tracked from the conversation).")
+                elif arg in MOODS:
+                    current_mood, mood_auto, mood_off = arg, False, False
+                    print(f"  Mood → {arg} (pinned).")
+                else:
+                    print(f"  Unknown mood {arg!r}. Choose from: {', '.join(MOODS)}, auto, off.")
+
             elif cmd == "/reset":
                 history.clear()
+                mood_tracker.reset()
+                if mood_auto:
+                    current_mood = "neutral"
                 print("  History cleared.")
 
             elif cmd == "/ok":                       # explicit: last answer was good
@@ -584,20 +645,46 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             else:
                 pending = None
 
+        # ── Track the conversation's mood (neutral by default) ────────────
+        # A non-neutral mood is only chosen when the exchange clearly carries one
+        # (see classify_mood's margin) — otherwise we stay neutral, like a calm
+        # assistant. The mood then conditions tone via the System line below.
+        if mood_auto and tok_ready and mood_head is not None:
+            # The current message supplies the live signal; the tracker's running
+            # state carries the WHOLE conversation's mood (memory + decay to neutral).
+            # A little recent context disambiguates short/terse messages.
+            ctx = tokenizer.decode(history[-120:]) if history else ""
+            new_mood = mood_tracker.update(model, tokenizer, prompt, context=ctx)
+            if new_mood != current_mood:
+                print(f"  (mood → {new_mood})")
+            current_mood = new_mood
+
         # ── Encode prompt (primed for the chosen output format + thinking) ─
+        # `history` holds only the User:/Assistant: turn bodies (no BOS). The full
+        # generation context is synthesized each turn as BOS + lang + System line
+        # (persona + current mood) + history, so the system/mood always leads.
         enc_prompt = agent.wrap_prompt(prompt, out_format, think=think_level)
         if tok_ready:
             new_ids = tokenizer.encode(enc_prompt, lang=lang,
-                                       add_bos=not history, add_eos=False)
+                                       add_bos=False, add_eos=False)
         else:
             # Fallback: hash characters to vocab IDs for smoke testing
-            new_ids = [2] + [ord(c) % mcfg.vocab_size for c in enc_prompt] + [10]
+            new_ids = [ord(c) % mcfg.vocab_size for c in enc_prompt]
 
         history.extend(new_ids)
-        # Trim history to fit context window (leave room for generation).
-        max_hist = max(64, mcfg.context_len - max_tokens)
+        # Trim history to fit context window (leave room for generation + preamble).
+        max_hist = max(64, mcfg.context_len - max_tokens - 48)
         if len(history) > max_hist:
             history = history[-max_hist:]
+
+        # Build the leading System preamble (BOS + lang + persona + mood). When
+        # there is neither a system prompt nor an active mood this is just BOS+lang.
+        if tok_ready:
+            pre = agent.system_preamble(system_text, current_mood)
+            pre_ids = tokenizer.encode(pre, lang=lang, add_bos=True, add_eos=False)
+            gen_history = pre_ids + history
+        else:
+            gen_history = [BOS_ID] + history
 
         # ── Generate (two-phase when thinking is on, streamed when asked) ──
         # Thinking needs a real tokenizer (the scratchpad is decoded/re-encoded
@@ -608,7 +695,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         think_text = ""
         try:
             think_text, gen_ids, tps = generate_thinking(
-                model, list(history), tokenizer=tokenizer, lang=lang,
+                model, list(gen_history), tokenizer=tokenizer, lang=lang,
                 max_new_tokens=max_tokens, think_budget=budget,
                 temperature=temperature, top_p=top_p,
                 vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
@@ -645,9 +732,28 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                 print(f"{response}\n  [warning: output is not valid JSON]")
         elif not stream_on:
             print(result["text"])           # role-tag leakage already trimmed
-        print(f"\n  [{len(gen_ids)} tokens · {tps:.1f} tok/s · "
-              f"temp={temperature} · top_p={top_p} · format={out_format} · "
-              f"think={think_level} · stream={'on' if stream_on else 'off'}]")
+        # ── Context & token accounting (legible now, billing-ready via to_dict) ─
+        try:
+            mem_files = len(load_experiences())
+        except Exception:
+            mem_files = 0
+        last_report = ContextReport(
+            surface="chat", context_len=mcfg.context_len,
+            system_tokens=count_tokens(tokenizer, agent.system_preamble(system_text, current_mood))
+                          if tok_ready else 0,
+            memory_tokens=grounding_tokens,
+            history_tokens=len(history),
+            tokens_in=len(gen_history),
+            tokens_out=len(gen_ids),
+            tokens_reasoning=count_tokens(tokenizer, think_text) if tok_ready else 0,
+            mood=current_mood,
+            mood_dist=mood_tracker.distribution() if mood_auto else None,
+            memory_files=mem_files,
+            tps=tps,
+            params={"temp": temperature, "top_p": top_p, "think": think_level,
+                    "format": out_format, "lang": lang, "stream": "on" if stream_on else "off"},
+        )
+        print(last_report.render_compact())
 
         # Add response to history — store the *cleaned* reply so role-tag leakage
         # doesn't compound across turns (re-encode the trimmed text on the tok path).
@@ -656,10 +762,6 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             history.extend(tokenizer.encode(cleaned, lang=lang, add_bos=False, add_eos=False))
         else:
             history.extend(gen_ids)
-        last_stats = {
-            "n_tokens": len(gen_ids), "tps": tps,
-            "temperature": temperature, "top_p": top_p, "think": think_level,
-        }
 
         # Hold this turn back as a *candidate* experience: it is saved for daily
         # consolidation ONLY once it earns a learning signal — the user types /ok
@@ -684,6 +786,8 @@ Examples:
   python uses/chat/run_chat.py --level 1 --stage 1         # load Stage 1 checkpoint
   python uses/chat/run_chat.py --checkpoint dist/checkpoints/level1/stage3/final.npz
   python uses/chat/run_chat.py --level 1 --stage 1 --lang es --temp 0.8
+  python uses/chat/run_chat.py --level 1 --stage 1 --system "You are a kind, simple assistant."
+  python uses/chat/run_chat.py --level 1 --stage 1 --no-mood   # always neutral, just answer
         """,
     )
     parser.add_argument("--config",     default=None,
@@ -702,6 +806,14 @@ Examples:
                         help="Audio file to ground the conversation on (multimodal)")
     parser.add_argument("--lang",       default="en",
                         help="Starting language code (default: en)")
+    parser.add_argument("--system",     type=str, default=None,
+                        help="System prompt that opens every turn (persona/instructions)")
+    parser.add_argument("--mood",       type=str, default=None,
+                        help=f"Pin the conversation mood ({', '.join(MOODS)}); "
+                             "omit to track it automatically (neutral default)")
+    parser.add_argument("--no-mood",    dest="no_mood", action="store_true",
+                        help="Disable moods entirely: always neutral, focused on "
+                             "answering the question (respecting the system prompt)")
     parser.add_argument("--temp",       type=float, default=0.8,
                         help="Sampling temperature (default: 0.8)")
     parser.add_argument("--topp",       type=float, default=0.9,

@@ -535,5 +535,149 @@ def test_loader_with_mask_yields_token_mask_pairs():
         assert 0 < int(mask.sum()) < mask.size   # some trained, some masked
 
 
+# ───────────────── system prompt + mood (conversational layer) ───────────────
+
+def test_emotion_maps_to_mood_palette():
+    from src.modalities.moods import emotion_to_mood, MOODS
+    assert emotion_to_mood("joyful") == "happy"
+    assert emotion_to_mood("terrified") == "afraid"
+    assert emotion_to_mood("caring") == "caring"
+    assert emotion_to_mood("totally-unknown-emotion") == "neutral"   # default
+    assert emotion_to_mood(None) == "neutral"
+    assert all(emotion_to_mood(e) in MOODS for e in
+               ("sad", "angry", "surprised", "proud", "anxious"))
+
+def test_mood_system_phrase_neutral_is_empty():
+    from src.modalities.moods import mood_system_phrase
+    assert mood_system_phrase("neutral") == ""        # default adds nothing
+    assert mood_system_phrase("happy") == "(mood: happy)"
+    assert mood_system_phrase("bogus") == ""          # unknown → nothing
+
+def test_system_preamble_framing():
+    from src import agent
+    assert agent.system_preamble(None, "neutral") == ""             # nothing → no line
+    assert agent.system_preamble("Be kind.", "neutral") == "System: Be kind.\n"
+    assert agent.system_preamble(None, "sad") == "System: (mood: sad)\n"
+    assert agent.system_preamble("Be kind.", "happy") == "System: Be kind. (mood: happy)\n"
+
+def test_agent_prompt_prepends_system_persona():
+    from src import agent
+    p = agent.build_agent_prompt([], "hello", system="You are terse.")
+    assert p.startswith("System: You are terse. ")     # persona ahead of tool spec
+    assert "User: hello" in p and p.rstrip().endswith("Assistant:")
+
+def test_data_enrichment_system_and_story():
+    """instruct system injection yields a System line; story reframing is a NATURAL
+    User→Assistant request with NO system prompt (telling a story needs no persona)."""
+    import src.data.graded as g
+    sysd = g._prepend_system("User: q\nAssistant: a", "You are kind.", "happy")
+    assert sysd.startswith("System: You are kind. (mood: happy)\nUser:")
+    # the story-request format the stream emits
+    story = f"User: {g._STORY_PROMPTS[0]}\nAssistant: Once upon a time."
+    assert not story.startswith("System:")             # no persona gate for stories
+    assert "Assistant:" in story
+
+def test_completion_mask_handles_system_prefixed_record():
+    """A System-prefixed transcript still masks System+User and trains only the
+    Assistant turn — the enriched data stays compatible with completion masking."""
+    from src.data.loader import TextDataset
+    ds = TextDataset.__new__(TextDataset); ds.tokenizer = _FakeTok()
+    ids, mask = ds._encode_record(
+        {"text": "System: be kind (mood: happy)\nUser: hi\nAssistant: hello", "lang": "en"})
+    assert 0 < sum(mask) < len(mask)
+    trained = _FakeTok().encode_raw("\nAssistant: hello")
+    assert sum(mask) == len(trained) + 1               # assistant turn + EOS only
+
+def test_classify_mood_defaults_neutral_without_head():
+    from src.model.mood import classify_mood
+    mood, conf = classify_mood(None, None, None, "anything")
+    assert mood == "neutral"
+
+def test_mood_tracker_neutral_without_head():
+    from src.model.mood import MoodTracker
+    t = MoodTracker(None)
+    assert t.update(None, None, "I am so happy!") == "neutral"   # no head ⇒ neutral
+
+def test_mood_tracker_builds_and_decays_over_conversation(monkeypatch):
+    """Conversation-aware mood: one message isn't enough (inertia), a sustained tone
+    takes hold, and it decays back to neutral — emotion is the WHOLE exchange."""
+    import src.model.mood as mood
+    from src.model.mood import MoodTracker, MOOD_INDEX, MOODS
+    happy = [0.0] * len(MOODS); happy[MOOD_INDEX["happy"]] = 1.0
+    neutral = [0.0] * len(MOODS); neutral[0] = 1.0
+    monkeypatch.setattr(mood, "mood_probs",
+                        lambda m, t, h, text, **k: happy if "joy" in text else neutral)
+    tr = MoodTracker(head=object(), alpha=0.4)
+    assert tr.update(None, None, "joy") == "neutral"        # one message ⇒ inertia
+    for _ in range(4):
+        m = tr.update(None, None, "joy")
+    assert m == "happy"                                     # sustained tone takes hold
+    for _ in range(6):
+        m = tr.update(None, None, "calm")
+    assert m == "neutral"                                   # decays back to default
+
+def test_mood_tracker_reset(monkeypatch):
+    import src.model.mood as mood
+    from src.model.mood import MoodTracker, MOOD_INDEX, MOODS
+    happy = [0.0] * len(MOODS); happy[MOOD_INDEX["happy"]] = 1.0
+    monkeypatch.setattr(mood, "mood_probs", lambda *a, **k: happy)
+    tr = MoodTracker(head=object(), alpha=0.6)
+    for _ in range(5):
+        tr.update(None, None, "x")
+    assert tr.current() == "happy"
+    tr.reset()
+    assert tr.current() == "neutral"
+
+def test_mood_head_learns_to_separate_moods():
+    """The mood head should fit a tiny separable set (sanity that the classifier
+    + train step are wired): loss drops over a few steps on frozen features."""
+    import mlx.core as mx
+    from src.model.mood import MoodHead, mood_loss, MOOD_INDEX
+    head = MoodHead(d_model=32, hidden=16)
+    opt  = B.engine.make_optimizer(head, 1e-2, 0.0)
+    rng  = np.random.RandomState(0)
+    # 3 clusters of features → 3 mood labels; learnable by a small MLP.
+    centers = rng.randn(3, 32)
+    feats   = np.vstack([centers[i] + 0.05 * rng.randn(20, 32) for i in range(3)]).astype(np.float32)
+    labels  = np.array([i for i in range(3) for _ in range(20)], dtype=np.float32)
+    h = mx.array(feats); y = mx.array(labels)
+    def loss_fn(hd): return mood_loss(hd(h), y)
+    lg = B.engine.value_and_grad(head, loss_fn)
+    first = float(lg(head)[0].item())
+    for _ in range(60):
+        loss, grads = lg(head); B.engine.optimizer_step(opt, head, grads)
+    assert float(loss.item()) < first - 0.3            # clearly learned
+
+
+# ───────────────── context / token accounting (observability + billing) ──────
+
+def test_context_report_accounting_and_billing_dict():
+    from src.observability import ContextReport
+    r = ContextReport(surface="chat", context_len=512, system_tokens=12,
+                      history_tokens=300, tokens_in=320, tokens_out=28,
+                      tokens_reasoning=15, mood="happy",
+                      mood_dist={"happy": 0.42, "neutral": 0.3, "caring": 0.1},
+                      memory_files=3, tps=200.0,
+                      params={"temp": 0.7, "top_p": 0.9})
+    assert r.used == 348 and r.free == 512 - 348
+    assert round(r.fill_pct, 1) == round(100 * 348 / 512, 1)
+    d = r.to_dict()                                  # billing/telemetry payload
+    for k in ("surface", "tokens_in", "tokens_out", "tokens_reasoning",
+              "system_tokens", "mood", "memory_files", "used", "free", "fill_pct"):
+        assert k in d
+    assert d["used"] == 348 and d["mood"] == "happy"
+    panel = r.render()
+    assert "tokens in" in panel and "window" in panel and "mood" in panel
+    assert r.render_compact().startswith("  [in 320 · out 28 · think 15")
+
+def test_count_tokens_is_safe():
+    from src.observability import count_tokens
+    class _T:
+        def encode(self, t, add_bos=True, add_eos=True): return list(range(len(t)))
+    assert count_tokens(_T(), "abcd") == 4
+    assert count_tokens(_T(), "") == 0
+    assert count_tokens(None, "x") == 0              # no tokenizer ⇒ 0, never crashes
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

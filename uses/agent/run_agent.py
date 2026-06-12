@@ -95,6 +95,12 @@ def main() -> None:
     ap.add_argument("--dummy", action="store_true", help="Random weights (plumbing test)")
     ap.add_argument("--query", required=True, help="The user message")
     ap.add_argument("--skill", default="time-helper", help="Skill to inject (dir name)")
+    ap.add_argument("--system", default=None,
+                    help="System prompt persona prepended to the tool-use instructions")
+    ap.add_argument("--mood", default=None,
+                    help="Pin the mood, or omit to read it from the query (neutral default)")
+    ap.add_argument("--no-mood", dest="no_mood", action="store_true",
+                    help="Disable moods entirely: always neutral, focused on the task")
     ap.add_argument("--max-steps", type=int, default=6,
                     help="Max think→act→observe rounds before giving up (default: 6)")
     ap.add_argument("--temp", type=float, default=0.7)
@@ -130,9 +136,26 @@ def main() -> None:
           f" | Quant: {f'{args.quant}-bit' if args.quant else 'none'}\n")
     print(f"User: {args.query}")
 
+    # Mood applies to EVERY surface, not just the chat: read the query's mood from
+    # the shared mood head (neutral by default) and fold it into the system line.
+    from src.model.mood import load_mood_head, classify_mood
+    from src.modalities.moods import mood_system_phrase, MOODS
+    mood = "neutral"
+    if not args.no_mood:
+        if args.mood in MOODS:
+            mood = args.mood
+        else:
+            head = load_mood_head(mcfg.d_model, level=args.level, stage=args.stage,
+                                  checkpoint=args.checkpoint)
+            if head is not None:
+                mood, _ = classify_mood(model, tokenizer, head, args.query)
+    sys_persona = " ".join(p for p in (args.system, mood_system_phrase(mood)) if p) or None
+    if mood != "neutral":
+        print(f"  (mood: {mood})")
+
     result = agent.run_agent(generate_fn, TOOLS, args.query,
                              skill_md=skill_md, max_steps=args.max_steps,
-                             think=args.think)
+                             think=args.think, system=sys_persona)
 
     # Structured recap of the rounds. Thinking is only re-printed here when it
     # was NOT already streamed live (avoids duplicating the scratchpad).
@@ -148,6 +171,38 @@ def main() -> None:
         print(f"\nAgent: {result['final']}")
     else:
         print(f"\nAgent: (no final answer — {result.get('note', 'stopped')})")
+
+    # ── Context & token accounting (same report every surface uses) ──────────
+    from src.observability import ContextReport, count_tokens
+    from src.memory.experience_log import load_experiences
+    header = agent.build_agent_prompt(TOOLS, args.query, skill_md, args.think, system=sys_persona)
+    reasoning = " ".join(s.get("thinking", "") for s in result["steps"]) + (result.get("thinking") or "")
+    try:
+        mem_files = len(load_experiences())
+    except Exception:
+        mem_files = 0
+    sys_tok    = count_tokens(tokenizer, "System: " + (sys_persona + " " if sys_persona else "")
+                              + agent.AGENT_SYSTEM)
+    tools_tok  = count_tokens(tokenizer, agent.tools_spec(TOOLS))
+    skills_tok = count_tokens(tokenizer, skill_md or "")
+    header_tok = count_tokens(tokenizer, header)
+    report = ContextReport(
+        surface="agent", context_len=mcfg.context_len,
+        system_tokens=sys_tok,
+        tools_tokens=tools_tok,
+        skills_tokens=skills_tok,
+        history_tokens=max(0, header_tok - sys_tok - tools_tok - skills_tok),  # query/framing
+        tokens_in=header_tok,
+        tokens_out=count_tokens(tokenizer, result.get("final") or ""),
+        tokens_reasoning=count_tokens(tokenizer, reasoning),
+        mood=mood,
+        memory_files=mem_files,
+        tools_available=len(TOOLS),
+        skills_available=1 if skill_md else 0,
+        params={"temp": args.temp, "top_p": args.topp, "think": args.think,
+                "steps": len(result["steps"])},
+    )
+    print("\n" + report.render())
 
 
 if __name__ == "__main__":

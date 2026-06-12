@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
 from src.modalities.vocab import REASONING_SPECIALS
+from src.modalities.moods import mood_system_phrase
 
 OUTPUT_FORMATS = ("text", "json")
 
@@ -30,6 +31,21 @@ def normalize_format(fmt: Optional[str]) -> str:
     if fmt not in OUTPUT_FORMATS:
         raise ValueError(f"Unknown output format '{fmt}' — choose from {OUTPUT_FORMATS}.")
     return fmt
+
+
+def system_preamble(system: Optional[str], mood: str = "neutral") -> str:
+    """Build the `System:` line that opens a conversation, the SAME way the training
+    data is framed (`System: <persona> (mood: <mood>)`). The mood rides on this same
+    channel and is neutral-by-default (adds nothing), so an ordinary chat is
+    unchanged. Returns "" when there is neither a system prompt nor an active mood.
+    Kept SEPARATE from the running history so the caller can refresh it each turn as
+    the conversation's mood shifts, while it always stays at the front (in-distribution)."""
+    system = (system or "").strip()
+    tag = mood_system_phrase(mood)
+    if not system and not tag:
+        return ""
+    line = "System: " + " ".join(p for p in (system, tag) if p)
+    return line + "\n"
 
 
 def wrap_prompt(prompt: str, fmt: str, think: str = "off") -> str:
@@ -256,9 +272,13 @@ def parse_action(text: str) -> Optional[dict]:
 
 
 def build_agent_prompt(tools: List[Tool], user: str,
-                       skill_md: Optional[str] = None, think: str = "off") -> str:
-    """Assemble the initial agentic prompt (system + tools + optional skill + user)."""
-    system = AGENT_SYSTEM + (THINK_INSTRUCTION if normalize_thinking(think) != "off" else "")
+                       skill_md: Optional[str] = None, think: str = "off",
+                       system: Optional[str] = None) -> str:
+    """Assemble the initial agentic prompt (system + tools + optional skill + user).
+    An optional `system` persona is prepended to the tool-use instructions so the
+    same system-prompt channel works in the agent as in the chat."""
+    base   = AGENT_SYSTEM + (THINK_INSTRUCTION if normalize_thinking(think) != "off" else "")
+    system = f"{system.strip()} {base}" if system and system.strip() else base
     parts = [f"System: {system}"]
     if tools:
         parts.append(f"Tools: {tools_spec(tools)}")
@@ -271,7 +291,8 @@ def build_agent_prompt(tools: List[Tool], user: str,
 
 def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
               skill_md: Optional[str] = None, max_steps: int = 6,
-              think: str = "off", max_context_chars: int = 8000) -> dict:
+              think: str = "off", max_context_chars: int = 8000,
+              system: Optional[str] = None) -> dict:
     """Drive the tool loop — multiple think→act→observe rounds until the model
     answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
     wraps the model; it may return a `<think>…</think>` scratchpad before the
@@ -286,7 +307,7 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
     then drops from the FRONT, silently discarding the system/tools spec. Keeping
     the header and windowing the tail preserves the instructions instead."""
     registry = {t.name: t for t in tools}
-    header   = build_agent_prompt(tools, user, skill_md, think)
+    header   = build_agent_prompt(tools, user, skill_md, think, system=system)
     steps: list = []
 
     def _block(st: dict) -> str:
