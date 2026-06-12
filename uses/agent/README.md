@@ -11,6 +11,13 @@ python uses/agent/run_agent.py --level 1 --stage 10 --query "What time is it?"
 python uses/agent/run_agent.py --dummy --query "hi"        # plumbing only
 ```
 
+The same cross-surface features as the chat apply here: KV-cache decoding,
+`<mem>` memory recall, and the optional STR per-sector context slots (§12) via
+`--context-slots` — it routes each `Action`/`Observation` step block to its
+sector slot and evicts overflow to memory, while the header (system+tools+skill+
+user) stays pinned. Off by default (recent steps are char-windowed instead);
+best with trained sectors.
+
 ## Layout
 
 ```

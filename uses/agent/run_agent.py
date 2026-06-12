@@ -103,6 +103,12 @@ def main() -> None:
                     help="Disable moods entirely: always neutral, focused on the task")
     ap.add_argument("--max-steps", type=int, default=6,
                     help="Max think→act→observe rounds before giving up (default: 6)")
+    ap.add_argument("--context-slots", dest="context_slots", action="store_true",
+                    help="Use STR per-sector context slots (§12) for the step tail: "
+                         "route each Action/Observation block to its sector slot, evict "
+                         "overflow to memory, and assemble the tail from the slots "
+                         "(experimental; best with trained sectors). Off by default "
+                         "(char-windowed recent steps). Header stays pinned either way.")
     ap.add_argument("--temp", type=float, default=0.7)
     ap.add_argument("--topp", type=float, default=0.9)
     ap.add_argument("--maxtok", type=int, default=64, help="Max new tokens per step")
@@ -169,9 +175,27 @@ def main() -> None:
         except Exception as e:
             print(f"  (memory recall off: {e})")
 
+    # Optional STR sector context-slots (§12) for the step tail — the SAME manager
+    # the chat wires for its history body, so the agent windows/forgets its tool-loop
+    # transcript by sector relevance instead of a flat char cut. OPT-IN
+    # (--context-slots), additive: off ⇒ the char-windowed tail, base path unchanged.
+    context_mgr = enc = dec = None
+    if getattr(args, "context_slots", False) and tokenizer.ready:
+        try:
+            from src.routing.context_manager import build_context_manager
+            context_mgr = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
+            enc = lambda s: tokenizer.encode(s, lang="en", add_bos=False, add_eos=False)
+            dec = tokenizer.decode
+            gate_on = getattr(model, "gate", None) is not None
+            print(f"  Context slots: on (§12 STR; routing via "
+                  f"{'trained MoE gate' if gate_on else 'classifier/single-slot'}).")
+        except Exception as e:
+            print(f"  Context slots: off ({e}).")
+
     result = agent.run_agent(generate_fn, TOOLS, args.query,
                              skill_md=skill_md, max_steps=args.max_steps,
-                             think=args.think, system=sys_persona, memory=memory)
+                             think=args.think, system=sys_persona, memory=memory,
+                             context_mgr=context_mgr, encode=enc, decode=dec)
 
     # Structured recap of the rounds. Thinking is only re-printed here when it
     # was NOT already streamed live (avoids duplicating the scratchpad).

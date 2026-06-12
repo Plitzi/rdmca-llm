@@ -313,7 +313,8 @@ def build_agent_prompt(tools: List[Tool], user: str,
 def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
               skill_md: Optional[str] = None, max_steps: int = 6,
               think: str = "off", max_context_chars: int = 8000,
-              system: Optional[str] = None, memory: str = "") -> dict:
+              system: Optional[str] = None, memory: str = "",
+              context_mgr=None, encode=None, decode=None) -> dict:
     """Drive the tool loop — multiple think→act→observe rounds until the model
     answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
     wraps the model; it may return a `<think>…</think>` scratchpad before the
@@ -323,13 +324,25 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
      "steps": [{"thinking","action","observation"}, …]}.
 
     The prompt is rebuilt each round as the static header (system+tools+skill+user)
-    plus as many RECENT step blocks as fit `max_context_chars`. Appending blindly
-    would grow the transcript without bound; the model's own context-length trim
-    then drops from the FRONT, silently discarding the system/tools spec. Keeping
-    the header and windowing the tail preserves the instructions instead."""
+    plus the step tail. Appending blindly would grow the transcript without bound;
+    the model's own context-length trim then drops from the FRONT, silently
+    discarding the system/tools spec. So the header is always PINNED and only the
+    tail is bounded. Two tail strategies:
+      • default — keep as many RECENT step blocks as fit `max_context_chars`;
+      • STR sector context-slots (§12), when a `context_mgr` (+ `encode`/`decode`)
+        is supplied — route each completed step block to its sector slot(s), evict
+        overflow to the episodic buffer (not discarded), and assemble the active
+        tail from the slots. Same mechanism the chat uses for its history body, so
+        the agent recalls/forgets context the same way every other surface does."""
     registry = {t.name: t for t in tools}
     header   = build_agent_prompt(tools, user, skill_md, think, system=system, memory=memory)
     steps: list = []
+
+    # STR slots need a tokenizer round-trip (the manager works in token space); the
+    # header is encoded once so the assembled tail can be capped to leave room for
+    # it + the next generation, keeping header+tail within the positional window.
+    use_slots = context_mgr is not None and encode is not None and decode is not None
+    header_budget = len(encode(header)) if use_slots else 0
 
     def _block(st: dict) -> str:
         return (f"\nAction: {json.dumps(st['action'], ensure_ascii=False)}"
@@ -337,6 +350,9 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
                 f"\nAssistant:")
 
     def _transcript() -> str:
+        if use_slots:                           # §12 sector slots assemble the tail
+            cap = max(64, context_mgr.context_len - header_budget - 128)
+            return header + decode(context_mgr.assemble(cap))
         kept, total = [], len(header)
         for st in reversed(steps):              # keep the most recent steps that fit
             b = _block(st)
@@ -360,4 +376,6 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
             except Exception as e:                  # tools must never crash the loop
                 obs = {"error": str(e)}
         steps.append({"thinking": thinking, "action": action, "observation": obs})
+        if use_slots:                           # route this step's block to its slot(s)
+            context_mgr.add(encode(_block(steps[-1])))
     return {"final": None, "steps": steps, "note": "max steps reached"}
