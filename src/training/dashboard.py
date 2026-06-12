@@ -78,10 +78,21 @@ class TrainingDashboard:
                  stage: int,
                  n_tokens_target: int,
                  resume_step: int = 0,
-                 resume_tokens: int = 0):
+                 resume_tokens: int = 0,
+                 params: int = 0,
+                 n_layers: int = 0,
+                 d_model: int = 0):
         self.stage           = stage
         self.n_tokens_target = n_tokens_target
         self.stage_name      = STAGE_NAMES.get(stage, f"Stage {stage}")
+        # Model geometry — shown next to Speed so the dev sees WHY the tok/s is what it
+        # is: throughput is compute-bound, and per-token compute ≈ 6·N (fwd+bwd, the
+        # Kaplan/Chinchilla rule) scales with depth. Doubling layers ⇒ ~proportionally
+        # more FLOP/tok ⇒ fewer tok/s on the same hardware (not a regression).
+        self.params          = params
+        self.n_layers        = n_layers
+        self.d_model         = d_model
+        self._flops_per_tok  = 6 * params          # train fwd+bwd ≈ 6N FLOP/token
 
         self._console      = Console()
         self._live: Optional[Live] = None
@@ -245,6 +256,16 @@ class TrainingDashboard:
         stats.add_row("LR",         f"{self._lr:.2e}")
         stats.add_row("Speed",      f"{self._tps/1000:.1f} K tok/s  "
                                     f"[dim](avg {avg_tps/1000:.1f} K)[/dim]")
+        # Why this speed: it's compute-bound. Per-token cost ≈ 6·N FLOP scales with
+        # depth, so tok/s ≈ achieved_FLOP/s ÷ (6N). Showing N's geometry + MFLOP/tok +
+        # the achieved TFLOP/s makes clear that e.g. 8 layers vs 6 (+33% FLOP/tok) is
+        # WHY tok/s dropped — the hardware is saturated, not a regression.
+        if self._flops_per_tok:
+            mflop = self._flops_per_tok / 1e6
+            tflops = self._tps * self._flops_per_tok / 1e12      # tok/s × FLOP/tok
+            stats.add_row("Compute",
+                          f"{self.n_layers}L×{self.d_model}d · {self.params/1e6:.1f}M params · "
+                          f"[dim]≈{mflop:.0f} MFLOP/tok · {tflops:.2f} TFLOP/s[/dim]")
         if self._grad_norm is not None:
             stats.add_row("Grad norm", f"{self._grad_norm:.3f}")
         stats.add_row("Elapsed",    _fmt_time(elapsed))

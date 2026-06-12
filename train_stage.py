@@ -110,7 +110,8 @@ def cosine_lr(step: int, base_lr: float, min_lr: float,
 
 
 def save_checkpoint(model, step: int, stage: int,
-                    tokens_seen: int, loss: float, ckpt_dir: Path, optimizer=None):
+                    tokens_seen: int, loss: float, ckpt_dir: Path, optimizer=None,
+                    log=print):
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     fname = ckpt_dir / f"step_{step:08d}.npz"
     backend.current().engine.save_weights(model, str(fname))
@@ -127,8 +128,8 @@ def save_checkpoint(model, step: int, stage: int,
     with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
     os.replace(tmp, ckpt_dir / "latest.json")
-    print(f"  [ckpt] step={step:,} | {tokens_seen/1e6:.1f}M tokens | "
-          f"loss={loss:.4f} -> {fname.name}")
+    log(f"[ckpt] step={step:,} | {tokens_seen/1e6:.1f}M tokens | "
+        f"loss={loss:.4f} -> {fname.name}")
 
 
 def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
@@ -231,7 +232,7 @@ DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0, 6: 35.0}
 
 
 def evaluate_gate(model, stage: int,
-                  val_batches=None, cfg: dict = None) -> tuple:
+                  val_batches=None, cfg: dict = None, log=print) -> tuple:
     """
     Graduation gate. Operative metric is real validation perplexity (a proxy
     that actually measures the model); task-specific benchmarks (BLiMP, ARC,
@@ -253,9 +254,9 @@ def evaluate_gate(model, stage: int,
     ppl = validation_perplexity(model, val_batches)
     B.engine.set_train(model)
     passed = ppl <= max_ppl
-    print(f"  [gate] Stage {stage}: {desc}")
-    print(f"  [gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "
-          f"-> {'PASS' if passed else 'fail'}")
+    log(f"[gate] Stage {stage}: {desc}")
+    log(f"[gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "
+        f"-> {'PASS' if passed else 'fail'}")
 
     if stage == BCF_STAGE:
         passed = passed and _bcf_gate(model, cfg)
@@ -513,7 +514,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
     dash = TrainingDashboard(stage, n_tokens_target,
                              resume_step=start_step,
-                             resume_tokens=tokens_seen)
+                             resume_tokens=tokens_seen,
+                             params=model.count_params(),
+                             n_layers=model.cfg.n_layers,
+                             d_model=model.cfg.d_model)
 
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
@@ -587,23 +591,24 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                 dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps,
                             grad_norm=grad_norm_val, passes=data_loader.passes)
 
-            # Checkpoint
+            # Checkpoint. Route the [ckpt]/[gate] detail through dash.print so it
+            # lands INSIDE the dashboard's log region (raw print() would draw over
+            # the pinned panel — the "broken UI" / stray lines outside the log box).
             if step % save_every == 0:
                 save_checkpoint(model, step, stage, tokens_seen,
-                               acc_loss / grad_acc, ckpt_dir, optimizer)
+                               acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
                 dash.set_checkpoint(step)
-                dash.print(f"[ckpt] step {step:,}")
 
             # Gate evaluation. On skip_gate levels (no graduation gate) the score
             # is shown for information only — it must NOT end the stage early, or
             # training stops at the first eval_every (e.g. step 1000) far short of
             # the token budget. The stage then runs to its full budget.
             if step % eval_every == 0:
-                score, passed = evaluate_gate(model, stage, val_batches, cfg)
+                score, passed = evaluate_gate(model, stage, val_batches, cfg, log=dash.print)
                 dash.set_gate_result(score, passed)
                 if passed and not skip_gate:
                     save_checkpoint(model, step, stage, tokens_seen,
-                                   acc_loss / grad_acc, ckpt_dir, optimizer)
+                                   acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
                     B.engine.save_weights(model, str(ckpt_dir / "final.npz"))
                     with open(ckpt_dir / "stage_complete.json", "w") as f:
                         json.dump({
@@ -620,7 +625,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
 
         # Budget exhausted
         save_checkpoint(model, step, stage, tokens_seen,
-                       acc_loss / grad_acc, ckpt_dir, optimizer)
+                       acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
 
         if skip_gate:
             # Smoke-test run (e.g. profile=test) — graduation gate not required
