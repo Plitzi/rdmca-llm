@@ -550,6 +550,21 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         except Exception as e:
             print(f"  Memory recall: off ({e}).")
 
+    # Optional STR sector context-slots (§12): route turn chunks to per-sector slots
+    # (gated by the trained MoE gate), evict overflow to the episodic buffer, and
+    # assemble the active context from the slots instead of a flat truncated window.
+    # OPT-IN (--context-slots) and additive — off by default, base path unchanged.
+    cm = None
+    if getattr(args, "context_slots", False) and tok_ready:
+        try:
+            from src.routing.context_manager import build_context_manager
+            cm = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
+            gate_on = getattr(model, "gate", None) is not None
+            print(f"  Context slots: on (§12 STR; routing via "
+                  f"{'trained MoE gate' if gate_on else 'classifier/single-slot'}).")
+        except Exception as e:
+            print(f"  Context slots: off ({e}).")
+
     while True:
         try:
             prompt = input(f"\n[{lang.upper()}] You: ").strip()
@@ -640,6 +655,8 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
 
             elif cmd == "/reset":
                 history.clear()
+                if cm is not None:
+                    cm.clear()
                 mood_tracker.reset()
                 if mood_auto:
                     current_mood = "neutral"
@@ -698,6 +715,8 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             new_ids = [ord(c) % mcfg.vocab_size for c in enc_prompt]
 
         history.extend(new_ids)
+        if cm is not None:
+            cm.add(new_ids)                 # route this turn's chunks to sector slots
         # Trim history to fit context window (leave room for generation + preamble).
         max_hist = max(64, mcfg.context_len - max_tokens - 48)
         if len(history) > max_hist:
@@ -718,12 +737,15 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
 
         # Build the leading System preamble (BOS + lang + persona + mood). When
         # there is neither a system prompt nor an active mood this is just BOS+lang.
+        # Active context body: the sector-slot union (§12) when context slots are
+        # on, else the flat trimmed history (default).
+        body = cm.assemble(max_hist) if cm is not None else history
         if tok_ready:
             pre = agent.system_preamble(system_text, current_mood)
             pre_ids = tokenizer.encode(pre, lang=lang, add_bos=True, add_eos=False)
-            gen_history = pre_ids + mem_ids + history
+            gen_history = pre_ids + mem_ids + body
         else:
-            gen_history = [BOS_ID] + history
+            gen_history = [BOS_ID] + body
 
         # ── Generate (two-phase when thinking is on, streamed when asked) ──
         # Thinking needs a real tokenizer (the scratchpad is decoded/re-encoded
@@ -798,7 +820,10 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         # doesn't compound across turns (re-encode the trimmed text on the tok path).
         if tok_ready:
             cleaned = agent.clean_answer(response)
-            history.extend(tokenizer.encode(cleaned, lang=lang, add_bos=False, add_eos=False))
+            resp_ids = tokenizer.encode(cleaned, lang=lang, add_bos=False, add_eos=False)
+            history.extend(resp_ids)
+            if cm is not None:
+                cm.add(resp_ids)            # the assistant's reply also fills slots
         else:
             history.extend(gen_ids)
 
@@ -853,6 +878,11 @@ Examples:
     parser.add_argument("--no-mood",    dest="no_mood", action="store_true",
                         help="Disable moods entirely: always neutral, focused on "
                              "answering the question (respecting the system prompt)")
+    parser.add_argument("--context-slots", dest="context_slots", action="store_true",
+                        help="Use STR per-sector context slots (§12): route turn "
+                             "chunks to sector slots, evict overflow to memory, and "
+                             "assemble context from the slots (experimental; best with "
+                             "trained sectors). Off by default (flat history).")
     parser.add_argument("--temp",       type=float, default=0.8,
                         help="Sampling temperature (default: 0.8)")
     parser.add_argument("--topp",       type=float, default=0.9,
