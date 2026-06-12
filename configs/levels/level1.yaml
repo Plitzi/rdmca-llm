@@ -89,7 +89,9 @@ curriculum:
     data:
       # RICH but BASIC variety — the four registers a usable base needs:
       #   tinystories      → simple narrative / literature (grammar, story flow)
-      #   dialogue         → conversation: empathetic + general chit-chat (daily_dialog)
+      #   dialogue         → conversation: mood-BALANCED empathetic (capped per emotion)
+      #                      + general chit-chat (SODA) + DialogSum + OASST, round-robin
+      #                      interleaved so no single tone dominates (see graded.py)
       #   instruct         → answer-a-request directly (short Alpaca Q&A)
       #   simple_wikipedia → factual/expository, plain language (world-knowledge vocab)
       # Variety of REGISTER + topic — not just more tokens — is what lets a tiny

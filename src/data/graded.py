@@ -587,19 +587,17 @@ def _parse_person_dialogue(raw: str) -> List[tuple]:
 
 
 # Per-language everyday-conversation corpora: {lang: [(HF id, extractor → turns)]}.
-# Language-agnostic by design — add a language by listing corpora here; the
-# multilingual OpenAssistant backbone below already covers many languages.
+# These are GENERAL (mixed-register) conversation; the emotion-LABELLED corpus
+# (EmpatheticDialogues) is streamed separately and mood-balanced — see
+# `_stream_empathetic_balanced`. Everything is round-robin interleaved in
+# `stream_dialogue` so no corpus/mood forms a front-loaded block.
 _DIALOGUE_CORPORA: Dict[str, List[tuple]] = {
     "en": [
-        ("Estwld/empathetic_dialogues_llm",
-         lambda ex: [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]),
         ("knkarthick/dialogsum",
          lambda ex: _parse_person_dialogue(ex.get("dialogue", ""))),
-        # General everyday chit-chat — balances the empathetic/support skew of the
-        # corpora above (which biases replies toward an apologetic tone, e.g. "hi" →
-        # "I'm sorry…"). SODA is parquet-native social-commonsense dialogue; we zip its
-        # parallel `speakers`/`dialogue` lists into (speaker, utterance) turns.
-        # (The legacy `daily_dialog` was script-based and no longer loads on datasets≥3.)
+        # General everyday chit-chat / greetings / small talk — parquet-native
+        # social-commonsense dialogue (zip parallel `speakers`/`dialogue` into turns).
+        # Provides the NEUTRAL register that keeps "hi" → "hi!" likely (vs apologising).
         ("allenai/soda",
          lambda ex: list(zip(ex.get("speakers") or [], ex.get("dialogue") or []))),
     ],
@@ -641,12 +639,69 @@ def _stream_oasst(langs: set) -> Iterator[dict]:
                 yield {"text": text, "lang": lang}
 
 
-def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
-    """Stream real human conversations as A:/B: transcripts in the requested
-    languages. Exact duplicates are dropped (e.g. OpenAssistant sibling answers
-    sharing a prompt). No synthetic fallback — if the corpora are unreachable the
-    source simply yields nothing (the readability filter then grades what remains)."""
+def _stream_corpus(name: str, extract, lang: str) -> Iterator[dict]:
+    """Stream one general dialogue corpus as {text, lang} records."""
     from datasets import load_dataset
+    try:
+        ds = load_dataset(name, split="train", streaming=True)
+    except Exception as e:
+        print(f"    [dialogue/{name}] {e}")
+        return
+    for ex in ds:
+        text = _format_dialogue(extract(ex))
+        if text:
+            yield {"text": text, "lang": lang}
+
+
+# EmpatheticDialogues carries an `emotion` label (32 categories — roughly HALF
+# positive: joyful/proud/grateful/excited/hopeful/content…; half negative:
+# sad/afraid/angry/anxious/lonely…) and pairs an emotional `situation` with an apt
+# response, i.e. emotion-that-fits-context. We stream it BALANCED across that label
+# (cap per emotion) so the model sees the full mood range evenly instead of
+# over-fitting the support/apologetic subset (the "hi → I'm sorry…" failure). Deleting
+# the corpus would only skip the problem; balancing it fixes the root.
+def _stream_empathetic_balanced(per_emotion_cap: int = 700) -> Iterator[dict]:
+    from collections import Counter
+    from datasets import load_dataset
+    try:
+        ds = load_dataset("Estwld/empathetic_dialogues_llm", split="train", streaming=True)
+    except Exception as e:
+        print(f"    [dialogue/empathetic] {e}")
+        return
+    counts: Counter = Counter()
+    for ex in ds:
+        emo = (ex.get("emotion") or "unknown").strip().lower()
+        if counts[emo] >= per_emotion_cap:                  # mood balance: even per emotion
+            continue
+        turns = [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]
+        text = _format_dialogue(turns)
+        if text:
+            counts[emo] += 1
+            yield {"text": text, "lang": "en"}
+
+
+def _interleave(*streams: Iterator[dict]) -> Iterator[dict]:
+    """Round-robin across live generators until all exhaust, so no single corpus (or
+    mood) forms a front-loaded block in the output — the same anti-forgetting mixing
+    the training loader does across files, applied here across dialogue sources."""
+    live = [s for s in streams if s is not None]
+    while live:
+        nxt = []
+        for s in live:
+            try:
+                rec = next(s)
+            except StopIteration:
+                continue
+            nxt.append(s)
+            yield rec
+        live = nxt
+
+
+def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dict]:
+    """Stream real human conversations as User:/Assistant: transcripts, MOOD-BALANCED
+    and round-robin INTERLEAVED across sources (emotion-balanced EmpatheticDialogues +
+    general SODA/DialogSum + the OASST assistant backbone) so the model's default
+    register isn't dominated by any one tone. Exact duplicates are dropped."""
     langs_set = set(langs)
     seen: set = set()
 
@@ -657,17 +712,15 @@ def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterato
         seen.add(h)
         return True
 
-    for lang in langs:                                      # language-specific corpora
+    substreams: List[Iterator[dict]] = []
+    if "en" in langs_set:                                   # emotion-labelled → balanced
+        substreams.append(_stream_empathetic_balanced())
+    for lang in langs:                                      # general conversation corpora
         for name, extract in _DIALOGUE_CORPORA.get(lang, []):
-            try:
-                ds = load_dataset(name, split="train", streaming=True)
-                for ex in ds:
-                    text = _format_dialogue(extract(ex))
-                    if text and _fresh({"text": text}):
-                        yield {"text": text, "lang": lang}
-            except Exception as e:
-                print(f"    [dialogue/{name}] {e}")
-    for rec in _stream_oasst(langs_set):                    # multilingual backbone
+            substreams.append(_stream_corpus(name, extract, lang))
+    substreams.append(_stream_oasst(langs_set))             # multilingual assistant backbone
+
+    for rec in _interleave(*substreams):                    # mix moods throughout, no blocks
         if _fresh(rec):
             yield rec
 
