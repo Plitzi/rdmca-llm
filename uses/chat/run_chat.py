@@ -168,7 +168,8 @@ def generate(model,
              stop_strings: tuple[str, ...] | None = None,
              top_k: int = 0,
              rep_penalty: float = 1.0,
-             rep_window: int = 128) -> tuple[list[int], float]:
+             rep_window: int = 128,
+             suppress_think: bool = False) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
 
@@ -226,6 +227,10 @@ def generate(model,
         # Decode incrementally ONCE per token (O(n) total); reused by both the
         # stop-string check and the streamer below.
         text = inc.append(next_id) if inc is not None else None
+        # What to DISPLAY/scan: with thinking hidden (think off), show only the
+        # answer after `</think>` — never the scratchpad the model emits on its own.
+        disp = (agent.visible_stream_text(text)
+                if (suppress_think and text is not None) else text)
 
         if _looping(generated):
             break
@@ -235,25 +240,25 @@ def generate(model,
         # Stop-string check (e.g. role-tag turn-boundary leakage). Needs the
         # decoded text, so it runs on the tokenizer path; we print only up to the
         # boundary (in stream mode) and stop before emitting the leaked new turn.
-        if stop_strings and text is not None:
-            cut = agent.first_stop_index(text, stop_strings)
+        if stop_strings and disp is not None:
+            cut = agent.first_stop_index(disp, stop_strings)
             if cut is not None:
                 if stream:
-                    sys.stdout.write(text[len(printed):cut]); sys.stdout.flush()
-                    printed = text[:cut]
+                    sys.stdout.write(disp[len(printed):cut]); sys.stdout.flush()
+                    printed = disp[:cut]
                 boundary_hit = True
                 break
 
         if stream:
-            if text is not None:
+            if disp is not None:
                 # Emit only up to the safe boundary — hold back a trailing fragment
                 # that could still grow into a role tag (e.g. 'User' → 'User:'), so a
                 # forming turn boundary is never half-printed.
-                safe = agent.safe_stream_len(text)
+                safe = agent.safe_stream_len(disp)
                 if safe > len(printed):
-                    sys.stdout.write(text[len(printed):safe])
+                    sys.stdout.write(disp[len(printed):safe])
                     sys.stdout.flush()
-                    printed = text[:safe]
+                    printed = disp[:safe]
             else:
                 print("▌", end="", flush=True)
 
@@ -271,8 +276,9 @@ def generate(model,
     # when we stopped at a boundary — everything past it is the leaked next turn.
     if stream and decode_fn is not None and not boundary_hit:
         text = decode_fn(generated)
-        if len(text) > len(printed):
-            sys.stdout.write(text[len(printed):]); sys.stdout.flush()
+        disp = agent.visible_stream_text(text) if suppress_think else text
+        if len(disp) > len(printed):
+            sys.stdout.write(disp[len(printed):]); sys.stdout.flush()
 
     elapsed = time.perf_counter() - t0
     tps = len(generated) / elapsed if elapsed > 0 else 0.0
@@ -311,9 +317,11 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
             sys.stdout.write(prefix); sys.stdout.flush()
 
     if think_budget <= 0:
+        # think OFF: a reasoning-trained model still emits <think> on its own, so
+        # hide the scratchpad in the stream and show only the answer (suppress_think).
         _label(answer_prefix)
         ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens,
-                            stop_strings=answer_stop, **sgen)
+                            stop_strings=answer_stop, suppress_think=True, **sgen)
         return "", ids, tps
 
     # Raw pieces only — NO `<lang:XX>` prefix. encode() would inject the language

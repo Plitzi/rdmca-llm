@@ -171,6 +171,25 @@ def strip_thinking(text: str) -> str:
     return _THINK_OPEN_RE.sub("", text).strip()
 
 
+def visible_stream_text(text: str) -> str:
+    """The portion of a partial generation to SHOW when thinking must stay hidden
+    (e.g. `--think off`): everything after a closed `</think>`; empty while still
+    inside an unterminated `<think>`; the whole text when there is no scratchpad.
+
+    A model trained on the reasoning stage emits a `<think>…</think>` block on its
+    own even when not asked to — without this the raw scratchpad streams to the
+    screen. Streaming `visible_stream_text(running_text)` instead shows only the
+    answer (after the block), so 'think off' never leaks a scratchpad."""
+    if THINK_CLOSE in text:
+        tail = text.rsplit(THINK_CLOSE, 1)[1]
+    elif THINK_OPEN in text:
+        return ""
+    else:
+        return text
+    # A NEW scratchpad opened after the last close → hide it (and everything after).
+    return tail.split(THINK_OPEN, 1)[0] if THINK_OPEN in tail else tail
+
+
 # Role tags the training transcripts use to delimit turns (User:/Assistant:/…).
 # A turn's reply ends where the next such tag begins; small/undertrained models
 # tend to "keep going" and echo these, so we trim at a turn boundary.
