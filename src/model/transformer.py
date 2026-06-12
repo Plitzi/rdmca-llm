@@ -207,17 +207,26 @@ class TransformerBlock(nn.Module):
         self.ffn  = SwiGLU(cfg.d_model, cfg.ffn_dim)
         self.drop = nn.Dropout(cfg.dropout)
 
-    def __call__(self, x, mask=None):
+    def __call__(self, x, mask=None, token_ids=None, ple_fn=None, layer_idx=0):
         x = x + self.drop(self.attn(self.ln1(x), mask))
+        # Per-Layer Embeddings (optional): inject a fresh per-layer token-identity
+        # signal once per block, after attention. No-op (and zero overhead) when
+        # PLE is disabled (ple_fn is None).
+        if ple_fn is not None:
+            x = x + ple_fn(token_ids, x, layer_idx)
         x = x + self.drop(self.ffn(self.ln2(x)))
         return x
 
-    def forward_cached(self, x, cache=None, pos_offset=0):
-        """Cached-generation forward: same residual structure as __call__, but the
+    def forward_cached(self, x, cache=None, pos_offset=0, token_ids=None,
+                       ple_fn=None, layer_idx=0):
+        """Cached-generation forward: same residual structure as __call__ (including
+        the optional PLE injection, so generation matches training), but the
         attention reads/writes the KV cache. Returns (x, (k, v)). Dropout is a no-op
         in eval, where this path runs."""
         a, kv = self.attn(self.ln1(x), cache=cache, pos_offset=pos_offset, return_kv=True)
         x = x + self.drop(a)
+        if ple_fn is not None:
+            x = x + ple_fn(token_ids, x, layer_idx)
         x = x + self.drop(self.ffn(self.ln2(x)))
         return x, kv
 
@@ -251,6 +260,20 @@ class RDMCAFoundational(nn.Module):
         self.drop   = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
         self.ln_f   = RMSNorm(cfg.d_model)
+
+        # Optional performance modules — both off by default (cfg defaults 0), both
+        # part of the cognitive core (freeze with it after BCF), both serialise as
+        # plain Module children. PLE refreshes per-layer token identity (compression);
+        # MTP adds auxiliary future-token heads (denser training signal). Built only
+        # when enabled, so the default model is byte-for-byte unchanged.
+        self.ple = None
+        if cfg.ple_dim > 0:
+            from src.model.ple import PerLayerEmbeddings
+            self.ple = PerLayerEmbeddings(cfg)
+        self.mtp = None
+        if cfg.n_mtp_heads > 0:
+            from src.model.mtp import MTPModule
+            self.mtp = MTPModule(cfg, cfg.n_mtp_heads, cfg.mtp_hidden_dim or cfg.d_model // 2)
 
         # Output projection is WEIGHT-TIED to the input embedding (no separate head):
         # logits = h @ embed.weight.T. This is the canonical Matryoshka setup — a single
@@ -287,8 +310,8 @@ class RDMCAFoundational(nn.Module):
         self._aux_accum = 0.0          # reset MoE aux loss for this forward
         self._aux_count = 0
         x = self.drop(self.embed(tokens))
-        for block in self.blocks:
-            x = block(x, mask)
+        for i, block in enumerate(self.blocks):
+            x = block(x, mask, token_ids=tokens, ple_fn=self.ple, layer_idx=i)
         return self.ln_f(x)
 
     def forward_cached(self, tokens, caches=None, pos_offset=0):
@@ -309,7 +332,8 @@ class RDMCAFoundational(nn.Module):
         new_caches = []
         for i, block in enumerate(self.blocks):
             past = caches[i] if caches is not None else None
-            x, kv = block.forward_cached(x, cache=past, pos_offset=pos_offset)
+            x, kv = block.forward_cached(x, cache=past, pos_offset=pos_offset,
+                                         token_ids=tokens, ple_fn=self.ple, layer_idx=i)
             new_caches.append(kv)
         return self.ln_f(x), new_caches
 
@@ -393,6 +417,27 @@ class RDMCAFoundational(nn.Module):
                 loss_d = ops.sum(ce * m) / (ops.sum(m) + 1e-6)
             term  = (w / w_sum) * loss_d
             total = term if total is None else total + term
+
+        # Multi-Token Prediction auxiliary loss (optional): each head k predicts the
+        # token at offset k+2 off the SAME hidden `h` (one forward). Reuses the
+        # completion-only mask so MTP, like the main loss, learns on the response
+        # tokens only. No-op when MTP is disabled.
+        if self.mtp is not None:
+            embed_next = self.embed(inputs)                # [B,S,d_model]
+            for k, logits_k in enumerate(self.mtp(h, embed_next)):
+                tgt_k = targets[:, k + 1:]                  # head k → tokens[:, k+2:]
+                Bk, Sk, Vk = logits_k.shape
+                if tmask is None:
+                    loss_k = ops.cross_entropy(
+                        logits_k.reshape(Bk * Sk, Vk),
+                        tgt_k.reshape(Bk * Sk), reduction="mean")
+                else:
+                    ce = ops.cross_entropy(
+                        logits_k.reshape(Bk * Sk, Vk),
+                        tgt_k.reshape(Bk * Sk), reduction="none")
+                    mk = ops.astype(tmask[:, k + 1:].reshape(Bk * Sk), ce.dtype)
+                    loss_k = ops.sum(ce * mk) / (ops.sum(mk) + 1e-6)
+                total = total + self.cfg.mtp_loss_weight * loss_k
 
         return total
 

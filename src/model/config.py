@@ -26,10 +26,33 @@ class ModelConfig:
     mrl_dims: List[int] = field(default_factory=lambda: [64, 128, 256])
     dropout: float = 0.1
     rope_theta: float = 10000.0
+    # Multi-Token Prediction (MTP): N auxiliary heads predict tokens t+2…t+N+1 at
+    # each position, off the SAME transformer hidden state (one forward). Gives a
+    # denser per-token training signal (sample efficiency, sharper representations)
+    # and the substrate for future speculative decoding. 0 = disabled (default).
+    # The heads are part of the cognitive core (frozen after BCF). Like n_kv_heads,
+    # this is a per-level capacity knob — the FUNCTION is uniform across levels,
+    # only the SIZE scales — so it does not break the identical-structure principle.
+    n_mtp_heads: int = 0
+    mtp_hidden_dim: int | None = None    # head inner width; None → d_model // 2
+    mtp_loss_weight: float = 0.3         # weight of EACH MTP head's CE in the loss
+    # Per-Layer Embeddings (PLE, Gemma-style compression): each block gets its own
+    # cheap token-identity lookup (d_ple wide), gated against a context projection
+    # and projected up into the residual stream — a "fresh reminder" of token
+    # identity that fights signal dilution in deep stacks. The lookup tables are
+    # near-zero-FLOP and quantizable/memory-mappable. 0 = disabled (default).
+    ple_dim: int = 0
+    ple_gated: bool = True               # sigmoid-gated identity↔context merge
 
     def __post_init__(self):
         if self.n_kv_heads is None:
             self.n_kv_heads = self.n_heads
+        if self.n_mtp_heads < 0:
+            raise ValueError(f"n_mtp_heads must be ≥ 0, got {self.n_mtp_heads}")
+        if self.mtp_hidden_dim is not None and self.mtp_hidden_dim <= 0:
+            raise ValueError(f"mtp_hidden_dim must be > 0 if set, got {self.mtp_hidden_dim}")
+        if self.ple_dim < 0:
+            raise ValueError(f"ple_dim must be ≥ 0, got {self.ple_dim}")
         # MRL prefixes must be ascending, unique and ≤ d_model — head_at_dim slices
         # the tied embed.weight[:, :d], so a d > d_model would silently use the full matrix
         # (breaking the Matryoshka premise) and a wrong order would mis-weight the loss.

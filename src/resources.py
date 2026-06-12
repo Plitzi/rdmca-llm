@@ -47,7 +47,24 @@ def count_params(model: dict) -> int:
     per_layer = 4 * d * d + 3 * d * ffn + 2 * d
     # Output projection is weight-tied to `embed` (see transformer.head_at_dim), so the
     # vocab·d embedding is counted ONCE — there is no separate head matrix.
-    return vocab * d + nl * per_layer + d
+    total = vocab * d + nl * per_layer + d
+
+    # Per-Layer Embeddings (optional): a per-layer lookup table (vocab·d_ple) plus
+    # context/up/gate projections (~3·d·d_ple) per layer. Lookup-heavy but they DO
+    # occupy memory, so the guard must count them.
+    ple = int(model.get("ple_dim", 0) or 0)
+    if ple > 0:
+        gate_terms = 3 if model.get("ple_gated", True) else 2
+        total += nl * (vocab * ple + gate_terms * d * ple)
+
+    # Multi-Token Prediction (optional): per head, an output projection (hidden·vocab),
+    # a small SwiGLU (≈12·hidden²) and two input projections (≈2·d·hidden).
+    mtp_h = int(model.get("n_mtp_heads", 0) or 0)
+    if mtp_h > 0:
+        hidden = int(model.get("mtp_hidden_dim") or (d // 2))
+        total += mtp_h * (hidden * vocab + 12 * hidden * hidden + 2 * d * hidden)
+
+    return total
 
 
 # ─────────────────────────── memory estimates ───────────────────────────────

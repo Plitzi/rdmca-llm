@@ -35,6 +35,14 @@ model:
   mrl_dims: [128, 256]
   dropout: 0.1
   rope_theta: 10000.0
+  # MTP (multi-token prediction) + PLE (per-layer embeddings): perf knobs present at
+  # EVERY level — the function is uniform, only the size scales (like n_kv_heads), so
+  # the identical-structure principle holds. Off in code by default; enabled here.
+  n_mtp_heads: 1               # auxiliary future-token heads (denser training signal)
+  mtp_hidden_dim: 128          # head inner width (≈ d_model/2)
+  mtp_loss_weight: 0.3         # weight of each MTP head's CE in the loss
+  ple_dim: 32                  # per-layer token-identity lookup width (≈ d_model/8)
+  ple_gated: true              # sigmoid-gated identity↔context merge
   languages: ["en"]
 
 training:
