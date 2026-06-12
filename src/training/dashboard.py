@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import time
 from collections import deque
+from pathlib import Path
 from typing import Optional
 
 import src.backend as backend
@@ -81,10 +82,33 @@ class TrainingDashboard:
                  resume_tokens: int = 0,
                  params: int = 0,
                  n_layers: int = 0,
-                 d_model: int = 0):
+                 d_model: int = 0,
+                 plain: bool = False,
+                 log_path=None):
         self.stage           = stage
         self.n_tokens_target = n_tokens_target
         self.stage_name      = STAGE_NAMES.get(stage, f"Stage {stage}")
+        # plain=True (or RDMCA_PLAIN_LOGS): no live/animated panel — emit ordinary
+        # scrolling terminal lines instead. The live dashboard repaints its region
+        # several times a second, which (a) drops older lines out of the fixed log
+        # panel and (b) clears any text selection mid-copy (the "flickering"). Plain
+        # mode trades the pretty panel for a full, selectable, persistent scrollback.
+        import os
+        self._plain = bool(plain) or os.environ.get("RDMCA_PLAIN_LOGS", "").lower() \
+            in ("1", "true", "yes", "on")
+        self._plain_last = -1                  # last step printed in plain mode
+
+        # Persistent plain-text log of the WHOLE run (loss evolution, gates,
+        # checkpoints), independent of the live panel — so nothing scrolls out of
+        # reach and the history is greppable/copyable after the fact. Opened in
+        # append mode so --resume keeps adding to the same file.
+        self._flog = None
+        if log_path is not None:
+            try:
+                Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+                self._flog = open(log_path, "a", encoding="utf-8")
+            except OSError as e:
+                self._console.print(f"[yellow][log] could not open {log_path}: {e}[/yellow]")
         # Model geometry — shown next to Speed so the dev sees WHY the tok/s is what it
         # is: throughput is compute-bound, and per-token compute ≈ 6·N (fwd+bwd, the
         # Kaplan/Chinchilla rule) scales with depth. Doubling layers ⇒ ~proportionally
@@ -162,6 +186,21 @@ class TrainingDashboard:
         self._progress.update(self._task, completed=tokens_seen)
         if self._live:
             self._live.update(self._build_layout())
+        # A concise progress line for the plain console AND/OR the persistent log
+        # file (built once). The live panel already shows this, so skip the console
+        # echo there, but still record it to the file so the file has the full curve.
+        if (self._plain or self._flog) and step != self._plain_last:
+            self._plain_last = step
+            ppl = math.exp(min(loss, 20)) if loss > 0 else float("nan")
+            gn  = f" | gnorm={self._grad_norm:.2f}" if self._grad_norm is not None else ""
+            line = (f"[step {step:>7,}] {tokens_seen/1e6:8.1f}M tok | loss={loss:.4f} "
+                    f"| ppl~{ppl:6.2f} | lr={lr:.2e} | {tps:6.0f} tok/s "
+                    f"| best={self._best_loss:.4f}{gn}")
+            if self._plain:
+                # markup=False so the literal "[step N]" brackets aren't parsed as
+                # rich markup tags (which would silently drop them).
+                self._console.print(line, highlight=False, markup=False)
+            self._record(line)
 
     def set_target(self, n_tokens_target: int) -> None:
         """Adjust the token target (and progress-bar total) mid-run — e.g. when the
@@ -175,25 +214,42 @@ class TrainingDashboard:
     def set_gate_result(self, score: float, passed: bool) -> None:
         self.gate_score  = score
         self.gate_passed = passed
+        self._record(f"[gate] score={score:.4f} -> {'PASS' if passed else 'FAIL'}")
         if self._live:
             self._live.update(self._build_layout())
 
     def set_checkpoint(self, step: int) -> None:
         self.last_ckpt_step = step
 
+    def _record(self, msg: str) -> None:
+        """Append a timestamped line to the persistent training log file (if any),
+        flushing each line so a crash still leaves a complete log."""
+        if self._flog is None:
+            return
+        try:
+            self._flog.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
+            self._flog.flush()
+        except (OSError, ValueError):
+            self._flog = None                  # don't let a logging error kill training
+
     def print(self, msg: str) -> None:
-        """Record a log line. On a TTY it appears in the panel's log area (under the
-        dashboard); piped to a file it is printed plainly so the file keeps it."""
+        """Record a log line. On the live panel it appears in the panel's log area
+        (under the dashboard); in plain mode (or piped to a file) it is printed
+        plainly. Either way it is also appended to the persistent log file."""
+        self._record(msg)
         if self._is_tty and self._live:
             self._log.append(msg)
             self._live.update(self._build_layout())
         else:
-            self._console.print(msg)
+            self._console.print(msg, markup=False, highlight=False)
 
     # ── Context manager ───────────────────────────────────────────────────────
 
     def __enter__(self) -> "TrainingDashboard":
-        if self._is_tty:                        # animate only on a real terminal
+        self._record(f"=== Stage {self.stage} ({self.stage_name}) | "
+                     f"{self.params/1e6:.1f}M params | target {self.n_tokens_target/1e6:.0f}M tokens "
+                     f"| target_loss curve below ===")
+        if self._is_tty and not self._plain:    # animate only on a real terminal (not plain)
             self._live = Live(
                 self._build_layout(),
                 console=self._console,
@@ -212,6 +268,11 @@ class TrainingDashboard:
         if self._live:
             self._live.__exit__(*args)
             self._live = None
+        if self._flog is not None:
+            try:
+                self._flog.close()
+            finally:
+                self._flog = None
 
     # ── Layout builder ────────────────────────────────────────────────────────
 

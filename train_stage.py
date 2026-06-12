@@ -369,7 +369,7 @@ def _on_stage_complete(model, stage: int, cfg: dict, root: Path, ckpt_dir: Path,
 # ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
-def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
+def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False) -> bool:
     tcfg      = cfg["training"]
     mcfg      = cfg["model"]
     skip_gate = cfg.get("skip_gate", False)   # toy config sets this to true
@@ -559,7 +559,9 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                              resume_tokens=tokens_seen,
                              params=model.count_params(),
                              n_layers=model.cfg.n_layers,
-                             d_model=model.cfg.d_model)
+                             d_model=model.cfg.d_model,
+                             plain=plain,
+                             log_path=ckpt_dir / "train.log")
 
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
@@ -742,6 +744,10 @@ Examples:
     parser.add_argument("--precision", choices=SUPPORTED_PRECISIONS, default=None,
                         help="Override training precision (fp32|bf16|fp16). Lower precision "
                              "uses less memory, so a bigger level may fit on the same hardware.")
+    parser.add_argument("--plain", action="store_true",
+                        help="Plain scrolling logs instead of the live dashboard (selectable/"
+                             "copyable, no flicker). A full train.log is written to the stage's "
+                             "checkpoint dir either way (also via RDMCA_PLAIN_LOGS=1).")
     args = parser.parse_args()
 
     from src.config import resolve_config_path
@@ -788,7 +794,7 @@ Examples:
             sys.exit(1)
         print(f"  Stage {prev_n} prereq OK")
 
-    passed = train_stage(args.stage, cfg, resume=args.resume)
+    passed = train_stage(args.stage, cfg, resume=args.resume, plain=args.plain)
 
     skip_gate = cfg.get("skip_gate", False)
     lvl_flag = f" --level {level}" if isinstance(level, int) else f" --config {cfg_path}"
