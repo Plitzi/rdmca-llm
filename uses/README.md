@@ -53,15 +53,15 @@ python train_stage.py --level 1 --stage 3     # arithmetic
 python train_stage.py --level 1 --stage 5     # reasoning (chain-of-thought) — capstone of the base
 python train_stage.py --level 1 --stage 7     # tool use
 python train_stage.py --level 1 --stage 8     # MCP
-python train_stage.py --level 1 --stage 9     # skills
+python train_stage.py --level 1 --stage 10     # skills
 
 # 4. Chat — streamed live, reasoning=medium by default
-python uses/chat/run_chat.py --level 1 --stage 9
-python uses/chat/run_chat.py --level 1 --stage 9 --format json
-python uses/chat/run_chat.py --level 1 --stage 9 --think high --no-stream
+python uses/chat/run_chat.py --level 1 --stage 10
+python uses/chat/run_chat.py --level 1 --stage 10 --format json
+python uses/chat/run_chat.py --level 1 --stage 10 --think high --no-stream
 
 # 5. Agent (multi-round tool loop with the example tool + skill)
-python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
+python uses/agent/run_agent.py --level 1 --stage 10 --query "What time is it?"
 ```
 
 ### What to test

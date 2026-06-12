@@ -16,7 +16,12 @@ from __future__ import annotations
 # freeze happens after the last ACTIVE cognitive stage (train_stage.last_cognitive_stage),
 # which is BCF_STAGE when ethics is present and an earlier stage otherwise. Behavioral
 # stages (>BCF_STAGE: tool/MCP/skills) train as LoRA sectors on the frozen core.
-BCF_STAGE = 6
+#
+# Memory management (6) is a COGNITIVE faculty: the frozen core itself learns to
+# consume recalled memory (LTSS + episodic), so it sits inside the base, right
+# after reasoning (5) and before ethics/BCF (7, the freeze point). Inserting it
+# shifted the old ethics/tool/MCP/skills stages up by one (6→7, 7→8, 8→9, 9→10).
+BCF_STAGE = 7
 
 STAGE_GATES = {
     1: ("blim_accuracy",      0.70, "Language — BLiMP grammaticality"),
@@ -24,7 +29,8 @@ STAGE_GATES = {
     3: ("gsm8k_accuracy",     0.15, "Abstraction — GSM8K"),
     4: ("causal_accuracy",    0.65, "Causal and procedural reasoning"),
     5: ("reasoning_accuracy", 0.20, "Reasoning — chain-of-thought (GSM8K)"),
-    6: ("bcf_accuracy",       0.90, "Cognitive ethics — BCF probe"),
+    6: ("memory_accuracy",    0.50, "Memory — recall and use of injected memory"),
+    7: ("bcf_accuracy",       0.90, "Cognitive ethics — BCF probe"),
 }
 
 STAGE_NAMES = {
@@ -33,8 +39,9 @@ STAGE_NAMES = {
     3: "Abstraction and symbolic composition",
     4: "Causal and procedural reasoning",
     5: "Reasoning",
-    6: "Cognitive ethics and BCF",
-    7: "Action and tool use",
-    8: "Model Context Protocol (MCP)",
-    9: "Skills",
+    6: "Memory management",
+    7: "Cognitive ethics and BCF",
+    8: "Action and tool use",
+    9: "Model Context Protocol (MCP)",
+    10: "Skills",
 }

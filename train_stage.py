@@ -56,8 +56,9 @@ from src.training.stages import STAGE_GATES, STAGE_NAMES, BCF_STAGE
 
 def last_cognitive_stage(cfg: dict) -> int | None:
     """Highest ACTIVE stage that is part of the frozen cognitive base (≤ BCF_STAGE).
-    The core is frozen right after this stage: at L1 (no ethics) that's reasoning
-    (5), at L4+ it's ethics/BCF (6). Below that, behavioral stages add sectors."""
+    The core is frozen right after this stage. Every level now carries the full
+    cognitive curriculum (1..7), so the freeze happens after ethics/BCF (7) at
+    EVERY level. Behavioral stages (8-10: tool/MCP/skills) then add LoRA sectors."""
     active = [int(k.replace("stage", "")) for k in (cfg.get("curriculum") or {})]
     base = [s for s in active if s <= BCF_STAGE]
     return max(base) if base else None
@@ -235,7 +236,8 @@ def validation_perplexity(model, val_batches) -> float:
 # Proxy perplexity gates per stage until task-specific benchmarks
 # (BLiMP / ARC / GSM8K / COPA / BCF probes) are wired in. Overridable via
 # cfg["gate"]["max_perplexity"][stage].
-DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0, 6: 35.0}
+DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0,
+                    6: 36.0, 7: 35.0}   # 6 = memory, 7 = ethics/BCF
 
 
 def evaluate_gate(model, stage: int,

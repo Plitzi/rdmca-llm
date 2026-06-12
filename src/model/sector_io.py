@@ -27,7 +27,7 @@ BEHAVIORAL_RANK = 8
 
 
 def sector_id_for_stage(stage: int) -> int:
-    """Stable sector id for a behavioral stage (e.g. stage 7 → 107)."""
+    """Stable sector id for a behavioral stage (e.g. stage 8 → 108)."""
     return BEHAVIORAL_SECTOR_BASE + stage
 
 

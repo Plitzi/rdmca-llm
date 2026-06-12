@@ -120,7 +120,20 @@ class CausalSelfAttention(nn.Module):
         self._sector_delta = None      # model._compute_delta(layer, proj, x, route)
         self._sector_route = None      # model._route(x) -> per-token expert weights
 
-    def __call__(self, x, mask=None):
+    def __call__(self, x, mask=None, cache=None, pos_offset=0, return_kv=False):
+        """Attention over `x`.
+
+        Training/full forward (default): `cache=None, pos_offset=0` → standard
+        causal attention over the S tokens, returns `proj`. This path is byte-for-
+        byte the original behaviour.
+
+        Cached generation: pass `cache=(past_k, past_v)` (layout [B, H, T_past, Hd])
+        and `pos_offset` = number of already-processed tokens; q/k/v are computed
+        only for the NEW tokens `x`, concatenated onto the cache, and RoPE is applied
+        at the ABSOLUTE positions `pos_offset .. pos_offset+S`. With `return_kv=True`
+        the updated `(k, v)` is returned alongside `proj` so the caller can thread it
+        to the next step. For single-token decode (S==1) no causal mask is needed —
+        the new query legitimately attends to every cached key plus itself."""
         Bsz, S, D = x.shape
         H, Hd = self.n_heads, self.head_dim
 
@@ -139,13 +152,16 @@ class CausalSelfAttention(nn.Module):
         k = k.reshape(Bsz, S, H, Hd)
         v = v.reshape(Bsz, S, H, Hd)
 
-        # Apply RoPE. Convert the host tables to backend tensors ONCE (cached) and
-        # slice per pass — re-creating them from numpy every forward churned memory.
+        # Apply RoPE at absolute positions [pos_offset, pos_offset+S). Convert the
+        # host tables to backend tensors ONCE (cached) and slice per pass — re-
+        # creating them from numpy every forward churned memory. The offset is what
+        # makes the KV cache correct: a decoded token must rotate at its true
+        # position, not at index 0 (the bug in the report's sketch used cos[-1:]).
         if self._rope_cos_t is None:
             self._rope_cos_t = ops.array(self._rope_cos)
             self._rope_sin_t = ops.array(self._rope_sin)
-        cos = self._rope_cos_t[:S]
-        sin = self._rope_sin_t[:S]
+        cos = self._rope_cos_t[pos_offset:pos_offset + S]
+        sin = self._rope_sin_t[pos_offset:pos_offset + S]
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
@@ -154,12 +170,23 @@ class CausalSelfAttention(nn.Module):
         k = ops.transpose(k, (0, 2, 1, 3))
         v = ops.transpose(v, (0, 2, 1, 3))
 
-        # Scaled dot-product attention
-        attn = (q @ ops.transpose(k, (0, 1, 3, 2))) * self.scale  # [B, H, S, S]
+        # KV cache: prepend the past keys/values (seq axis = 2) so the new queries
+        # attend over the whole history without reprocessing it.
+        if cache is not None:
+            past_k, past_v = cache
+            k = ops.concatenate([past_k, k], axis=2)
+            v = ops.concatenate([past_v, v], axis=2)
+        new_kv = (k, v)
 
-        # Causal mask (match attn dtype so bf16/fp16 stays low-precision here)
-        causal = ops.astype(ops.triu(ops.full((S, S), -1e9), k=1), attn.dtype)
-        attn = attn + causal[None, None, :, :]
+        # Scaled dot-product attention. [B, H, S, T] (T = pos_offset + S with cache).
+        attn = (q @ ops.transpose(k, (0, 1, 3, 2))) * self.scale
+
+        # Causal mask only when processing >1 query position without a cache
+        # (training / prefill): query i may see keys ≤ i. Single-token decode needs
+        # no mask — the lone query attends to all cached keys and itself.
+        if cache is None and S > 1:
+            causal = ops.astype(ops.triu(ops.full((S, S), -1e9), k=1), attn.dtype)
+            attn = attn + causal[None, None, :, :]
 
         if mask is not None:
             attn = attn + mask
@@ -171,7 +198,7 @@ class CausalSelfAttention(nn.Module):
         proj = self.o_proj(out)
         if self._sector_delta is not None:
             proj = proj + self._sector_delta(self.layer_idx, "o", out, route)
-        return proj
+        return (proj, new_kv) if return_kv else proj
 
 
 class TransformerBlock(nn.Module):
@@ -187,6 +214,15 @@ class TransformerBlock(nn.Module):
         x = x + self.drop(self.attn(self.ln1(x), mask))
         x = x + self.drop(self.ffn(self.ln2(x)))
         return x
+
+    def forward_cached(self, x, cache=None, pos_offset=0):
+        """Cached-generation forward: same residual structure as __call__, but the
+        attention reads/writes the KV cache. Returns (x, (k, v)). Dropout is a no-op
+        in eval, where this path runs."""
+        a, kv = self.attn(self.ln1(x), cache=cache, pos_offset=pos_offset, return_kv=True)
+        x = x + self.drop(a)
+        x = x + self.drop(self.ffn(self.ln2(x)))
+        return x, kv
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +293,34 @@ class RDMCAFoundational(nn.Module):
         for block in self.blocks:
             x = block(x, mask)
         return self.ln_f(x)
+
+    def forward_cached(self, tokens, caches=None, pos_offset=0):
+        """Forward with a per-layer KV cache for autoregressive generation.
+
+        `tokens`  : [B, S] — the NEW tokens only (S = prompt length on the prefill
+                    call, then S = 1 per decode step).
+        `caches`  : list of per-layer (k, v) from the previous step, or None to
+                    prefill from scratch.
+        `pos_offset`: absolute position of the first token in `tokens` (0 on
+                    prefill, then the running length) — used for RoPE and so the
+                    new queries attend over the whole cached history.
+
+        Returns (h [B, S, d_model], new_caches). Turns the O(n) per-step reprocessing
+        of the full sequence into O(1) new-token work, i.e. generation O(n³)→O(n²).
+        The training forward (`__call__`) is untouched."""
+        x = self.drop(self.embed(tokens))
+        new_caches = []
+        for i, block in enumerate(self.blocks):
+            past = caches[i] if caches is not None else None
+            x, kv = block.forward_cached(x, cache=past, pos_offset=pos_offset)
+            new_caches.append(kv)
+        return self.ln_f(x), new_caches
+
+    def logits_cached(self, tokens, caches=None, pos_offset=0):
+        """Cached counterpart of `logits()`: returns (logits, new_caches) at the
+        largest MRL dim. Callers feed only the new token(s) each step."""
+        h, new_caches = self.forward_cached(tokens, caches, pos_offset)
+        return self.head_at_dim(h, self.cfg.mrl_dims[-1]), new_caches
 
     def aux_loss(self):
         """Mean MoE load-balance loss over the last forward (0 if no MoE routing)."""

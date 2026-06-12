@@ -7,7 +7,7 @@ The loop itself lives in [`src/agent.py`](../../src/agent.py) (`run_agent`) and
 runs several think→act→observe rounds (reasoning on by default) until it answers.
 
 ```bash
-python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
+python uses/agent/run_agent.py --level 1 --stage 10 --query "What time is it?"
 python uses/agent/run_agent.py --dummy --query "hi"        # plumbing only
 ```
 

@@ -19,7 +19,8 @@ information:
     3: "Matemáticas: problemas de palabra y aritmética avanzada (GSM8K)."
     4: "Causal/Procedural: cadenas causa→efecto y procedimientos paso a paso."
     5: "Razonamiento: cadena de pensamiento que orquesta lenguaje, aritmética y causalidad."
-    6: "Ética: principios morales y restricciones de comportamiento (BCF) — aquí se congela la base."
+    6: "Memoria: recall/uso de memoria con más distractores y contexto largo."
+    7: "Ética: principios morales y restricciones de comportamiento (BCF) — aquí se congela la base."
 
 model:
   d_model: 512
@@ -53,7 +54,7 @@ resources:
 
 skip_gate: false
 gate:
-  max_perplexity: {1: 42.0, 2: 40.0, 3: 38.0, 4: 36.0, 5: 34.0, 6: 36.0}
+  max_perplexity: {1: 42.0, 2: 40.0, 3: 38.0, 4: 36.0, 5: 34.0, 6: 36.0, 7: 36.0}
 
 curriculum:
   stage1:
@@ -94,34 +95,43 @@ curriculum:
         max_grade: 13
         max_word_len: 28
   stage6:
-    name: "Cognitive ethics and BCF"
-    entry_level: 1                     # core freezes after stage 6 at every level (uniform).
-    n_tokens: 100_000_000
+    name: "Memory management"
+    entry_level: 1             # memory is a cognitive faculty: the frozen core learns
+                               # to recall and USE injected memory (LTSS + episodic).
+    n_tokens: 200_000_000
     data_dir: "data/level4/stage6"
+    data:
+      sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
+      filter: null
+  stage7:
+    name: "Cognitive ethics and BCF"
+    entry_level: 1                     # core freezes after stage 7 (BCF) at every level (uniform).
+    n_tokens: 100_000_000
+    data_dir: "data/level4/stage7"
     data:
       sources: [ethics]
       filter: null
-  stage7:
+  stage8:
     name: "Action and tool use"
     entry_level: 0
     n_tokens: 50_000_000
-    data_dir: "data/level4/stage7"
+    data_dir: "data/level4/stage8"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null
-  stage8:
+  stage9:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 40_000_000
-    data_dir: "data/level4/stage8"
+    data_dir: "data/level4/stage9"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
-  stage9:
+  stage10:
     name: "Skills"
     entry_level: 0
     n_tokens: 40_000_000
-    data_dir: "data/level4/stage9"
+    data_dir: "data/level4/stage10"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null

@@ -21,7 +21,8 @@ information:
     3: "Aritmética: sumas/restas de un dígito."
     4: "Causalidad: causa→efecto muy simple (sintético)."
     5: "Razonamiento: pensar paso a paso (cadena de pensamiento)."
-    6: "Ética/BCF: probe mínimo (estructura, no calidad)."
+    6: "Memoria: recordar y usar un hecho inyectado (probe mínimo)."
+    7: "Ética/BCF: probe mínimo (estructura, no calidad)."
 
 # Tiny model — just enough to run the full code path quickly.
 model:
@@ -90,27 +91,27 @@ curriculum:
     data:
       sources: [causal_synth]    # synthetic cause→effect (e-CARE).
       filter: null
-  stage7:
+  stage8:
     name: "Action and tool use"
     entry_level: 0               # agentic from the very start; ramps up with the model.
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage7"
+    data_dir: "data/level0/stage8"
     data:
       sources: [agentic]         # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null               # JSON tool transcripts — appropriate by construction.
-  stage8:
+  stage9:
     name: "Model Context Protocol (MCP)"
     entry_level: 0               # MCP from the start; same real tools, JSON-RPC envelope.
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage8"
+    data_dir: "data/level0/stage9"
     data:
       sources: [mcp]             # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
-  stage9:
+  stage10:
     name: "Skills"
     entry_level: 0               # skills from the start (Claude-style SKILL.md procedures).
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage9"
+    data_dir: "data/level0/stage10"
     data:
       sources: [skills]          # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
@@ -123,10 +124,19 @@ curriculum:
       sources: [reasoning]       # real CoT (GSM8K) as <think>…</think> + answer.
       filter: null
   stage6:
+    name: "Memory management"
+    entry_level: 0             # memory is a cognitive faculty: the frozen core learns
+                               # to recall and USE injected memory (LTSS + episodic).
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage6"
+    data:
+      sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
+      filter: null
+  stage7:
     name: "Cognitive ethics and BCF"
     entry_level: 0
     n_tokens: 1_000_000
-    data_dir: "data/level0/stage6"
+    data_dir: "data/level0/stage7"
     data:
       sources: [ethics]
       filter: null

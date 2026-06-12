@@ -19,7 +19,8 @@ information:
     3: "Matemáticas: multidígito, fracciones y álgebra simple."
     4: "Causal: relaciones causa→efecto básicas."
     5: "Razonamiento: cadena de pensamiento paso a paso sobre lo aprendido."
-    6: "Ética/BCF: razonamiento ético sobre dilemas simples."
+    6: "Memoria: recuperar y usar memoria relevante entre distractores."
+    7: "Ética/BCF: razonamiento ético sobre dilemas simples."
 
 model:
   d_model: 384
@@ -53,7 +54,7 @@ resources:
 
 skip_gate: false
 gate:
-  max_perplexity: {1: 45.0, 2: 43.0, 3: 40.0, 4: 38.0, 5: 40.0, 6: 40.0}
+  max_perplexity: {1: 45.0, 2: 43.0, 3: 40.0, 4: 38.0, 5: 40.0, 6: 40.0, 7: 40.0}
 
 curriculum:
   stage1:
@@ -91,27 +92,27 @@ curriculum:
     data:
       sources: [causal_synth]          # synthetic cause→effect statements.
       filter: null
-  stage7:
+  stage8:
     name: "Action and tool use"
     entry_level: 0
     n_tokens: 40_000_000
-    data_dir: "data/level3/stage7"
+    data_dir: "data/level3/stage8"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null
-  stage8:
+  stage9:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 30_000_000
-    data_dir: "data/level3/stage8"
+    data_dir: "data/level3/stage9"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
-  stage9:
+  stage10:
     name: "Skills"
     entry_level: 0
     n_tokens: 30_000_000
-    data_dir: "data/level3/stage9"
+    data_dir: "data/level3/stage10"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
@@ -124,10 +125,19 @@ curriculum:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
   stage6:
-    name: "Cognitive ethics and BCF"
-    entry_level: 1             # core freezes after stage 6 at every level (uniform).
-    n_tokens: 50_000_000
+    name: "Memory management"
+    entry_level: 1             # memory is a cognitive faculty: the frozen core learns
+                               # to recall and USE injected memory (LTSS + episodic).
+    n_tokens: 90_000_000
     data_dir: "data/level3/stage6"
+    data:
+      sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
+      filter: null
+  stage7:
+    name: "Cognitive ethics and BCF"
+    entry_level: 1             # core freezes after stage 7 (BCF) at every level (uniform).
+    n_tokens: 50_000_000
+    data_dir: "data/level3/stage7"
     data:
       sources: [ethics]
       filter: null

@@ -4,12 +4,12 @@ Interactive conversation with a trained model. Implemented by
 [`run_chat.py`](run_chat.py).
 
 ```bash
-python uses/chat/run_chat.py --level 1 --stage 9                 # streamed, reasoning=medium (defaults)
-python uses/chat/run_chat.py --level 1 --stage 9 --format json   # JSON output
-python uses/chat/run_chat.py --level 1 --stage 9 --think high     # more reasoning
-python uses/chat/run_chat.py --level 1 --stage 9 --no-stream      # batched (no live tokens)
-python uses/chat/run_chat.py --level 1 --stage 9 --quant int4     # 4-bit weights (limited hardware)
-python uses/chat/run_chat.py --level 1 --stage 9 --quant 8        # any 2–8 bit width works too
+python uses/chat/run_chat.py --level 1 --stage 10                 # streamed, reasoning=medium (defaults)
+python uses/chat/run_chat.py --level 1 --stage 10 --format json   # JSON output
+python uses/chat/run_chat.py --level 1 --stage 10 --think high     # more reasoning
+python uses/chat/run_chat.py --level 1 --stage 10 --no-stream      # batched (no live tokens)
+python uses/chat/run_chat.py --level 1 --stage 10 --quant int4     # 4-bit weights (limited hardware)
+python uses/chat/run_chat.py --level 1 --stage 10 --quant 8        # any 2–8 bit width works too
 python uses/chat/run_chat.py --dummy                              # random weights (plumbing only)
 ```
 

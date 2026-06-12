@@ -146,7 +146,20 @@ def generate(model,
     """
     ops = backend.current().ops
     engine = backend.current().engine
-    tokens = ops.array(np.asarray([input_ids], dtype=np.int64))   # [1, S]
+
+    # Prefill the prompt ONCE into a per-layer KV cache, then decode one token at a
+    # time feeding only the new token. This is the O(n³)→O(n²) win: each step does
+    # O(1) new-token work instead of reprocessing the whole sequence. `eval` on the
+    # cache tensors each step keeps MLX's lazy graph from growing unbounded.
+    ids = list(input_ids)
+    if len(ids) > context_len:           # keep the prompt within the positional limit
+        ids = ids[-context_len:]
+    prefill = ops.array(np.asarray([ids], dtype=np.int64))
+    logits, caches = model.logits_cached(prefill, caches=None, pos_offset=0)
+    next_logits = logits[0, -1, :]       # [vocab] — logits for the first new token
+    engine.eval(next_logits, *[t for kv in caches for t in kv])
+    cur_len = len(ids)
+
     generated: list[int] = []
     printed = ""
     repeat_run = 0
@@ -156,14 +169,6 @@ def generate(model,
     EOS_ID = 3
 
     for _ in range(max_new_tokens):
-        # Keep context within the model's positional limit.
-        if tokens.shape[1] > context_len:
-            tokens = tokens[:, -context_len:]
-
-        logits = model.logits(tokens)     # [1, S, vocab]
-        next_logits = logits[0, -1, :]    # [vocab]
-        engine.eval(next_logits)
-
         next_id = sample_top_p(next_logits, temperature, top_p, top_k=top_k,
                                recent_ids=generated[-rep_window:] if rep_penalty != 1.0 else None,
                                rep_penalty=rep_penalty)
@@ -178,8 +183,6 @@ def generate(model,
             break
 
         generated.append(next_id)
-        new_tok = ops.array(np.asarray([[next_id]], dtype=np.int64))
-        tokens  = ops.concatenate([tokens, new_tok], axis=1)
 
         if _looping(generated):
             break
@@ -212,6 +215,16 @@ def generate(model,
                     printed = text[:safe]
             else:
                 print("▌", end="", flush=True)
+
+        # Advance the cache with the chosen token → logits for the next step. Stop
+        # if the positional window is full (the chat trims history, so this is rare).
+        if cur_len >= context_len:
+            break
+        new_tok = ops.array(np.asarray([[next_id]], dtype=np.int64))
+        logits, caches = model.logits_cached(new_tok, caches=caches, pos_offset=cur_len)
+        next_logits = logits[0, -1, :]
+        engine.eval(next_logits, *[t for kv in caches for t in kv])
+        cur_len += 1
 
     # Flush any held-back tail (real text that never became a role tag). Skipped
     # when we stopped at a boundary — everything past it is the leaked next turn.
@@ -524,6 +537,19 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         print("\n  [tokenizer] Not found — run: python scripts/train_tokenizer.py")
         print("  Using vocab IDs as proxy output (for pipeline testing only).\n")
 
+    # Memory recall (read side): each turn the user message is embedded and the
+    # most relevant consolidated (LTSS) + recent (experience-log) memories are
+    # injected as a leading <mem>…</mem> block. Lazy/optional — empty stores ⇒ no
+    # injection. Needs a real tokenizer (the proxy path can't embed/decode).
+    recall = None
+    if tok_ready:
+        try:
+            from src.memory.recall import MemoryRecall
+            recall = MemoryRecall(model, tokenizer)
+            print("  Memory recall: on (LTSS + experiences, injected as <mem>).")
+        except Exception as e:
+            print(f"  Memory recall: off ({e}).")
+
     while True:
         try:
             prompt = input(f"\n[{lang.upper()}] You: ").strip()
@@ -677,12 +703,25 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         if len(history) > max_hist:
             history = history[-max_hist:]
 
+        # Recall relevant memory for THIS message → leading <mem> block (placed
+        # right after the System line, before the turns). mem_ids stays [] when
+        # there is nothing relevant, so an ordinary turn is unchanged.
+        mem_ids: list[int] = []
+        if recall is not None:
+            try:
+                mem_text = recall.as_context(recall.recall(prompt))
+                if mem_text:
+                    mem_ids = tokenizer.encode(mem_text, lang=lang,
+                                               add_bos=False, add_eos=False)
+            except Exception:
+                mem_ids = []
+
         # Build the leading System preamble (BOS + lang + persona + mood). When
         # there is neither a system prompt nor an active mood this is just BOS+lang.
         if tok_ready:
             pre = agent.system_preamble(system_text, current_mood)
             pre_ids = tokenizer.encode(pre, lang=lang, add_bos=True, add_eos=False)
-            gen_history = pre_ids + history
+            gen_history = pre_ids + mem_ids + history
         else:
             gen_history = [BOS_ID] + history
 
@@ -741,7 +780,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             surface="chat", context_len=mcfg.context_len,
             system_tokens=count_tokens(tokenizer, agent.system_preamble(system_text, current_mood))
                           if tok_ready else 0,
-            memory_tokens=grounding_tokens,
+            memory_tokens=grounding_tokens + len(mem_ids),   # grounding + recalled <mem>
             history_tokens=len(history),
             tokens_in=len(gen_history),
             tokens_out=len(gen_ids),

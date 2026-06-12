@@ -133,6 +133,52 @@ def gen_analogies(n: int, seed: int = 1) -> Iterator[dict]:
             yield {"text": f"Pattern: {seq[0]} {seq[1]} {seq[2]} {seq[3]} -> {seq[3]+step}", "lang": "en"}
 
 
+# ──────────────────────────── memory (synthetic, EN) ────────────────────────
+# Trains the Memory-management stage (stage 6, frozen cognitive core) to CONSUME
+# recalled memory. Each example leads with a `<mem>…</mem>` block — the SAME framing
+# src/agent.py injects at inference (agent.MEM_OPEN / MEM_CLOSE) — holding the
+# relevant fact among distractors, then a User question and an Assistant answer
+# that USES the fact. ~20% are negatives where the answer is NOT in memory, so the
+# model learns to recall from the block instead of hallucinating. The User:/Assistant:
+# framing matches the rest of the corpus, so completion-only loss masking applies.
+_MEM_NAMES = ["Maria", "Tom", "Aisha", "Kenji", "Lucia", "Omar",
+              "Sven", "Priya", "Diego", "Lena", "Nora", "Hugo"]
+_MEM_FACTS = [
+    ("favorite color", ["blue", "green", "red", "purple", "orange", "teal", "yellow"]),
+    ("pet",            ["a cat", "a dog", "a parrot", "a rabbit", "a turtle", "a hamster"]),
+    ("home city",      ["Lima", "Cairo", "Oslo", "Kyoto", "Madrid", "Accra", "Quito"]),
+    ("job",            ["a teacher", "a nurse", "a baker", "an engineer", "a pilot", "a chef"]),
+    ("favorite food",  ["pasta", "mango", "sushi", "tacos", "lentils", "ramen"]),
+    ("birthday month", ["March", "July", "October", "January", "May", "September"]),
+]
+
+
+def _mem_fact_line(name: str, attr: str, val: str) -> str:
+    return f"{name}'s {attr} is {val}."
+
+
+def gen_memory(n: int, seed: int = 1) -> Iterator[dict]:
+    """Synthetic recall-and-use examples: a <mem> block of facts + distractors, a
+    question, and an answer that uses (or correctly disclaims) the memory."""
+    rng = random.Random(seed)
+    for _ in range(n):
+        k = rng.randint(2, 4)                        # facts in the <mem> block
+        names = rng.sample(_MEM_NAMES, k)
+        attrs = [rng.choice(_MEM_FACTS) for _ in range(k)]
+        facts = [(names[i], attrs[i][0], rng.choice(attrs[i][1])) for i in range(k)]
+        lines = [f"- {_mem_fact_line(*f)}" for f in facts]
+        rng.shuffle(lines)
+        block = "<mem>\n" + "\n".join(lines) + "\n</mem>"
+        if rng.random() < 0.8:                       # positive: answer lives in memory
+            tgt = rng.choice(facts)
+            q, a = f"What is {tgt[0]}'s {tgt[1]}?", _mem_fact_line(*tgt)
+        else:                                        # negative: not in memory
+            outsider = rng.choice([nm for nm in _MEM_NAMES if nm not in names])
+            attr = rng.choice(_MEM_FACTS)[0]
+            q, a = f"What is {outsider}'s {attr}?", "I don't have that in my memory."
+        yield {"text": f"{block}\nUser: {q}\nAssistant: {a}", "lang": "en"}
+
+
 # ──────────────────────────── causal (real, EN) ─────────────────────────────
 # Real cause→effect statements from the e-CARE dataset. English only — no real
 # multilingual causal corpus yet — so emitted only when English is requested.
@@ -851,6 +897,8 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
         return stream_arithmetic(langs, arithmetic_level, limit_mb)
     if key == "analogies":                      # TEMPORARY synthetic (no real corpus yet)
         return gen_analogies(approx_examples)
+    if key in ("memory", "memory_synth"):       # synthetic recall/use-of-memory (<mem>)
+        return gen_memory(approx_examples)
     if key in ("causal_synth", "causal"):       # real cause→effect (EN) from e-CARE
         return stream_causal(langs, limit_mb)
     if key in ("agentic", "tools"):             # real tool-use loop (EN), Claude-style JSON

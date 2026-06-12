@@ -146,6 +146,13 @@ class LTSS:
         results = self.search(query, k=1)
         return results[0][1] if results else 0.0
 
+    def get_content(self, node_id: str) -> Optional[str]:
+        """Return the stored content for a node id (None if unknown). Used by the
+        inference-time recall (MemoryRecall) to turn a search hit into text."""
+        row = self._conn.execute(
+            "SELECT content FROM ltss_nodes WHERE id = ?", (node_id,)).fetchone()
+        return row[0] if row else None
+
     @property
     def global_centroid(self) -> Optional[np.ndarray]:
         if not self._embeddings:

@@ -7,7 +7,7 @@ example tool (calculator) and one example skill (arithmetic-helper SKILL.md) are
 wired in; add more under tools/ and skills/.
 
 Usage:
-  python uses/agent/run_agent.py --level 1 --stage 9 --query "What time is it?"
+  python uses/agent/run_agent.py --level 1 --stage 10 --query "What time is it?"
   python uses/agent/run_agent.py --dummy --query "hello"     # plumbing only (random weights)
 
 Reasoning (default medium) and live streaming (default on) are inherited from
@@ -90,7 +90,7 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
 def main() -> None:
     ap = argparse.ArgumentParser(description="RDMCA agent (tool loop)")
     ap.add_argument("--level", type=int, default=1, help="Educational level (default: 1)")
-    ap.add_argument("--stage", type=int, default=9, help="Checkpoint stage (default: 9 = Skills, the most complete)")
+    ap.add_argument("--stage", type=int, default=10, help="Checkpoint stage (default: 10 = Skills, the most complete)")
     ap.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint .npz")
     ap.add_argument("--dummy", action="store_true", help="Random weights (plumbing test)")
     ap.add_argument("--query", required=True, help="The user message")
@@ -153,9 +153,25 @@ def main() -> None:
     if mood != "neutral":
         print(f"  (mood: {mood})")
 
+    # Memory recall applies to the agent too: embed the query, pull the most
+    # relevant consolidated + recent memories, and lead the agent prompt with them
+    # (same <mem> block as the chat). Lazy/optional — empty stores ⇒ no injection.
+    # Raw memory body (one '- item' per line); build_agent_prompt wraps it in the
+    # <mem>…</mem> block, so we must NOT pre-wrap here.
+    memory = ""
+    if tokenizer.ready:
+        try:
+            from src.memory.recall import MemoryRecall
+            mems = MemoryRecall(model, tokenizer).recall(args.query)
+            memory = "\n".join(f"- {m.text.strip()}" for m in mems)
+            if memory:
+                print(f"  (memory: {len(mems)} recalled)")
+        except Exception as e:
+            print(f"  (memory recall off: {e})")
+
     result = agent.run_agent(generate_fn, TOOLS, args.query,
                              skill_md=skill_md, max_steps=args.max_steps,
-                             think=args.think, system=sys_persona)
+                             think=args.think, system=sys_persona, memory=memory)
 
     # Structured recap of the rounds. Thinking is only re-printed here when it
     # was NOT already streamed live (avoids duplicating the scratchpad).

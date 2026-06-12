@@ -48,6 +48,21 @@ def system_preamble(system: Optional[str], mood: str = "neutral") -> str:
     return line + "\n"
 
 
+# ─────────────────────────────── memory ─────────────────────────────────────
+# Recalled memory (consolidated LTSS + recent experiences) rides into EVERY
+# surface (chat, agent, future API) as a leading `<mem>…</mem>` block — the SAME
+# framing the Memory-management stage (stage 6) is trained on, so the frozen core
+# consumes it in-distribution. Empty body → "" (no injection, zero regression).
+MEM_OPEN, MEM_CLOSE = "<mem>", "</mem>"
+
+
+def memory_block(body: str) -> str:
+    """Frame recalled memory items as a `<mem>…</mem>` block for the prompt front.
+    `body` is the already-formatted memory text (e.g. one '- item' per line)."""
+    body = (body or "").strip()
+    return f"{MEM_OPEN}\n{body}\n{MEM_CLOSE}\n" if body else ""
+
+
 def wrap_prompt(prompt: str, fmt: str, think: str = "off") -> str:
     """Frame one chat turn the way the training data is formatted: a `User:` line
     and a trailing `Assistant:` so the model continues as the assistant. This is
@@ -273,13 +288,19 @@ def parse_action(text: str) -> Optional[dict]:
 
 def build_agent_prompt(tools: List[Tool], user: str,
                        skill_md: Optional[str] = None, think: str = "off",
-                       system: Optional[str] = None) -> str:
-    """Assemble the initial agentic prompt (system + tools + optional skill + user).
-    An optional `system` persona is prepended to the tool-use instructions so the
-    same system-prompt channel works in the agent as in the chat."""
+                       system: Optional[str] = None, memory: str = "") -> str:
+    """Assemble the initial agentic prompt (memory + system + tools + optional skill
+    + user). An optional `system` persona is prepended to the tool-use instructions
+    so the same system-prompt channel works in the agent as in the chat. Recalled
+    `memory` (if any) leads the prompt as a `<mem>…</mem>` block — same as the chat,
+    so the agent recalls past context too."""
     base   = AGENT_SYSTEM + (THINK_INSTRUCTION if normalize_thinking(think) != "off" else "")
     system = f"{system.strip()} {base}" if system and system.strip() else base
-    parts = [f"System: {system}"]
+    parts = []
+    mem = memory_block(memory)
+    if mem:
+        parts.append(mem.rstrip("\n"))
+    parts.append(f"System: {system}")
     if tools:
         parts.append(f"Tools: {tools_spec(tools)}")
     if skill_md:
@@ -292,7 +313,7 @@ def build_agent_prompt(tools: List[Tool], user: str,
 def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
               skill_md: Optional[str] = None, max_steps: int = 6,
               think: str = "off", max_context_chars: int = 8000,
-              system: Optional[str] = None) -> dict:
+              system: Optional[str] = None, memory: str = "") -> dict:
     """Drive the tool loop — multiple think→act→observe rounds until the model
     answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
     wraps the model; it may return a `<think>…</think>` scratchpad before the
@@ -307,7 +328,7 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
     then drops from the FRONT, silently discarding the system/tools spec. Keeping
     the header and windowing the tail preserves the instructions instead."""
     registry = {t.name: t for t in tools}
-    header   = build_agent_prompt(tools, user, skill_md, think, system=system)
+    header   = build_agent_prompt(tools, user, skill_md, think, system=system, memory=memory)
     steps: list = []
 
     def _block(st: dict) -> str:
