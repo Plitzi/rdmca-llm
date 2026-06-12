@@ -80,7 +80,13 @@ class LTSS:
             try:
                 import faiss
                 self._faiss = faiss
-            except Exception:
+            except Exception as e:
+                # Requested but unavailable → fall back to brute-force numpy, but say
+                # so: at 100k+ nodes that is O(N) instead of O(log N) (~10-100× slower
+                # in consolidation), and a silent fallback hides why search got slow.
+                import warnings
+                warnings.warn(f"RDMCA_FAISS set but faiss import failed ({e}); "
+                              "using brute-force numpy search (slower at scale).")
                 self._faiss = None
         self._faiss_index = None
         self._load()
@@ -191,6 +197,22 @@ class LTSS:
     def max_cosine_similarity(self, query: np.ndarray) -> float:
         results = self.search(query, k=1)
         return results[0][1] if results else 0.0
+
+    def close(self) -> None:
+        """Close the SQLite connection. Without this the connection (and its WAL
+        files) stay open for the process lifetime, which can block moving/copying
+        the DB file. Idempotent; safe to call more than once."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None
+
+    def __del__(self):                       # best-effort cleanup on GC
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def get_content(self, node_id: str) -> Optional[str]:
         """Return the stored content for a node id (None if unknown). Used by the

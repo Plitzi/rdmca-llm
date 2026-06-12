@@ -300,6 +300,15 @@ def _memory_stats() -> dict:
     return {"peak": mx.get_peak_memory(), "active": mx.get_active_memory()}
 
 
+def _set_seed(seed: int) -> None:
+    """Seed every RNG that affects a training run (Python, numpy, MLX), so weight
+    init + dropout + sampling are reproducible across runs."""
+    import random as _random
+    _random.seed(seed)
+    np.random.seed(seed)
+    mx.random.seed(seed)
+
+
 _engine = SimpleNamespace(
     value_and_grad=lambda model, fn: mlx_nn.value_and_grad(model, fn),
     make_optimizer=lambda model, lr, weight_decay: mlx_optim.AdamW(
@@ -330,6 +339,7 @@ _engine = SimpleNamespace(
     load_optimizer=_load_optimizer,
     param_count=_param_count,
     memory_stats=_memory_stats,
+    set_seed=_set_seed,
 )
 
 

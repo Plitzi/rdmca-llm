@@ -414,6 +414,17 @@ def _memory_stats() -> dict:
     return {"peak": 0, "active": 0}
 
 
+def _set_seed(seed: int) -> None:
+    """Seed every RNG that affects a training run (Python, numpy, torch CPU+CUDA),
+    so weight init + dropout + sampling are reproducible across runs."""
+    import random as _random
+    _random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 _engine = SimpleNamespace(
     value_and_grad=_value_and_grad,
     make_optimizer=lambda model, lr, weight_decay: torch.optim.AdamW(
@@ -442,6 +453,7 @@ _engine = SimpleNamespace(
     load_optimizer=_load_optimizer,
     param_count=lambda module: sum(p.numel() for p in module.parameters()),
     memory_stats=_memory_stats,
+    set_seed=_set_seed,
 )
 
 

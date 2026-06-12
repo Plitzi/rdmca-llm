@@ -413,6 +413,12 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     from src.training.dashboard import TrainingDashboard
     B = backend.current()
 
+    # Reproducibility: seed every RNG (Python/numpy/backend) BEFORE weight init so a
+    # run is repeatable and gates are comparable. Configurable via `seed:` (top-level
+    # or training.seed); fixed default keeps runs comparable across machines.
+    seed = int(cfg.get("seed", (cfg.get("training", {}) or {}).get("seed", 42)))
+    B.engine.set_seed(seed)
+
     model_cfg = ModelConfig(**{k: v for k, v in mcfg.items()
                                if k in ModelConfig.__dataclass_fields__})
     model = RDMCAFoundational(model_cfg)
@@ -506,6 +512,13 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     dash_interval = 10    # update dashboard (and measure tok/s) every N steps
     t_dash = time.time()
     last_tps = 0.0
+    # NaN/Inf guard: a single unstable batch (fp16 underflow, a bad sample, an LR
+    # spike) can blow the loss to NaN; without a guard the optimizer then writes
+    # NaN into every weight and the run silently continues training garbage for
+    # hours. We SKIP the update on a non-finite loss and abort if it persists.
+    import math
+    _NAN_ABORT  = 20      # consecutive non-finite losses ⇒ the run has diverged
+    nan_streak  = 0
 
     # MoE load-balance aux loss: with routing active (behavioral stages) the gate
     # otherwise gets no gradient and experts collapse. aux_loss() is 0.0 when there
@@ -560,6 +573,23 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
                     acc_loss += B.engine.item(loss)
                     running = B.engine.accumulate_grads(running, g, model)
                 grads = B.engine.finalize_grads(running, 1.0 / grad_acc, model)
+
+            # NaN/Inf guard: skip the optimizer update on a non-finite loss so the
+            # blow-up never reaches the weights; abort if it keeps happening (the run
+            # has diverged — lower the LR or inspect the data). acc_loss is already
+            # synced (item()), so this check is free.
+            if not math.isfinite(acc_loss):
+                nan_streak += 1
+                dash.print(f"  [nan] non-finite loss ({acc_loss}) at step {step} — "
+                           f"skipped update ({nan_streak}/{_NAN_ABORT})")
+                if nan_streak >= _NAN_ABORT:
+                    raise RuntimeError(
+                        f"Training diverged: {_NAN_ABORT} consecutive non-finite "
+                        "losses. Aborting before the checkpoint is corrupted — lower "
+                        "the learning rate or check the data/precision.")
+                step += 1
+                continue
+            nan_streak = 0
 
             # Pre-clip gradient norm — sampled only on dashboard-refresh steps
             # (it forces a device sync, so we don't pay it every step). Shown as a

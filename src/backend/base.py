@@ -60,7 +60,7 @@ ENGINE_SURFACE = (
     "save_weights", "load_weights", "state_dict", "load_state_dict",
     "set_trainable", "freeze_all", "register_submodules",
     "grad_norm", "clip_grads", "accumulate_grads", "finalize_grads",
-    "save_optimizer", "load_optimizer", "param_count", "memory_stats",
+    "save_optimizer", "load_optimizer", "param_count", "memory_stats", "set_seed",
     "align_module",      # called by transformer.py to match a submodule's device/dtype
 )
 

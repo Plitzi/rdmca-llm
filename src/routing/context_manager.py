@@ -37,8 +37,10 @@ class ContextManager:
                  slot_len: Optional[int] = None,
                  buffer: Optional[EpisodicBuffer] = None,
                  embed_fn: Optional[Callable[[List[int]], np.ndarray]] = None,
-                 route_fn: Optional[Callable[[List[int]], List[Tuple[int, float]]]] = None):
+                 route_fn: Optional[Callable[[List[int]], List[Tuple[int, float]]]] = None,
+                 decode_fn: Optional[Callable[[List[int]], str]] = None):
         self.context_len = context_len
+        self.decode_fn = decode_fn
         # Per-sector slot bound W_s. Default splits the window so a few active
         # sectors fit together; a single dominant sector can still use up to W_s.
         self.slot_len = slot_len or max(256, context_len // 2)
@@ -88,13 +90,17 @@ class ContextManager:
             self._evict(sid, evicted)
 
     def _evict(self, sid: int, tokens: List[int]) -> None:
-        """Overflowed chunk → episodic buffer (T1) for consolidation, not discarded."""
+        """Overflowed chunk → episodic buffer (T1) for consolidation, not discarded.
+        Decode the tokens back to TEXT when a decoder is available — an evicted chunk
+        with `text=""` is dead weight in the consolidation pipeline (nothing to
+        abstract into LTSS), which is exactly what gets re-read at recall time."""
         if not tokens:
             return
         emb = self.embed_fn(tokens) if self.embed_fn is not None else None
         if emb is None:
             emb = np.zeros((1,), dtype=np.float32)
-        self.buffer.add(Experience(text="", embedding=np.asarray(emb, dtype=np.float32),
+        text = self.decode_fn(tokens) if self.decode_fn is not None else ""
+        self.buffer.add(Experience(text=text, embedding=np.asarray(emb, dtype=np.float32),
                                    sector_assignment=sid))
 
     # ------------------------------------------------------------------
@@ -150,5 +156,8 @@ def build_context_manager(model, tokenizer=None, context_len: Optional[int] = No
                   for i, a in enumerate(aff) if a >= MIN_AFFINITY]
         return sorted(routed, key=lambda x: -x[1]) or None
 
+    # Decode evicted chunks back to text so consolidation has real content (not "").
+    decode_fn = getattr(tokenizer, "decode", None) if tokenizer is not None else None
+
     return ContextManager(model.cfg.d_model, context_len=ctx, buffer=buffer,
-                          embed_fn=embed_fn, route_fn=route_fn)
+                          embed_fn=embed_fn, route_fn=route_fn, decode_fn=decode_fn)

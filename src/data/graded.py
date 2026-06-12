@@ -19,10 +19,19 @@ scripts/prepare_data.py and are passed in via `extra_streamers` to avoid a
 circular import.
 """
 from __future__ import annotations
+import hashlib
 import json
 import random
 import re
 from typing import Callable, Dict, Iterator, List, Optional
+
+
+def _stable_hash(text: str) -> str:
+    """Deterministic content hash for dedup. Python's built-in `hash()` is salted
+    per process (PYTHONHASHSEED), so the SAME corpus deduped in two runs of
+    prepare_data could keep DIFFERENT examples — making gates non-comparable across
+    runs. A content hash makes the prepared data reproducible."""
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 # ──────────────────────────── readability gate ──────────────────────────────
 _VOWELS = "aeiouy"
@@ -315,7 +324,7 @@ def stream_agentic(langs: List[str], limit_mb: Optional[int] = None) -> Iterator
         text = _hermes_to_transcript(ex)
         if not text:
             continue
-        h = hash(text)
+        h = _stable_hash(text)
         if h in seen:
             continue
         seen.add(h)
@@ -454,7 +463,7 @@ def stream_reasoning(langs: List[str], limit_mb: Optional[int] = None) -> Iterat
             # Alternate: half the tool traces record the plan with a `todo` tool,
             # half don't — so the model learns to use it only when it's available.
             text = _reasoning_tool_transcript(ex, use_todo=(n_tool % 2 == 0))
-            if text and (h := hash(text)) not in seen:
+            if text and (h := _stable_hash(text)) not in seen:
                 seen.add(h)
                 n_tool += 1
                 produced = True
@@ -517,7 +526,7 @@ def stream_mcp(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[dic
         text = _mcp_to_transcript(ex)
         if not text:
             continue
-        h = hash(text)
+        h = _stable_hash(text)
         if h in seen:
             continue
         seen.add(h)
@@ -571,7 +580,7 @@ def stream_skills(langs: List[str], limit_mb: Optional[int] = None) -> Iterator[
                 f"{defn}\n"
                 f"User: {inp}\n"
                 f"Assistant: {tgt}")
-        h = hash(text)
+        h = _stable_hash(text)
         if h in seen:
             continue
         seen.add(h)
@@ -815,7 +824,7 @@ def stream_dialogue(langs: List[str], limit_mb: Optional[int] = None) -> Iterato
     seen: set = set()
 
     def _fresh(rec: dict) -> bool:
-        h = hash(rec["text"])
+        h = _stable_hash(rec["text"])
         if h in seen:
             return False
         seen.add(h)
