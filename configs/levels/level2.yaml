@@ -20,8 +20,9 @@ information:
     5: "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder."
 
 model:
-  d_model: 256                 # wider than L1 — more vocabulary/structure to hold.
-  n_layers: 6
+  d_model: 256                 # same 256 tier as L1 (paper); L2 differs by data/curriculum, not size.
+  n_layers: 8                  # 8 = paper's spec for the d_model=256 tier (was 6). Matches L1
+                               # so the two levels share the tier; weight tying keeps it ~10.5M.
   n_heads: 4                   # head_dim = 64 (was 32 with 8 heads)
   ffn_dim: 1024
   context_len: 512             # fit complete short docs (256 truncated most stories).

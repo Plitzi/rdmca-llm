@@ -36,16 +36,18 @@ def count_params(model: dict) -> int:
     """Exact-ish parameter count of RDMCAFoundational from its config dims
     (matches src/model/transformer.py), computed without instantiating it.
 
-      embed        = vocab · d
+      embed        = vocab · d   (weight-tied: also serves as the output head)
       per layer    = attn(4·d²)  +  SwiGLU(3·d·ffn)  +  2 RMSNorm(2·d)
-      final        = ln_f(d)  +  head(vocab · d)
+      final        = ln_f(d)
     """
     d     = int(model["d_model"])
     nl    = int(model["n_layers"])
     ffn   = int(model.get("ffn_dim", 4 * d))
     vocab = int(model["vocab_size"])
     per_layer = 4 * d * d + 3 * d * ffn + 2 * d
-    return vocab * d + nl * per_layer + d + vocab * d
+    # Output projection is weight-tied to `embed` (see transformer.head_at_dim), so the
+    # vocab·d embedding is counted ONCE — there is no separate head matrix.
+    return vocab * d + nl * per_layer + d
 
 
 # ─────────────────────────── memory estimates ───────────────────────────────

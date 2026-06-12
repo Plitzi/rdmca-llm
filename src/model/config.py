@@ -24,7 +24,7 @@ class ModelConfig:
 
     def __post_init__(self):
         # MRL prefixes must be ascending, unique and ≤ d_model — head_at_dim slices
-        # head.weight[:, :d], so a d > d_model would silently use the full matrix
+        # the tied embed.weight[:, :d], so a d > d_model would silently use the full matrix
         # (breaking the Matryoshka premise) and a wrong order would mis-weight the loss.
         if self.mrl_dims != sorted(set(self.mrl_dims)):
             raise ValueError(f"mrl_dims must be ascending and unique, got {self.mrl_dims}")

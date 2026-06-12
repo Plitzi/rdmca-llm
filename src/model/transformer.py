@@ -203,24 +203,28 @@ class RDMCAFoundational(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg    = cfg
-        # TODO(multimodal / "M1"): embed + head are sized to cfg.vocab_size, which is
-        # the TEXT vocab (8192) — deliberately, to avoid wasting params and creating
+        # TODO(multimodal / "M1"): embed is sized to cfg.vocab_size, which is the
+        # TEXT vocab (8192) — deliberately, to avoid wasting params and creating
         # "phantom logits" over the unused image/audio ranges of the unified layout
         # (text [0,8192) · image [8192,16384) · audio [16384,20480)). CONSEQUENCE:
         # feeding an image/audio token id (≥8192) would index out of bounds. Text-only
         # training is fine today, but BEFORE enabling multimodal, add a
-        # `model.extend_vocab(new_size)` that grows embed.weight + head.weight
-        # (new rows = mean(existing) + small noise) with a migration checkpoint — do
-        # NOT just train at the full 20480 vocab (that brings back the phantom-logit
-        # problem the text_vocab_size fix removed).
+        # `model.extend_vocab(new_size)` that grows embed.weight (new rows =
+        # mean(existing) + small noise) with a migration checkpoint — do NOT just
+        # train at the full 20480 vocab (that brings back the phantom-logit problem
+        # the text_vocab_size fix removed). Note: embed is WEIGHT-TIED to the output
+        # projection (see head_at_dim), so growing embed.weight grows both at once.
         self.embed  = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.drop   = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
         self.ln_f   = RMSNorm(cfg.d_model)
 
-        # Single shared output projection. MRL prefixes reuse a prefix of this
-        # weight matrix (W[:, :d]) instead of one full vocab head per dim.
-        self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+        # Output projection is WEIGHT-TIED to the input embedding (no separate head):
+        # logits = h @ embed.weight.T. This is the canonical Matryoshka setup — a single
+        # nested [vocab, d_model] matrix serves input lookup AND output projection at
+        # every MRL prefix dim (head_at_dim slices embed.weight[:, :d]), so a tier
+        # truncation (embed.weight[:, :d]) stays consistent on both ends. Tying also
+        # reclaims ~vocab·d params (here ~2.1M, ~20% of L1) for the transformer body.
 
         # Sector state (populated by attach_sectors). int-keyed dict for logic;
         # params are registered for the backend via engine.register_submodules.
@@ -238,8 +242,9 @@ class RDMCAFoundational(nn.Module):
     # ------------------------------------------------------------------
 
     def head_at_dim(self, h, d: int):
-        """Project the first d hidden dims to vocab using the shared head."""
-        w_d = self.head.weight[:, :d]            # [vocab, d]
+        """Project the first d hidden dims to vocab using the tied embedding as the
+        output head (weight tying): logits = h[:, :d] @ embed.weight[:, :d].T."""
+        w_d = self.embed.weight[:, :d]           # [vocab, d] — tied input/output matrix
         return h[..., :d] @ w_d.T                # [..., vocab]
 
     # ------------------------------------------------------------------

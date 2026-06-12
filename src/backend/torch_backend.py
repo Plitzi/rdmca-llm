@@ -293,11 +293,12 @@ class _QuantEmbedding(torch_nn.Module):
 
 
 def _quantize(model, bits: int = 4, group_size: int = 64,
-              skip_names: tuple = ("head",)) -> None:
+              skip_names: tuple = ("embed",)) -> None:
     """In-place weight-only quantization of Linear/Embedding submodules. Layers
     whose feature dim isn't divisible by `group_size`, or whose last path
-    component is in `skip_names` (e.g. the output head — it's sliced by `.weight`
-    for MRL and is the most quant-sensitive), are left in their float dtype."""
+    component is in `skip_names` (by default `embed` — weight-tied as the output
+    projection, sliced by `.weight` for MRL and the most quant-sensitive), are
+    left in their float dtype."""
     name_to_mod = dict(model.named_modules())
     targets, skipped = [], 0
     for full_name, child in list(model.named_modules()):

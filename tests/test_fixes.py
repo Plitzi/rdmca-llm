@@ -45,6 +45,22 @@ def test_attention_rejects_odd_head_dim():
         RDMCAFoundational(cfg)
 
 
+def test_output_head_is_weight_tied_to_embedding():
+    """The output projection must REUSE embed.weight (weight tying): no separate
+    'head' param in the tree, and head_at_dim(h, d) == h[:, :d] @ embed.weight[:, :d].T."""
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+    m = _tiny_model()
+    names = [k for k, _ in tree_flatten(m.parameters())]
+    assert not any(".head." in k or k.startswith("head.") for k in names), \
+        f"a separate output head leaked into the param tree: {[k for k in names if 'head' in k]}"
+    h = mx.array(np.random.randn(2, 5, 64).astype(np.float32))
+    for d in (32, 64):
+        got = np.array(m.head_at_dim(h, d).tolist())
+        want = np.array((h[..., :d] @ m.embed.weight[:, :d].T).tolist())
+        assert np.allclose(got, want, atol=1e-5), f"head_at_dim not tied to embed at d={d}"
+
+
 def test_model_is_causal():
     """Output at position k must NOT depend on tokens after k (causal masking):
     changing a future token leaves all earlier positions' hidden states identical."""

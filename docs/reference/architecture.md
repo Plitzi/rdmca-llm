@@ -4,8 +4,12 @@
 
 Decoder-only transformer (GPT-style) with RoPE, RMSNorm (pre-norm), SwiGLU FFN and an
 MRL (Matryoshka) loss over nested dims. The concrete size is set by the **level**
-(`configs/levels/level{1..5}.yaml`) — the size follows the *information* the level
-teaches, from d_model=128 (level 1) to d_model=768 (level 5).
+(`configs/levels/level{0..5}.yaml`) — the size follows the *information* the level
+teaches, from d_model=256 (level 1) to d_model=768 (level 5) (plus a tiny d_model=64
+level 0 for smoke tests). The output projection is **weight-tied** to the input
+embedding (a single nested `[vocab, d_model]` matrix serves input lookup and output
+at every MRL prefix), so a tier truncation `embed.weight[:, :d]` stays consistent on
+both ends.
 
 | Component | Value (base config) |
 |---|---|
@@ -246,10 +250,15 @@ w = np.load("dist/checkpoints/level5/foundational/theta_f_frozen.npz")
 emb_t3 = w["embed.weight"][:, :512]       # 512-dim prefix
 ```
 
-| Level | Grade | d_model | ~params | Default backend |
-|---|---|---|---|---|
-| 1 | Preescolar  | 128 | ~2M   | mlx |
-| 2 | Primaria    | 256 | ~11M  | mlx |
-| 3 | Secundaria  | 384 | ~32M  | mlx |
-| 4 | Bachillerato| 512 | ~76M  | torch |
-| 5 | Universidad | 768 | ~200M | torch |
+| Level | Grade | d_model | n_layers | vocab | ~params (tied) | Default backend |
+|---|---|---|---|---|---|---|
+| 0 | Pruebas (smoke) | 64  | 2  | 4096  | ~0.3M | mlx |
+| 1 | Preescolar      | 256 | 8  | 8192  | ~10.5M | mlx |
+| 2 | Primaria        | 256 | 8  | 8192  | ~10.5M | mlx |
+| 3 | Secundaria      | 384 | 8  | 16384 | ~25M   | mlx |
+| 4 | Bachillerato    | 512 | 12 | 24576 | ~63M   | torch |
+| 5 | Universidad     | 768 | 16 | 32768 | ~176M  | torch |
+
+> Note: L1 and L2 share the d_model=256 tier with the same architecture (8 layers, the
+> paper's spec for the 256 tier) — they are differentiated by graded data + curriculum,
+> not model size. Distinct sizes resume at L3 (d_model 384).
