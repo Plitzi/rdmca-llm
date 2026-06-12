@@ -345,9 +345,12 @@ def test_agent_think_delimiters_match_registry():
 
 class _FakeTok:
     """Minimal tokenizer for the loader: deterministic ids, no special tokens."""
+    lang_tokens: dict = {}
     def encode(self, text, lang="en", add_bos=True, add_eos=True):
         ids = [(ord(c) % 250) + 3 for c in text][:40]
         return ids or [3]
+    def encode_raw(self, text):
+        return [(ord(c) % 250) + 5 for c in text]
 
 def _write_corpus(d: Path):
     # Big "story" file and small "dialogue" file, each tagged so we can identify source.
@@ -451,6 +454,85 @@ def test_optimizer_state_roundtrip():
             assert d < 1e-5
         # absent file → graceful False (cold start)
         assert B.engine.load_optimizer(opt2, str(Path(td) / "missing.opt")) is False
+
+
+# ───────────────── completion-only loss masking (conversational SFT) ─────────
+
+def test_split_turns_detects_conversation_vs_prose():
+    from src.data.loader import _split_turns
+    convo = "System: be nice.\nUser: hi there\nAssistant: hello!"
+    roles = [r for r, _ in _split_turns(convo)]
+    assert roles == ["System", "User", "Assistant"]
+    # prose never opens with a role marker → None (train on every token)
+    assert _split_turns("Once upon a time there was a cat.") is None
+
+def test_completion_mask_trains_only_response_turns():
+    """A transcript trains the Assistant turn (+ a turn-final EOS) and masks the
+    System/User context, so the loss teaches answering, not transcript modelling."""
+    from src.data.loader import TextDataset
+    from src.modalities.text import EOS_ID
+    ds = TextDataset.__new__(TextDataset); ds.tokenizer = _FakeTok()
+    ids, mask = ds._encode_record(
+        {"text": "System: s\nUser: q\nAssistant: a", "lang": "en"})
+    assert len(ids) == len(mask) and sum(mask) > 0
+    assert sum(mask) < len(mask)              # context is masked out
+    assert ids[-1] == EOS_ID and mask[-1] == 1  # learns to stop after the answer
+    # every trained position lies inside the assistant turn (after "Assistant")
+    raw = _FakeTok().encode_raw("\nAssistant: a")
+    assert sum(mask) == len(raw) + 1          # assistant turn + its EOS
+
+def test_completion_mask_drops_record_with_no_response():
+    from src.data.loader import TextDataset
+    ds = TextDataset.__new__(TextDataset); ds.tokenizer = _FakeTok()
+    ids, mask = ds._encode_record({"text": "User: q\nUser: q2", "lang": "en"})
+    assert ids == [] and mask == []           # nothing to train on → skipped
+
+def test_mrl_loss_all_ones_mask_equals_unmasked():
+    """An all-ones mask must reproduce the plain mean cross-entropy exactly."""
+    import mlx.core as mx
+    cfg = ModelConfig(d_model=64, n_heads=2, ffn_dim=128, context_len=16,
+                      vocab_size=256, mrl_dims=[32, 64], dropout=0.0)
+    m = RDMCAFoundational(cfg)
+    toks = mx.array(np.random.randint(0, 256, (2, 17)))
+    plain  = float(m.mrl_loss(toks).item())
+    masked = float(m.mrl_loss(toks, mx.ones((2, 17), dtype=mx.int32)).item())
+    assert abs(plain - masked) < 1e-4
+
+def test_mrl_loss_mask_equals_manual_restricted_mean():
+    """The masked loss must equal the per-dim CE averaged over ONLY the unmasked
+    target positions (the completion-only contract), independently recomputed."""
+    import mlx.core as mx
+    cfg = ModelConfig(d_model=64, n_heads=2, ffn_dim=128, context_len=16,
+                      vocab_size=256, mrl_dims=[32, 64], dropout=0.0)
+    m = RDMCAFoundational(cfg)
+    toks = mx.array(np.random.randint(0, 256, (2, 17)))
+    mask = np.zeros((2, 17), dtype=np.int32); mask[:, 9:] = 1   # train only the tail
+    got = float(m.mrl_loss(toks, mx.array(mask)).item())
+    inputs, targets = toks[:, :-1], toks[:, 1:]
+    tmask = mx.array(mask[:, 1:]).reshape(-1).astype(mx.float32)
+    h = m(inputs)
+    per = []
+    for d in cfg.mrl_dims:
+        lg = m.head_at_dim(h, d); Bsz, S, V = lg.shape
+        ce = B.ops.cross_entropy(lg.reshape(Bsz * S, V),
+                                 targets.reshape(Bsz * S), reduction="none")
+        per.append(float((mx.sum(ce * tmask) / mx.sum(tmask)).item()))
+    expected = (per[0] + per[1]) / 2.0
+    assert abs(got - expected) < 1e-3
+
+def test_loader_with_mask_yields_token_mask_pairs():
+    from src.data.loader import TextDataset
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        with open(d / "chat.jsonl", "w") as f:
+            for _ in range(200):
+                f.write(json.dumps({"text": "User: hi\nAssistant: hello there friend"}) + "\n")
+        ds = TextDataset(str(d), _FakeTok(), seq_len=16, batch_size=2,
+                         shuffle=False, with_mask=True)
+        toks, mask = next(iter(ds.batches()))
+        assert toks.shape == (2, 17) and mask.shape == (2, 17)
+        assert set(np.unique(mask)).issubset({0, 1})
+        assert 0 < int(mask.sum()) < mask.size   # some trained, some masked
 
 
 if __name__ == "__main__":

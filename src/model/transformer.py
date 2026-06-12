@@ -284,13 +284,19 @@ class RDMCAFoundational(nn.Module):
     # MRL loss (multi-scale Matryoshka)
     # ------------------------------------------------------------------
 
-    def mrl_loss(self, tokens):
+    def mrl_loss(self, tokens, mask=None):
         """
         tokens: [B, S+1] — input + target shifted by 1.
+        mask:   [B, S+1] or None — per-token loss weight (1=train, 0=ignore). When
+                given, the cross-entropy is COMPLETION-ONLY: averaged over the
+                unmasked target positions (the assistant turns), so the model learns
+                to ANSWER instead of modelling the user/system context. None keeps
+                the plain mean over all tokens (pretraining / validation).
         Returns scalar loss (weighted sum across MRL dims).
         """
         inputs  = tokens[:, :-1]   # [B, S]
         targets = tokens[:, 1:]    # [B, S]
+        tmask   = mask[:, 1:] if mask is not None else None   # align with targets
 
         h = self(inputs)           # [B, S, d_model]
 
@@ -308,11 +314,22 @@ class RDMCAFoundational(nn.Module):
         for w, d in zip(weights, self.cfg.mrl_dims):
             logits_d = self.head_at_dim(h, d)              # [B, S, vocab]
             Bsz, S, V = logits_d.shape
-            loss_d   = ops.cross_entropy(
-                logits_d.reshape(Bsz * S, V),
-                targets.reshape(Bsz * S),
-                reduction="mean",
-            )
+            if tmask is None:
+                loss_d = ops.cross_entropy(
+                    logits_d.reshape(Bsz * S, V),
+                    targets.reshape(Bsz * S),
+                    reduction="mean",
+                )
+            else:
+                ce = ops.cross_entropy(                    # [Bsz*S] per-token loss
+                    logits_d.reshape(Bsz * S, V),
+                    targets.reshape(Bsz * S),
+                    reduction="none",
+                )
+                m = ops.astype(tmask.reshape(Bsz * S), ce.dtype)
+                # Mean over the unmasked (assistant) targets. +1e-6 guards the rare
+                # packed window with no response token (loss 0 ⇒ no gradient).
+                loss_d = ops.sum(ce * m) / (ops.sum(m) + 1e-6)
             term  = (w / w_sum) * loss_d
             total = term if total is None else total + term
 

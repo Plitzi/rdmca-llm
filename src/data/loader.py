@@ -7,10 +7,46 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
+
+from src.modalities.text import BOS_ID, EOS_ID
+
+# Conversational transcripts are line-prefixed by role ("System:/User:/Assistant:"
+# …, see src/data/graded.py). A record whose FIRST line opens with a role marker
+# is a dialogue/instruction transcript; prose (stories, wiki) never does. RESPONSE
+# roles are the turns the MODEL produces (trained on); every other role is CONTEXT
+# the model is GIVEN (loss-masked) so it learns to ANSWER, not to model the whole
+# transcript and drift into writing the user's next turn.
+_TURN_RE = re.compile(r"^(User|Assistant|System|Tools|Action|Observation):")
+_RESPONSE_ROLES = {"Assistant", "Action"}
+
+
+def _split_turns(text: str) -> Optional[List[Tuple[str, str]]]:
+    """Split a transcript into [(role, block), …] when conversational (first line
+    opens with a role marker), else None (prose → train on every token). A turn's
+    block is its role line plus any continuation lines up to the next marker, so
+    multi-line answers (e.g. a `<think>…</think>` scratchpad) stay whole."""
+    lines = text.split("\n")
+    if not lines or not _TURN_RE.match(lines[0]):
+        return None
+    turns: List[Tuple[str, str]] = []
+    role: Optional[str] = None
+    buf: List[str] = []
+    for ln in lines:
+        m = _TURN_RE.match(ln)
+        if m:
+            if role is not None:
+                turns.append((role, "\n".join(buf)))
+            role, buf = m.group(1), [ln]
+        else:
+            buf.append(ln)
+    if role is not None:
+        turns.append((role, "\n".join(buf)))
+    return turns
 
 
 class TextDataset:
@@ -29,7 +65,8 @@ class TextDataset:
                  seed: int = 42,
                  shuffle_buffer: int = 50000,
                  source_weights: Optional[Dict[str, float]] = None,
-                 val: bool = False):
+                 val: bool = False,
+                 with_mask: bool = False):
         self.data_dir   = Path(data_dir)
         self.tokenizer  = tokenizer
         self.seq_len    = seq_len
@@ -38,6 +75,11 @@ class TextDataset:
         # val=True loads ONLY the held-out `*.val.jsonl` files; val=False loads the
         # training files and EXCLUDES them — so the two never overlap.
         self.val        = val
+        # with_mask=True makes `batches()` yield (tokens, loss_mask) pairs so the
+        # trainer can apply COMPLETION-ONLY loss on conversational data (train the
+        # assistant's tokens, mask the user/system context). False (default) yields
+        # bare token arrays — unchanged behaviour for val / consolidation / prose.
+        self.with_mask  = with_mask
         self.rng        = random.Random(seed)
         # Records held in memory to randomize order across the interleaved file
         # stream (see _iter_records). Big enough to break up file-sized blocks.
@@ -145,42 +187,84 @@ class TextDataset:
         self.rng.shuffle(buf)
         yield from buf
 
-    def _iter_tokens(self) -> Iterator[int]:
-        """Yield token IDs from the full corpus (text or pre-tokenized multimodal)."""
-        for rec in self._iter_records():
-            tokens = rec.get("tokens")
-            if tokens:
-                yield from tokens
-                continue
-            text = rec.get("text", "")
-            if not text.strip():
-                continue
+    def _encode_record(self, rec: dict) -> Tuple[List[int], List[int]]:
+        """Return parallel (token_ids, loss_mask) for one record — mask=1 trains the
+        token, 0 ignores it in the loss. Pre-tokenized multimodal and prose train on
+        EVERY token. Conversational transcripts train ONLY the assistant/action turns
+        (plus a turn-final EOS, so the model learns to STOP after answering) and mask
+        the user/system/tool context the model is merely GIVEN."""
+        tokens = rec.get("tokens")
+        if tokens:
+            return list(tokens), [1] * len(tokens)
+        text = rec.get("text", "")
+        if not text.strip():
+            return [], []
+        lang  = rec.get("lang", "en")
+        turns = _split_turns(text)
+        if turns is None:                                   # prose → full next-token loss
             try:
-                ids = self.tokenizer.encode(
-                    text, lang=rec.get("lang", "en"), add_bos=True, add_eos=True)
-                yield from ids
+                ids = self.tokenizer.encode(text, lang=lang, add_bos=True, add_eos=True)
             except Exception:
-                continue
+                return [], []
+            return ids, [1] * len(ids)
+        return self._encode_turns(turns, lang)
 
-    def batches(self) -> Iterator[np.ndarray]:
+    def _encode_turns(self, turns: List[Tuple[str, str]], lang: str) -> Tuple[List[int], List[int]]:
+        """Completion-only encoding: BOS (+ lang) prefix, then each turn tokenized in
+        place; assistant/action turns and a trailing EOS get mask=1, the rest mask=0.
+        Records with no response turn carry no training signal and are dropped."""
+        if not any(role in _RESPONSE_ROLES for role, _ in turns):
+            return [], []
+        ids:  List[int] = [BOS_ID]
+        mask: List[int] = [0]
+        lang_map = getattr(self.tokenizer, "lang_tokens", None) or {}
+        if lang in lang_map:
+            ids.append(lang_map[lang]); mask.append(0)
+        for i, (role, block) in enumerate(turns):
+            seg = block if i == 0 else "\n" + block         # restore the newline join
+            try:
+                piece = self.tokenizer.encode_raw(seg)
+            except Exception:
+                return [], []
+            train = 1 if role in _RESPONSE_ROLES else 0
+            ids.extend(piece); mask.extend([train] * len(piece))
+            if train:                                       # learn to stop after the answer
+                ids.append(EOS_ID); mask.append(1)
+        return ids, mask
+
+    def _iter_pairs(self) -> Iterator[Tuple[int, int]]:
+        """Yield (token_id, loss_mask) over the full corpus, record by record."""
+        for rec in self._iter_records():
+            t_ids, m_ids = self._encode_record(rec)
+            if t_ids:
+                yield from zip(t_ids, m_ids)
+
+    def batches(self):
         """
-        Yields a numpy int32 array of shape [batch_size, seq_len+1]. Backend-
+        Yields a numpy int32 array of shape [batch_size, seq_len+1] (or, when
+        `with_mask=True`, a (tokens, loss_mask) pair of two such arrays). Backend-
         neutral — the training step converts to a backend tensor via
         `B.ops.array(batch)`. Loops over the corpus indefinitely.
         """
         tokens_needed = self.batch_size * (self.seq_len + 1)
-        buf: List[int] = []
+        shape = (self.batch_size, self.seq_len + 1)
+        tbuf: List[int] = []
+        mbuf: List[int] = []
 
         while True:
             epoch_count = 0
-            for tok in self._iter_tokens():
-                buf.append(tok)
+            for tok, m in self._iter_pairs():
+                tbuf.append(tok); mbuf.append(m)
                 epoch_count += 1
-                if len(buf) >= tokens_needed:
-                    arr = np.array(buf[:tokens_needed], dtype=np.int32)
-                    arr = arr.reshape(self.batch_size, self.seq_len + 1)
-                    yield arr
-                    buf = buf[tokens_needed:]
+                if len(tbuf) >= tokens_needed:
+                    arr = np.array(tbuf[:tokens_needed], dtype=np.int32).reshape(shape)
+                    if self.with_mask:
+                        marr = np.array(mbuf[:tokens_needed], dtype=np.int32).reshape(shape)
+                        yield arr, marr
+                    else:
+                        yield arr
+                    tbuf = tbuf[tokens_needed:]
+                    mbuf = mbuf[tokens_needed:]
             # One full pass over the corpus finished; record its size once so the
             # trainer can detect (and cap) re-cycling of a small corpus.
             self.passes += 1
@@ -228,7 +312,8 @@ class DataLoader:
     @classmethod
     def from_config(cls, stage: int, cfg: dict, tokenizer,
                     replay_dirs: Optional[List[str]] = None,
-                    replay_fraction: float = 0.0, val: bool = False) -> "DataLoader":
+                    replay_fraction: float = 0.0, val: bool = False,
+                    with_mask: bool = False) -> "DataLoader":
         """Build a DataLoader directly from the YAML config + stage number.
 
         `replay_dirs` (earlier stages' corpora) + `replay_fraction` enable
@@ -250,7 +335,8 @@ class DataLoader:
             return TextDataset(data_dir=path, tokenizer=tokenizer,
                                seq_len=mcfg["context_len"],
                                batch_size=tcfg["batch_size"], shuffle=True,
-                               source_weights=source_weights, val=val)
+                               source_weights=source_weights, val=val,
+                               with_mask=(with_mask and not val))
 
         if val:
             return cls(_ds(data_dir))        # held-out split, no replay

@@ -163,7 +163,13 @@ def _make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
     except (FileNotFoundError, KeyError):
         print("  [val] no held-out split found — sampling from the training stream "
               "(run prepare_data to generate *.val.jsonl for a disjoint gate)")
-        return [train_loader.next_batch() for _ in range(n)]
+        # The training loader yields (tokens, mask) pairs; validation uses plain
+        # next-token perplexity (eval_ce), so keep only the tokens.
+        out = []
+        for _ in range(n):
+            b = train_loader.next_batch()
+            out.append(b[0] if isinstance(b, tuple) else b)
+        return out
 
 
 def build_data_loader(stage: int, cfg: dict):
@@ -196,7 +202,8 @@ def build_data_loader(stage: int, cfg: dict):
                     replay_dirs.append(d)
     try:
         loader = DataLoader.from_config(stage, cfg, tokenizer,
-                                        replay_dirs=replay_dirs, replay_fraction=frac)
+                                        replay_dirs=replay_dirs, replay_fraction=frac,
+                                        with_mask=True)   # completion-only loss masking
         data_dir = cfg["curriculum"][f"stage{stage}"].get("data_dir")   # key-based (stages may be non-contiguous)
         print(f"  [data] Real data loader: {data_dir}")
         if replay_dirs:
@@ -503,8 +510,9 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
     # is no routing (cognitive stages), so this is a no-op there.
     aux_w = float((cfg.get("moe", {}) or {}).get("aux_loss_weight", 0.01))
 
-    def loss_fn(mdl, toks):
-        return mdl.mrl_loss(toks) + aux_w * mdl.aux_loss()
+    def loss_fn(mdl, batch):
+        toks, mask = batch                     # (tokens, loss_mask) — completion-only CE
+        return mdl.mrl_loss(toks, mask) + aux_w * mdl.aux_loss()
 
     loss_and_grad_fn = B.engine.value_and_grad(model, loss_fn)
 
@@ -535,14 +543,16 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             # bs×grad_acc. ga==1 stays on a zero-overhead fast path.
             acc_loss = 0.0
             if grad_acc == 1:
-                batch = B.ops.array(data_loader.next_batch())
+                toks_np, mask_np = data_loader.next_batch()
+                batch = (B.ops.array(toks_np), B.ops.array(mask_np))
                 loss, grads = loss_and_grad_fn(model, batch)
                 B.engine.eval(loss)
                 acc_loss = B.engine.item(loss)
             else:
                 running = None
                 for _ in range(grad_acc):
-                    batch = B.ops.array(data_loader.next_batch())
+                    toks_np, mask_np = data_loader.next_batch()
+                    batch = (B.ops.array(toks_np), B.ops.array(mask_np))
                     loss, g = loss_and_grad_fn(model, batch)
                     B.engine.eval(loss)
                     acc_loss += B.engine.item(loss)
