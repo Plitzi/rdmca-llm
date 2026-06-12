@@ -23,7 +23,9 @@ information:
     1: "Lenguaje: palabras y frases cortas, diálogo simple — puede conversar."
     2: "Patrones: secuencias y analogías muy simples (esto va con esto)."
     3: "Aritmética: contar y sumar/restar números de un solo dígito."
+    4: "Causalidad: causa→efecto muy simple (esto pasó porque…)."
     5: "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder."
+    6: "Ética/BCF: nociones muy básicas de bien/mal (probe pequeño)."
 
 # ── Model — dimensioned to the information above (tiny). ──────────────────────
 model:
@@ -123,6 +125,14 @@ curriculum:
       sources: [arithmetic]
       filter:
         arithmetic_level: 1        # 1 = single-digit + / − only (e.g. "3 + 4 = 7").
+  stage4:
+    name: "Causal and procedural reasoning"
+    entry_level: 1             # causal reasoning present from level 1 (graded small).
+    n_tokens: 15_000_000
+    data_dir: "data/level1/stage4"
+    data:
+      sources: [causal_synth]  # synthetic cause→effect (e-CARE), simple by construction.
+      filter: null
   stage7:
     name: "Action and tool use"
     entry_level: 0             # agentic from the start; improves as the model grows.
@@ -154,6 +164,15 @@ curriculum:
     data_dir: "data/level1/stage5"
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
+      filter: null
+  stage6:
+    name: "Cognitive ethics and BCF"
+    entry_level: 1             # ethics/BCF present from level 1 → core freezes after
+                               # stage 6 at EVERY level (uniform structure). Graded small.
+    n_tokens: 10_000_000
+    data_dir: "data/level1/stage6"
+    data:
+      sources: [ethics]
       filter: null
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────

@@ -26,7 +26,7 @@ model:
   n_layers: 12
   n_heads: 8                   # head_dim = 64
   ffn_dim: 2048
-  context_len: 1024
+  context_len: 2048            # Fibonacci ladder L1→L5: 512, 768, 1280, 2048, 3328.
   vocab_size: 24576
   mrl_dims: [128, 256, 512]
   dropout: 0.1
@@ -53,7 +53,7 @@ resources:
 
 skip_gate: false
 gate:
-  max_perplexity: {1: 42.0, 2: 40.0, 3: 38.0, 4: 36.0, 5: 34.0}
+  max_perplexity: {1: 42.0, 2: 40.0, 3: 38.0, 4: 36.0, 5: 34.0, 6: 36.0}
 
 curriculum:
   stage1:
@@ -85,7 +85,7 @@ curriculum:
         arithmetic_level: 4            # 4 = harder arithmetic alongside GSM8K word problems.
   stage4:
     name: "Causal and procedural reasoning"
-    entry_level: 3
+    entry_level: 1                     # present from L1 (uniform structure); graded by level.
     n_tokens: 200_000_000
     data_dir: "data/level4/stage4"
     data:
@@ -95,7 +95,7 @@ curriculum:
         max_word_len: 28
   stage6:
     name: "Cognitive ethics and BCF"
-    entry_level: 4                     # ethics enters here.
+    entry_level: 1                     # core freezes after stage 6 at every level (uniform).
     n_tokens: 100_000_000
     data_dir: "data/level4/stage6"
     data:

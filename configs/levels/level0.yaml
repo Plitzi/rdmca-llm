@@ -19,7 +19,9 @@ information:
     1: "Lenguaje: diálogo y frases muy simples."
     2: "Patrones: analogías sintéticas."
     3: "Aritmética: sumas/restas de un dígito."
+    4: "Causalidad: causa→efecto muy simple (sintético)."
     5: "Razonamiento: pensar paso a paso (cadena de pensamiento)."
+    6: "Ética/BCF: probe mínimo (estructura, no calidad)."
 
 # Tiny model — just enough to run the full code path quickly.
 model:
@@ -80,6 +82,14 @@ curriculum:
     data:
       sources: [arithmetic]
       filter: {arithmetic_level: 1}
+  stage4:
+    name: "Causal and procedural reasoning"
+    entry_level: 0
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage4"
+    data:
+      sources: [causal_synth]    # synthetic cause→effect (e-CARE).
+      filter: null
   stage7:
     name: "Action and tool use"
     entry_level: 0               # agentic from the very start; ramps up with the model.
@@ -112,8 +122,17 @@ curriculum:
     data:
       sources: [reasoning]       # real CoT (GSM8K) as <think>…</think> + answer.
       filter: null
+  stage6:
+    name: "Cognitive ethics and BCF"
+    entry_level: 0
+    n_tokens: 1_000_000
+    data_dir: "data/level0/stage6"
+    data:
+      sources: [ethics]
+      filter: null
 
-# MoE block kept for uniformity (sectors only attach post-freeze, i.e. level 4+).
+# MoE block kept for uniformity (sectors attach post-freeze; the core now freezes
+# after BCF (stage 6) at EVERY level, so the structure is identical from L0 up).
 moe:
   enabled: true
   experts: 6

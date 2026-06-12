@@ -17,7 +17,9 @@ information:
     1: "Lenguaje: oraciones y párrafos, vocabulario cotidiano; conversa con más fluidez."
     2: "Patrones: analogías y secuencias con más variedad."
     3: "Aritmética: +, −, × de dos dígitos."
+    4: "Causalidad: causa→efecto y procedimientos simples."
     5: "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder."
+    6: "Ética/BCF: nociones de bien/mal aplicadas a situaciones simples."
 
 model:
   d_model: 256                 # same 256 tier as L1, but L2 is the FULL 8-layer tier spec.
@@ -25,7 +27,8 @@ model:
                                # the lighter 6-layer variant (~8.4M), so the ladder grows L1<L2.
   n_heads: 4                   # head_dim = 64 (was 32 with 8 heads)
   ffn_dim: 1024
-  context_len: 512             # fit complete short docs (256 truncated most stories).
+  context_len: 768             # Fibonacci ladder L1→L5: 512, 768, 1280, 2048, 3328
+                               # (cada nivel = suma de los dos anteriores).
   vocab_size: 8192
   mrl_dims: [128, 256]
   dropout: 0.1
@@ -52,7 +55,7 @@ resources:
 
 skip_gate: false               # graduation gate active from primaria upward.
 gate:
-  max_perplexity: {1: 50.0, 2: 48.0, 3: 45.0}
+  max_perplexity: {1: 50.0, 2: 48.0, 3: 45.0, 4: 45.0, 5: 45.0, 6: 45.0}
 
 curriculum:
   stage1:
@@ -82,6 +85,14 @@ curriculum:
       sources: [arithmetic]
       filter:
         arithmetic_level: 2        # 2 = two-digit + − × (e.g. "23 + 18 = 41").
+  stage4:
+    name: "Causal and procedural reasoning"
+    entry_level: 1
+    n_tokens: 25_000_000
+    data_dir: "data/level2/stage4"
+    data:
+      sources: [causal_synth]
+      filter: null
   stage7:
     name: "Action and tool use"
     entry_level: 0
@@ -113,6 +124,14 @@ curriculum:
     data_dir: "data/level2/stage5"
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
+      filter: null
+  stage6:
+    name: "Cognitive ethics and BCF"
+    entry_level: 1             # core freezes after stage 6 at every level (uniform).
+    n_tokens: 15_000_000
+    data_dir: "data/level2/stage6"
+    data:
+      sources: [ethics]
       filter: null
 
 # ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────

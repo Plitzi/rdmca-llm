@@ -29,7 +29,7 @@ model:
   n_layers: 16
   n_heads: 12                  # head_dim = 64
   ffn_dim: 3072
-  context_len: 2048
+  context_len: 3328            # Fibonacci ladder L1→L5: 512, 768, 1280, 2048, 3328.
   vocab_size: 32768
   mrl_dims: [256, 512, 768]
   dropout: 0.1
@@ -56,7 +56,7 @@ resources:
 
 skip_gate: false
 gate:
-  max_perplexity: {1: 40.0, 2: 38.0, 3: 36.0, 4: 34.0, 5: 32.0}
+  max_perplexity: {1: 40.0, 2: 38.0, 3: 36.0, 4: 34.0, 5: 32.0, 6: 34.0}
 
 # At level 5 every stage is active and data is the FULL unfiltered corpus
 # (filter: null), under the per-level data/level5/stageN dirs like every level.
@@ -81,13 +81,13 @@ curriculum:
     data: {sources: [wikipedia, arithmetic, gsm8k, math], filter: null}
   stage4:
     name: "Causal and procedural reasoning"
-    entry_level: 3
+    entry_level: 1                     # present from L1 (uniform structure); graded by level.
     n_tokens: 1_000_000_000
     data_dir: "data/level5/stage4"
     data: {sources: [wikipedia, causal_synth], filter: null}
   stage6:
     name: "Cognitive ethics and BCF"
-    entry_level: 4
+    entry_level: 1                     # core freezes after stage 6 at every level (uniform).
     n_tokens: 500_000_000
     data_dir: "data/level5/stage6"
     data: {sources: [wikipedia, ethics], filter: null}
