@@ -229,8 +229,12 @@ class TrainingDashboard:
         loss_vals = list(self._loss_hist)
         tps_vals  = list(self._tps_hist)
 
+        # Both averages use the last 20 samples (recent window). avg_tps drives the
+        # ETA below, so a recent window keeps it responsive when throughput shifts
+        # (quantization, load) instead of dragging an all-time average. Kept explicit
+        # so it stays correct even if _tps_hist's maxlen changes.
         avg_loss = sum(loss_vals[-20:]) / max(len(loss_vals[-20:]), 1)
-        avg_tps  = sum(tps_vals)        / max(len(tps_vals), 1)
+        avg_tps  = sum(tps_vals[-20:])  / max(len(tps_vals[-20:]), 1)
         arr      = _arrow(self._loss, self._prev_loss)
         self._prev_loss = self._loss
 

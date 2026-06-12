@@ -11,13 +11,20 @@ Self-contained (no network). To add your own tool, copy this file: expose a
 """
 from __future__ import annotations
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.agent import Tool
 
 
 def _get_current_time(inp: dict) -> dict:
-    tz = str(inp.get("timezone", "")).strip().lower()
-    now = datetime.now(timezone.utc) if tz in ("", "utc") else datetime.now()
+    tz = str(inp.get("timezone", "")).strip()
+    if tz.lower() in ("", "utc"):
+        now = datetime.now(timezone.utc)
+    else:
+        try:                                    # IANA name, e.g. "America/New_York"
+            now = datetime.now(ZoneInfo(tz))
+        except (ZoneInfoNotFoundError, ValueError):
+            now = datetime.now()                # unknown zone → machine local time
     return {
         "iso": now.isoformat(timespec="seconds"),
         "date": now.strftime("%Y-%m-%d"),
@@ -32,7 +39,8 @@ TOOL = Tool(
     input_schema={
         "type": "object",
         "properties": {
-            "timezone": {"type": "string", "description": "Optional; 'utc' or 'local'."}
+            "timezone": {"type": "string", "description": "Optional; 'utc' (default), "
+                         "'local', or an IANA name like 'America/New_York'."}
         },
         "required": [],
     },

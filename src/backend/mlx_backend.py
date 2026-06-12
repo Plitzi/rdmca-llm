@@ -190,7 +190,12 @@ def _save_optimizer(opt, path: str) -> None:
     flat = {k: np.array(v.astype(mx.float32)) for k, v in tree_flatten(opt.state)
             if isinstance(v, mx.array)}
     if not flat:
-        return                                  # nothing stepped yet
+        # No step taken yet → no moments to persist. Warn (don't silently skip):
+        # a later --resume would then find no .opt and start with cold moments.
+        import sys
+        print(f"  [opt] no optimizer state to save yet (no step taken) — "
+              f"skipping {os.path.basename(str(path))}", file=sys.stderr)
+        return
     tmp = str(path) + ".tmp"
     with open(tmp, "wb") as f:
         np.savez(f, **flat)
@@ -252,6 +257,11 @@ def _save_weights(model, path: str) -> None:
 
 def _load_weights(model, path: str) -> None:
     data = np.load(str(path))
+    if len(data.files) == 0:                    # empty/corrupt .npz → load_weights([]) is a no-op
+        import sys
+        print(f"  [load] {path} has no arrays — model stays UNINITIALIZED "
+              f"(checkpoint empty or corrupt).", file=sys.stderr)
+        return
     from src.backend.base import warn_load_mismatch
     warn_load_mismatch({k: tuple(v.shape) for k, v in tree_flatten(model.parameters())},
                        {k: tuple(data[k].shape) for k in data.files}, str(path))

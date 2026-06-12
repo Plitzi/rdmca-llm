@@ -29,5 +29,5 @@ pytest>=8.0
 torch>=2.2
 
 # MLX — Apple Silicon only. The marker makes pip skip it elsewhere (no error).
+# We use only mlx.core + mlx.nn (no mlx-lm: it's never imported and adds ~50MB).
 mlx>=0.20;    sys_platform == "darwin" and platform_machine == "arm64"
-mlx-lm>=0.20; sys_platform == "darwin" and platform_machine == "arm64"

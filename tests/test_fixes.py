@@ -38,10 +38,26 @@ def test_modelconfig_rejects_indivisible_heads():
 
 def test_attention_rejects_odd_head_dim():
     # d_model 48 / n_heads 16 = head_dim 3 (odd) → RoPE assert in attention init.
+    # Match the message so a DIFFERENT assertion firing first can't mask a regression.
     cfg = ModelConfig(d_model=48, n_heads=16, ffn_dim=96, context_len=16,
                       vocab_size=128, mrl_dims=[48])
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="head_dim must be even"):
         RDMCAFoundational(cfg)
+
+
+def test_model_is_causal():
+    """Output at position k must NOT depend on tokens after k (causal masking):
+    changing a future token leaves all earlier positions' hidden states identical."""
+    import mlx.core as mx
+    m = _tiny_model(); m.train(False)
+    base = np.random.randint(1, 256, (1, 16))
+    a = base.copy(); b = base.copy()
+    b[0, 10:] = (b[0, 10:] + 7) % 256          # perturb only positions ≥10
+    ha = np.array(m(mx.array(a)).tolist())
+    hb = np.array(m(mx.array(b)).tolist())
+    # positions 0..9 saw identical context → must be bit-close; position ≥10 differs.
+    assert np.allclose(ha[:, :10], hb[:, :10], atol=1e-5), "future token leaked into past"
+    assert not np.allclose(ha[:, 10:], hb[:, 10:], atol=1e-5), "perturbation had no effect"
 
 
 # ─────────────────────────── architecture: MRL uniform weights (C1) ──────────
@@ -86,22 +102,28 @@ def _tiny_model():
     return RDMCAFoundational(cfg)
 
 def test_accumulate_finalize_is_mean_of_microbatches():
-    """finalize(accumulate(g1,g2), 1/2) ≈ mean(g1,g2)."""
+    """finalize(accumulate(g1,g2), 1/2) must equal (g1+g2)/2 ELEMENT-WISE — not
+    just differ in norm (a test that only checked the norm would pass even if
+    finalize returned g1 unchanged)."""
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
     m = _tiny_model()
     lg = B.engine.value_and_grad(m, lambda mm, t: mm.mrl_loss(t))
     b1 = B.ops.array(np.random.randint(0, 256, (3, 33)).astype(np.int64))
     b2 = B.ops.array(np.random.randint(0, 256, (3, 33)).astype(np.int64))
     _, g1 = lg(m, b1)
-    n1 = B.engine.grad_norm(m, g1)
-    run = B.engine.accumulate_grads(None, g1, m)
     _, g2 = lg(m, b2)
+    run = B.engine.accumulate_grads(None, g1, m)
     run = B.engine.accumulate_grads(run, g2, m)
     acc = B.engine.finalize_grads(run, 0.5, m)
-    n_acc = B.engine.grad_norm(m, acc)
-    # The mean gradient norm should differ from a single micro-batch's (it averages
-    # two different batches) and be finite/positive.
-    assert n_acc > 0 and np.isfinite(n_acc)
-    assert abs(n_acc - n1) > 1e-6
+    # Element-wise: every leaf of `acc` equals the mean of the two micro-batch grads.
+    f1, f2, fa = dict(tree_flatten(g1)), dict(tree_flatten(g2)), dict(tree_flatten(acc))
+    leaves = [k for k in fa if isinstance(fa[k], mx.array)]
+    assert leaves, "no gradient leaves to compare"
+    for k in leaves:
+        expected = (f1[k].astype(mx.float32) + f2[k].astype(mx.float32)) / 2.0
+        d = float(mx.max(mx.abs(fa[k].astype(mx.float32) - expected)).item())
+        assert d < 1e-5, f"{k}: accumulated grad is not the mean (max|Δ|={d:.2e})"
 
 def test_clip_grads_caps_norm():
     m = _tiny_model()

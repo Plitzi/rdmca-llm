@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-import sys, os
-_venv = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "bin", "python")
-if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(_venv):
-    os.execv(_venv, [_venv] + sys.argv)
-
 """
 RDMCA Data Preparation Script — config-driven, per level + stage
 ================================================================
@@ -31,6 +25,15 @@ Usage:
   python scripts/prepare_data.py --level 1 --stage 1 --limit 100  # 100MB test
   python scripts/prepare_data.py --level 1 --stage 1 --lang en    # English only
 """
+# Re-exec into the project venv BEFORE importing third-party deps, so the script
+# works when launched with a bare `python` outside the venv. (Kept after the
+# docstring so `__doc__` / argparse epilog / pydoc see the help text.)
+from __future__ import annotations
+import sys, os
+_venv = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "bin", "python")
+if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(_venv):
+    os.execv(_venv, [_venv] + sys.argv)
+
 import argparse
 import json
 import os
@@ -102,7 +105,10 @@ def _validate_jsonl(path: Path, token_budget_m: int) -> tuple[bool, str]:
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         return False, f"corrupted JSONL ({e})"
 
-    # Estimate token count from file size
+    # Fallback (no sidecar): estimate tokens from file size. INACCURATE — assumes
+    # CHARS_PER_TOKEN uniformly, but prose is ~3.8 and structured data (arithmetic,
+    # JSON) ~1.2 chars/token, so this can mis-judge completeness by 2-3×. Only used
+    # for legacy files written before .meta.json existed; the sidecar above is exact.
     size_bytes   = path.stat().st_size
     est_tokens_m = size_bytes / (CHARS_PER_TOKEN * 1_000_000)
     target_m     = token_budget_m

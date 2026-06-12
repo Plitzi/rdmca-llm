@@ -96,7 +96,10 @@ def _remove(path: Path) -> None:
     containing a `.gitkeep` stays as an empty, tracked folder."""
     if path.is_symlink() or path.is_file():
         if path.name != ".gitkeep":
-            path.unlink()
+            try:
+                path.unlink()
+            except OSError as e:                # read-only file etc. — skip, keep going
+                print(f"  [skip] could not remove {_display(path)}: {e}")
         return
     for child in path.iterdir():
         _remove(child)

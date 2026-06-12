@@ -105,7 +105,9 @@ _ops = SimpleNamespace(
     nonzero=lambda mask: torch.nonzero(mask, as_tuple=False).flatten(),
     cumsum=lambda x, axis=0: torch.cumsum(x, dim=axis),
     where=lambda cond, a, b: torch.where(cond, a, b),
-    int_=torch.int64,
+    int_=torch.int32,    # match MLX so `ops.int_` means the same on both backends
+                         # (torch promotes int32 indices fine; only the MLX static
+                         #  capacity path actually consumes ops.int_).
     silu=F.silu,
     relu=F.relu,
     cross_entropy=lambda logits, targets, reduction="mean": F.cross_entropy(

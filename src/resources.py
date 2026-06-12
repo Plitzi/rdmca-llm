@@ -117,7 +117,10 @@ def available_memory_gb() -> float:
 def estimate_for(cfg: dict, mode: str) -> float:
     """GB a config needs for `mode` ('train' | 'infer')."""
     model = cfg["model"]
-    precision = (cfg.get("training", {}) or {}).get("precision", "bf16")
+    # Default fp32 (4 B/param) when unset — this module deliberately OVER-estimates
+    # (see header). Assuming bf16 would HALVE the estimate and could green-light a
+    # run that then OOMs; training defaults to bf16, so fp32 here is the safe side.
+    precision = (cfg.get("training", {}) or {}).get("precision", "fp32")
     if mode == "train":
         return estimate_train_memory_gb(model, cfg.get("training", {}) or {}, precision)
     return estimate_infer_memory_gb(model, precision)
