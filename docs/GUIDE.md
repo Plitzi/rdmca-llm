@@ -4,10 +4,11 @@ From an empty repo to a trained, multimodal model you can chat with and that kee
 learning daily through consolidation. One linear read. All commands run from the
 project root.
 
-> **Core idea:** a cognitive *core* (language, patterns, abstraction/math, causality,
-> reasoning, ethics) is trained **once** and then **frozen forever**. Continual learning happens in the
-> **LoRA sectors** via **daily consolidation** of real experiences. Text, image and
-> audio share **one unified token space** (Era 3b).
+> **Core idea:** a cognitive *core* (language, perception, abstraction/math, causality,
+> reasoning, memory, ethics — stages 1–7) is trained **once** and then **frozen forever**.
+> Continual learning happens in the **LoRA sectors** (tool/MCP/skills — stages 8–10) via
+> **daily consolidation** of real experiences. Text, image and audio share **one unified
+> token space** (Era 3b).
 
 Contents:
 1. [Requirements](#1-requirements)
@@ -158,40 +159,47 @@ Output: `dist/tokenizer/image_vqvae.npz` and `dist/tokenizer/audio_vqvae.npz`.
 
 ## 7. Train the cognitive base
 
-Progressive curriculum in **natural order**: cognition (1-5) → values (6, freeze) →
-behavioral interfaces (7-9). Each stage must pass its graduation gate before the next
-(level 1 skips it). Checkpoints are saved automatically; `--resume` continues.
+Progressive curriculum in **natural order**: cognition (1–6) → values (7, freeze) →
+behavioral interfaces (8–10). **All 10 stages run at every level** (each stage's
+`entry_level ≤ 1`); levels differ only in size/data/context, not in which stages run.
+Each stage must pass its graduation gate before the next (L0/L1 skip it). Checkpoints
+are saved automatically; `--resume` continues.
 
 ```bash
-# Frozen cognitive base (stages 1-6):
+# Frozen cognitive core (stages 1-7):
 python train_stage.py --level 4 --stage 1      # Language
-python train_stage.py --level 4 --stage 2      # Patterns
-python train_stage.py --level 4 --stage 3      # Abstraction / math
+python train_stage.py --level 4 --stage 2      # Perception / patterns
+python train_stage.py --level 4 --stage 3      # Abstraction / arithmetic
 python train_stage.py --level 4 --stage 4      # Causal / procedural
-python train_stage.py --level 4 --stage 5      # Reasoning (chain-of-thought) — capstone
-python train_stage.py --level 4 --stage 6      # Ethics + BCF  → freezes the base
-# Behavioral interfaces, trained on the frozen base (stages 7-9):
-python train_stage.py --level 4 --stage 7      # Tool use
-python train_stage.py --level 4 --stage 8      # MCP
-python train_stage.py --level 4 --stage 9      # Skills
+python train_stage.py --level 4 --stage 5      # Reasoning (chain-of-thought)
+python train_stage.py --level 4 --stage 6      # Memory management (recall & use context)
+python train_stage.py --level 4 --stage 7      # Ethics + BCF  → freezes the core
+# Behavioral interfaces, trained on the frozen core as LoRA sectors (stages 8-10):
+python train_stage.py --level 4 --stage 8      # Tool use
+python train_stage.py --level 4 --stage 9      # MCP
+python train_stage.py --level 4 --stage 10     # Skills
 
-# Resume after Ctrl+C
+# Resume after Ctrl+C (fast-forwards the data stream to where it stopped)
 python train_stage.py --level 4 --stage 1 --resume
+
+# Plain scrolling logs (selectable/copyable, no flicker); a full train.log is
+# written to the stage's checkpoint dir regardless of mode.
+python train_stage.py --level 4 --stage 1 --plain
 ```
 
-Lower levels train a subset (causal enters at L3, ethics at L4); reasoning and the
-behavioral stages are present from the start. `train_stage.py` suggests the next active
-stage and skips the ones not yet entered.
+Same 10 stages at every level — the smaller levels just learn each faculty more
+shallowly. `train_stage.py` suggests the next stage and enforces prerequisites.
 
 | Stage | Gate metric | Threshold |
 |---|---|---|
 | 1 Language | val perplexity (BLiMP proxy) | per level |
-| 2 Patterns | val perplexity (ARC proxy) | per level |
+| 2 Perception | val perplexity (ARC proxy) | per level |
 | 3 Abstraction | val perplexity (GSM8K proxy) | per level |
 | 4 Causal | val perplexity | per level |
 | 5 Reasoning | val perplexity (chain-of-thought) | per level |
-| 6 Ethics | val perplexity + **BCF probe ≥ 0.90** | per level |
-| 7-9 Tool/MCP/Skills | val perplexity (post-freeze sectors) | per level |
+| 6 Memory | val perplexity (recall & use of injected memory) | per level |
+| 7 Ethics | val perplexity + **BCF probe ≥ 0.90** | per level |
+| 8-10 Tool/MCP/Skills | val perplexity (post-freeze LoRA sectors) | per level |
 
 > Gates use **validation perplexity** as the operative proxy. To use real benchmarks
 > (BLiMP/ARC/GSM8K), replace `evaluate_gate` in `train_stage.py`.
@@ -201,29 +209,29 @@ Checkpoints live in `dist/checkpoints/level<N>/stage<N>/` (`step_*.npz`, `latest
 
 ## 8. Freeze + BCF
 
-When the **Ethics + BCF stage (stage 6)** completes, the foundational core (stages 1-6:
-cognition + values, including reasoning) is **frozen permanently** and saved to
+When the **Ethics + BCF stage (stage 7)** completes, the foundational core (stages 1-7:
+cognition + memory + values) is **frozen permanently** and saved to
 `dist/checkpoints/level<N>/foundational/theta_f_frozen.npz`. If
 `data/benchmarks/bcf_probes.jsonl` exists (one `{"text": "...", "label": 0|1}` per line),
 the BCF safety head is also trained and saved as `bcf_head.npz`. This happens
-automatically inside `train_stage.py --stage 6`.
+automatically inside `train_stage.py --stage 7` (driven by `BCF_STAGE = 7`).
 
 From here the core is never touched again: all learning is through consolidation.
 
 ## 9. Chat
 
 ```bash
-python uses/chat/run_chat.py --level 3 --stage 9                 # most complete (core + behavioral)
+python uses/chat/run_chat.py --level 3 --stage 10                # most complete (core + behavioral)
 python uses/chat/run_chat.py --level 3 --stage 1 --lang es       # Spanish session
-python uses/chat/run_chat.py --level 3 --stage 9 --think medium  # show <think> reasoning
-python uses/chat/run_chat.py --level 3 --stage 9 --image foto.png   # visual grounding
-python uses/chat/run_chat.py --level 3 --stage 9 --audio clip.wav   # audio grounding
+python uses/chat/run_chat.py --level 3 --stage 10 --think medium # show <think> reasoning
+python uses/chat/run_chat.py --level 3 --stage 10 --image foto.png  # visual grounding
+python uses/chat/run_chat.py --level 3 --stage 10 --audio clip.wav  # audio grounding
 ```
 
 In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512`
 · `/think off|low|medium|high` · `/format text|json` · `/stats` · `/reset` · `/quit`.
 
-**Thinking / reasoning** — stage 9 teaches a `<think>…</think>` scratchpad
+**Thinking / reasoning** — stage 5 teaches a `<think>…</think>` scratchpad
 register (real GSM8K chain-of-thought). `--think` / `/think` is an effort dial
 (off · low · medium · high, **default medium** — more thinking ≈ better answers)
 that sets how big a token budget the scratchpad gets; the chat shows the
@@ -266,23 +274,26 @@ the freeze point), see **[levels.md](levels.md)**. Train the stages **in order**
 starts from the previous one's weights):
 
 ```bash
-# 1) Graded data → data/level1/stage*/   (causal/ethics skipped at L1)
+# 1) Graded data → data/level1/stage*/   (ALL 10 stages, at small budgets)
 python scripts/prepare_data.py    --level 1 --stage all
 
 # 2) Child-sized tokenizer (vocab auto-caps to the corpus size)
 python scripts/train_tokenizer.py --level 1
 
-# 3) Train, in order (causal=4 and ethics=6 are skipped at L1)
+# 3) Train, in order — the SAME 10 stages as every level (just smaller)
 python train_stage.py --level 1 --stage 1      # Language / conversation
-python train_stage.py --level 1 --stage 2      # Patterns
-python train_stage.py --level 1 --stage 3      # Arithmetic
+python train_stage.py --level 1 --stage 2      # Perception / patterns
+python train_stage.py --level 1 --stage 3      # Abstraction / arithmetic
+python train_stage.py --level 1 --stage 4      # Causal / procedural
 python train_stage.py --level 1 --stage 5      # Reasoning (chain-of-thought)
-python train_stage.py --level 1 --stage 7      # Tool use
-python train_stage.py --level 1 --stage 8      # MCP
-python train_stage.py --level 1 --stage 9      # Skills
+python train_stage.py --level 1 --stage 6      # Memory management
+python train_stage.py --level 1 --stage 7      # Ethics + BCF  → freezes the core
+python train_stage.py --level 1 --stage 8      # Tool use      (LoRA sector)
+python train_stage.py --level 1 --stage 9      # MCP           (LoRA sector)
+python train_stage.py --level 1 --stage 10     # Skills        (LoRA sector)
 
 # 4) Chat with it (most complete checkpoint)
-python uses/chat/run_chat.py --level 1 --stage 9
+python uses/chat/run_chat.py --level 1 --stage 10
 ```
 
 On start each command prints the **announce** (what the model is learning + estimated
@@ -292,11 +303,11 @@ override). Data lands in `data/level1/...`, checkpoints in `dist/checkpoints/lev
 **Faster first pass:** the `n_tokens` budgets in `level1.yaml` control run length — lower
 them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a fuller model.
 
-**Heads-up:** the cognitive *sectors*, the MoE gate and daily consolidation activate
-only at the **freeze point** (ethics+BCF, stage 6 → levels **4–5**). At L1 you chat with
-the pure **dense base** (no sectors yet). See **[levels.md](levels.md)** for the freeze
-point and what each level adds. To exercise MoE routing + consolidation, train a level
-that reaches stage 6, then run `consolidation_daemon.py --level N --once`.
+**Heads-up:** L1 runs the full 10-stage curriculum like every level — the cognitive
+*sectors*, the MoE gate and daily consolidation activate at the **freeze point**
+(ethics+BCF, **stage 7**), so they're available once you train through stage 7 even at L1
+(they just have little to route at this scale). To exercise MoE routing + consolidation,
+train through stage 7+ and run `consolidation_daemon.py --level N --once`.
 
 ## 12. Cleanup / fresh start
 

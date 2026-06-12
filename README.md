@@ -27,8 +27,8 @@ The level sets the model size, the data complexity and the resource use — pick
 highest your hardware can run (a startup guard refuses a level that won't fit).
 
 ➡️ **Full step-by-step guide: [docs/GUIDE.md](docs/GUIDE.md)** (setup → backend/precision
-→ languages → data → tokenizers → cognitive base (stages 1-6) → freeze/BCF →
-behavioral stages (tool/MCP/skills) → chat text/image/audio → daily consolidation).
+→ languages → data → tokenizers → cognitive core (stages 1-7) → freeze/BCF →
+behavioral stages (8 tool/9 MCP/10 skills) → chat text/image/audio → daily consolidation).
 
 ---
 

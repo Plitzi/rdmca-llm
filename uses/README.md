@@ -45,15 +45,18 @@ python scripts/prepare_data.py --level 1 --stage all
 python scripts/train_tokenizer.py --level 1
 
 # 3. Train the stages — IN ORDER (each starts from the previous one's weights).
-#    Natural order: cognition (1-5) → values (6, freeze) → behavioral (7-9).
-#    Level 1's active stages are: 1, 2, 3, 5, 7, 8, 9 (causal/ethics enter at L3/L4).
+#    Natural order: cognition (1-6) → values (7, freeze) → behavioral (8-10).
+#    All 10 stages run at EVERY level (entry_level ≤ 1) — smaller levels just go shallower.
 python train_stage.py --level 1 --stage 1     # language
-python train_stage.py --level 1 --stage 2     # patterns
-python train_stage.py --level 1 --stage 3     # arithmetic
-python train_stage.py --level 1 --stage 5     # reasoning (chain-of-thought) — capstone of the base
-python train_stage.py --level 1 --stage 7     # tool use
-python train_stage.py --level 1 --stage 8     # MCP
-python train_stage.py --level 1 --stage 10     # skills
+python train_stage.py --level 1 --stage 2     # perception / patterns
+python train_stage.py --level 1 --stage 3     # abstraction / arithmetic
+python train_stage.py --level 1 --stage 4     # causal / procedural
+python train_stage.py --level 1 --stage 5     # reasoning (chain-of-thought)
+python train_stage.py --level 1 --stage 6     # memory management
+python train_stage.py --level 1 --stage 7     # ethics + BCF → freezes the core
+python train_stage.py --level 1 --stage 8     # tool use   (LoRA sector)
+python train_stage.py --level 1 --stage 9     # MCP        (LoRA sector)
+python train_stage.py --level 1 --stage 10    # skills     (LoRA sector)
 
 # 4. Chat — streamed live, reasoning=medium by default
 python uses/chat/run_chat.py --level 1 --stage 10

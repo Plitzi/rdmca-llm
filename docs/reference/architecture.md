@@ -198,11 +198,11 @@ Checkpoints: `dist/checkpoints/level<N>/stage<N>/`, frozen core at
 
 A level (`configs/levels/level{0..5}.yaml`, `--level N`) sets the model size from the
 **information** it teaches (the hardware only caps how high you can run). The **frozen
-cognitive base** is six developmental **stages** (1 Language · 2 Patterns ·
-3 Arithmetic · 4 Causal · 5 Reasoning · 6 Ethics+BCF), each gated by an `entry_level`;
-the base **freezes after the last active cognitive stage**, so neither competence nor
-values drift. Three **behavioral** stages (7 tool use · 8 MCP · 9 skills, `entry_level:
-0`) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
+cognitive core** is seven developmental **stages** (1 Language · 2 Perception ·
+3 Abstraction · 4 Causal · 5 Reasoning · 6 Memory · 7 Ethics+BCF), present at every level
+(`entry_level ≤ 1`); the core **freezes after the ethics/BCF stage** (`BCF_STAGE = 7`),
+so neither competence nor values drift. Three **behavioral** stages (8 tool use · 9 MCP ·
+10 skills) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
 Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `src/agent.py`
 (see [uses/chat/](../../uses/chat/)). Data is graded per level via `src/data/graded.py`.
 
