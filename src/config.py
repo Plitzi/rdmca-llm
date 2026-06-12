@@ -49,7 +49,10 @@ MIN_LEVEL = _LEVELS[0] if _LEVELS else 0   # level 0 = throwaway smoke/test tier
 MAX_LEVEL = _LEVELS[-1] if _LEVELS else 5
 DEFAULT_CONFIG = f"{LEVELS_DIR}/level{DEFAULT_LEVEL}.yaml"
 
-SUPPORTED_BACKENDS = ("mlx", "torch")
+# Single source of truth: the registry's builder map. Adding a backend there now
+# updates this automatically (no second list to keep in sync).
+from src.backend.registry import available as _available_backends
+SUPPORTED_BACKENDS = _available_backends()
 SUPPORTED_PRECISIONS = ("fp32", "bf16", "fp16")
 
 

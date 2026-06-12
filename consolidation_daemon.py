@@ -181,10 +181,19 @@ def run_consolidation(cfg: dict) -> None:
 
     bcf = BCFHead(d_model)
     B.engine.set_precision(bcf, get_precision(cfg))   # match model device/dtype
-    bcf_path = root / "stage5" / "bcf_head.npz"
-    if bcf_path.exists():
+    # The BCF head is saved at the dir of the stage that froze the core — the LAST
+    # ACTIVE cognitive stage (`last_cognitive_stage`, = BCF_STAGE/ethics when present,
+    # else an earlier stage). The old hardcoded "stage5" loaded nothing on most
+    # configs, leaving a RANDOM head that filtered experiences as noise.
+    from train_stage import last_cognitive_stage
+    freeze_stage = last_cognitive_stage(cfg)
+    bcf_path = (root / f"stage{freeze_stage}" / "bcf_head.npz") if freeze_stage else None
+    if bcf_path and bcf_path.exists():
         B.engine.load_weights(bcf, str(bcf_path))
         B.engine.set_precision(bcf, get_precision(cfg))
+    else:
+        logging.warning(f"BCF head not found ({bcf_path}) — using an untrained head; "
+                        "the BCF experience filter will be unreliable.")
 
     from src.consolidation.validation import default_validator
     ambiguity = AmbiguityHandler()

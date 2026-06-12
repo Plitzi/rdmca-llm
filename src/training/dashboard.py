@@ -25,26 +25,8 @@ from rich import box
 # Unicode sparkline chars (low → high)
 _SPARKS = " ▁▂▃▄▅▆▇█"
 
-STAGE_GATES = {
-    1: ("BLiMP grammaticality",   0.70),
-    2: ("ARC Easy accuracy",      0.60),
-    3: ("GSM8K accuracy",         0.15),
-    4: ("Causal reasoning",       0.65),
-    5: ("Chain-of-thought (CoT)", 0.20),
-    6: ("BCF probe set",          0.90),
-}
-
-STAGE_NAMES = {
-    1: "Language and communication",
-    2: "Perception and pattern recognition",
-    3: "Abstraction and symbolic composition",
-    4: "Causal and procedural reasoning",
-    5: "Reasoning",
-    6: "Cognitive ethics and BCF",
-    7: "Action and tool use",
-    8: "Model Context Protocol (MCP)",
-    9: "Skills",
-}
+# Stage gates/names come from the shared source of truth (src/training/stages.py).
+from src.training.stages import STAGE_GATES, STAGE_NAMES
 
 
 def _sparkline(values: list[float], width: int = 12) -> str:
@@ -277,7 +259,8 @@ class TrainingDashboard:
                                        f"[dim]({steps_ago:,} steps ago)[/dim]")
 
         # ── Gate row ──────────────────────────────────────────────────────
-        gate_name, gate_thresh = STAGE_GATES.get(self.stage, ("─", 0))
+        # STAGE_GATES values are (metric_key, threshold, label).
+        _, gate_thresh, gate_name = STAGE_GATES.get(self.stage, ("", 0, "─"))
         if self.gate_score is None:
             gate_val = Text("not evaluated yet", style="dim")
         elif self.gate_passed:

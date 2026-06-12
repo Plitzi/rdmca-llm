@@ -103,6 +103,10 @@ def load_experiences(path: str = EXPERIENCE_LOG) -> List[dict]:
 
 
 def clear_experiences(path: str = EXPERIENCE_LOG) -> None:
+    """Empty the queue after the daemon drained it. TRUNCATE (not unlink): the chat
+    appends to this same file, and unlinking forks the inode — a write between the
+    daemon's read and the clear would land in an orphaned inode and be lost. Truncating
+    keeps one inode so concurrent appends always target the live file."""
     p = Path(path)
     if p.exists():
-        p.unlink()
+        p.write_text("")

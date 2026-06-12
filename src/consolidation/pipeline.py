@@ -37,6 +37,7 @@ from src.model.bcf import BCFHead
 from src.consolidation.snapshot import SectorSnapshotManager
 from src.consolidation.ambiguity import AmbiguityHandler
 from src.consolidation.pgq import PGQ
+from src.routing.semantic_router import Chunk
 
 
 MIN_BATCH_PER_SECTOR = 8
@@ -97,7 +98,7 @@ class ConsolidationPipeline:
         self.pgq          = pgq
         self.log_dir      = Path(log_dir)
         self.adv_buffer   = adversarial_buffer if adversarial_buffer is not None else []
-        self._cycle_history: List[AuditEntry] = []
+        self._cycle_history: List[bool] = []   # per-cycle clean/not-clean flags
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Optional routing components for sector assignment (step 6). When not
@@ -353,7 +354,6 @@ class ConsolidationPipeline:
         router over the experience embedding when available; otherwise falls
         back to the experience's pre-assigned sector."""
         if self.semantic_router is not None and exp.embedding is not None:
-            from src.routing.semantic_router import Chunk
             emb = backend.current().ops.array(np.asarray(exp.embedding, dtype=np.float32))
             chunk = Chunk(tokens=[], modality=exp.modality)
             routed = self.semantic_router.route(chunk, emb)

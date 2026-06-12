@@ -20,7 +20,7 @@ Context slot architecture:
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -40,7 +40,7 @@ MIN_AFFINITY   = 0.15   # minimum affinity to activate a sector
 class Chunk:
     tokens: List[int]
     modality: str = "text"
-    embedding: np.ndarray = None   # type: ignore
+    embedding: Optional[np.ndarray] = None
 
 
 class STRClassifier(nn.Module):

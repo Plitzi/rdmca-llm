@@ -301,7 +301,25 @@ def write_jsonl(records: Iterator[dict], out_path: Path,
     target = token_budget_m * 1_000_000
     n = 0
     t0 = time.time()
+    last_emit = 0.0
     exhausted = True                          # set False if we stop on the budget
+
+    def _emit(final: bool = False) -> None:
+        # Single live line, refreshed ~2×/s, so streaming shows continuous progress
+        # (the old code only printed every 10k docs — long silences on slow streams).
+        if not verbose:
+            return
+        elapsed = max(time.time() - t0, 1e-6)
+        pct  = min(tokens_written / target * 100, 100) if target else 0.0
+        rate = n / elapsed
+        msg = (f"    {out_path.stem:<18} {tokens_written/1e6:5.1f}M / {token_budget_m}M tok "
+               f"({pct:4.1f}%) · {n:,} docs · {rate:,.0f} docs/s · {elapsed:.0f}s")
+        # \r keeps it on one line; pad to clear any leftover from a longer prior line.
+        print("\r" + msg.ljust(78), end=("\n" if final else ""), flush=True)
+
+    if verbose:
+        print(f"    {out_path.stem}: connecting / streaming… "
+              "(first shards can take a moment)", flush=True)
 
     fval = open(val_path, "w", encoding="utf-8") if every_k else None
     try:
@@ -318,17 +336,17 @@ def write_jsonl(records: Iterator[dict], out_path: Path,
                     continue
                 f.write(row)
                 tokens_written += estimate_tokens(text)
-                if verbose and n % 10_000 == 0:
-                    pct = min(tokens_written / target * 100, 100)
-                    elapsed = time.time() - t0
-                    print(f"    {tokens_written/1e6:.0f}M / {token_budget_m}M tokens "
-                          f"({pct:.1f}%)  {n:,} docs  {elapsed:.0f}s")
+                now = time.time()
+                if now - last_emit >= 0.5:           # time-based → lively even on slow streams
+                    last_emit = now
+                    _emit()
                 if tokens_written >= target:
                     exhausted = False
                     break
     finally:
         if fval:
             fval.close()
+        _emit(final=True)                            # final newline + last numbers
 
     return tokens_written, exhausted
 

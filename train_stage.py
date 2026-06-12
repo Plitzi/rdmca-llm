@@ -49,36 +49,9 @@ from src.config import require_backend, get_precision, SUPPORTED_PRECISIONS
 
 
 # ---------------------------------------------------------------------------
-# Stage gates: metric name, threshold, human description
-# ---------------------------------------------------------------------------
-# Natural order: cognition (1-5) → values (6, freeze) → behavioral interfaces (7-9).
-STAGE_GATES = {
-    1: ("blim_accuracy",      0.70, "Language — BLiMP grammaticality"),
-    2: ("arc_easy_accuracy",  0.60, "Patterns — ARC easy"),
-    3: ("gsm8k_accuracy",     0.15, "Abstraction — GSM8K"),
-    4: ("causal_accuracy",    0.65, "Causal and procedural reasoning"),
-    5: ("reasoning_accuracy", 0.20, "Reasoning — chain-of-thought (GSM8K)"),
-    6: ("bcf_accuracy",       0.90, "Cognitive ethics — BCF probe"),
-}
-
-STAGE_NAMES = {
-    1: "Language and communication",
-    2: "Perception and pattern recognition",
-    3: "Abstraction and symbolic composition",
-    4: "Causal and procedural reasoning",
-    5: "Reasoning",
-    6: "Cognitive ethics and BCF",
-    7: "Action and tool use",
-    8: "Model Context Protocol (MCP)",
-    9: "Skills",
-}
-
-# BCF_STAGE is the ethics stage and the LATEST possible freeze point. The actual
-# freeze happens after the last ACTIVE cognitive stage (`last_cognitive_stage`),
-# which is BCF_STAGE when ethics is present and an earlier stage otherwise (e.g.
-# reasoning (5) at level 1). Behavioral stages (>6) then train as LoRA sectors on
-# the frozen core. Change BCF_STAGE here if the curriculum order changes.
-BCF_STAGE = 6
+# Stage gates / names / freeze point — single source of truth (shared with the
+# dashboard) lives in src/training/stages.py so the two can't diverge.
+from src.training.stages import STAGE_GATES, STAGE_NAMES, BCF_STAGE
 
 
 def last_cognitive_stage(cfg: dict) -> int | None:
