@@ -46,6 +46,13 @@ LTSS_DUPLICATE_COH   = 0.95  # cosine sim above which an experience is flagged
 DEFAULT_SECTOR       = 1     # fallback sector when routing is unavailable
 AUX_LOSS_WEIGHT      = 0.01  # weight of the MoE load-balance auxiliary loss
 
+# PGQ growth-signal calibration (§14). These turn raw cycle telemetry into the four
+# [0,1] inputs of the Growth Necessity Score (replacing the old hardcoded 0.0s that
+# kept PGQ permanently "stable" — issue C1).
+PGQ_SAT_REF   = 5.0   # grad-norm scale at which the busiest sector reads as saturated
+PGQ_NOVEL_COH = 0.30  # max-cosine to LTSS below which an experience is a NOVEL cluster
+PGQ_EXC_THETA = 0.50  # relevance score ≥ this counts as a cognitive-surprise experience
+
 
 @dataclass
 class AuditEntry:
@@ -120,6 +127,46 @@ class ConsolidationPipeline:
         self.optimizer   = (backend.current().engine.make_optimizer(
             model, lr=lr, weight_decay=0.0) if model is not None else None)
         self._last_rollback = False
+        self._last_loss: Optional[float] = None   # consolidation CE → PGQ pred_error
+
+    def _growth_metrics(self, final, delta_norms, busiest) -> Dict[str, float]:
+        """Turn this cycle's telemetry into PGQ's four [0,1] growth signals (§14).
+        Each is grounded in a real measurement instead of the old hardcoded 0.0:
+
+          pred_error   — consolidation cross-entropy as a fraction of the maximum
+                         entropy log(vocab): 0 = perfectly modeled, 1 = at chance.
+                         Scale-free (no magic constant); high ⇒ capacity can't fit.
+          saturation   — how hard the busiest sector was pushed (its grad norm),
+                         saturating toward 1: a proxy for capacity pressure.
+          cluster_novel— fraction of consolidated experiences far from everything in
+                         LTSS (a genuinely new region of concept space).
+          exc_rate     — fraction of cognitively SURPRISING experiences (relevance
+                         score, already assigned by the R+ filter, ≥ PGQ_EXC_THETA).
+        """
+        n = len(final)
+        # pred_error
+        pred_error = 0.0
+        if self._last_loss is not None and self.model is not None:
+            vocab = getattr(self.model.cfg, "vocab_size", 0) or 2
+            pred_error = float(np.clip(self._last_loss / np.log(max(vocab, 2)), 0.0, 1.0))
+        # saturation (busiest sector's grad norm → saturating map)
+        gnorm = float(delta_norms.get(f"S{busiest}", 0.0))
+        saturation = float(1.0 - np.exp(-gnorm / PGQ_SAT_REF))
+        # cluster_novel
+        novel = 0
+        for exp in final:
+            try:
+                coh = self.ltss.max_cosine_similarity(exp.embedding)
+            except Exception:
+                coh = 1.0
+            if coh < PGQ_NOVEL_COH:
+                novel += 1
+        cluster_novel = (novel / n) if n else 0.0
+        # exc_rate (cognitive surprise = high relevance, already scored upstream)
+        exc = sum(1 for e in final if getattr(e, "relevance_score", 0.0) >= PGQ_EXC_THETA)
+        exc_rate = (exc / n) if n else 0.0
+        return dict(saturation=saturation, exc_rate=exc_rate,
+                    pred_error=pred_error, cluster_novel=cluster_novel)
 
     def _moe_update(self, experiences, sectors_updated, delta_norms) -> None:
         """Joint MoE update: the gate + expert sectors (S1..S6) train together on
@@ -150,6 +197,7 @@ class ConsolidationPipeline:
         grad_fn = eng.value_and_grad(m, loss_fn)
         loss, grads = grad_fn(m)
         eng.eval(loss)
+        self._last_loss = float(eng.item(loss))      # → PGQ pred_error signal
         gnorm = eng.grad_norm(m, grads)
         eng.optimizer_step(self.optimizer, m, grads)
         eng.freeze_all(m)
@@ -180,6 +228,7 @@ class ConsolidationPipeline:
         sectors_updated: List[int] = []
         delta_norms: Dict[str, float] = {}
         rollback = False
+        self._last_loss = None          # reset; _moe_update sets it if it runs
 
         # --- Step 2: BCF filter ---
         clean: List[Experience] = []
@@ -280,14 +329,14 @@ class ConsolidationPipeline:
             sectors_updated.extend(sorted({(e.sector_assignment or DEFAULT_SECTOR)
                                            for e in final}))
 
-        # --- Step 9: PGQ ---
+        # --- Step 9: PGQ — fed REAL growth signals from this cycle (was hardcoded
+        # to 0.0, so PGQ was permanently "stable" and never grew capacity — C1). ---
         busiest = (max(sector_groups, key=lambda s: len(sector_groups[s]))
                    if sector_groups else DEFAULT_SECTOR)
+        gm = self._growth_metrics(final, delta_norms, busiest)
         pgq_result = self.pgq.evaluate(
-            cycle_id, saturation=0.0, exc_rate=0.0,
-            pred_error=0.0, cluster_novel=0.0,
-            busiest_sector_id=busiest, sectors=self.sectors,
-            model=self.model,
+            cycle_id, busiest_sector_id=busiest, sectors=self.sectors,
+            model=self.model, **gm,
         )
 
         # --- Audit log ---

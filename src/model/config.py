@@ -43,6 +43,13 @@ class ModelConfig:
     # near-zero-FLOP and quantizable/memory-mappable. 0 = disabled (default).
     ple_dim: int = 0
     ple_gated: bool = True               # sigmoid-gated identity↔context merge
+    # Gradient (activation) checkpointing: recompute each block's activations in the
+    # backward pass instead of storing them — a large activation-memory saving
+    # (5-10×) for ~20-30% extra compute. The decisive lever for fitting deep/long-
+    # context training (L4-L5) on limited hardware. Off by default (no recompute).
+    # Use with dropout=0 on the MLX backend (it recomputes with the live RNG); the
+    # torch backend preserves the RNG, so dropout stays correct there.
+    gradient_checkpointing: bool = False
 
     def __post_init__(self):
         if self.n_kv_heads is None:

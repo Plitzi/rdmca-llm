@@ -19,6 +19,11 @@ python-dotenv>=1.0          # load .env into the environment (HF_TOKEN, etc.)
                             # links its own libomp, which collides with PyTorch on
                             # macOS (OMP Error #15). LTSS uses brute-force numpy by
                             # default (sub-ms at dev scale). Install on Linux/CUDA.
+# bitsandbytes>=0.43      # OPT-IN 8-bit AdamW (CUDA only). Enable per level with
+                            # training.optimizer_states: int8 (L4/L5). Cuts optimizer-
+                            # state memory below bf16 on big runs. Left commented: it is
+                            # CUDA-only; without it the trainer falls back to bf16 AdamW
+                            # with a warning. Install on the CUDA box: pip install bitsandbytes.
 
 # Multimodal (image/audio tokenizers + perception). `soundfile` needs the
 # system libsndfile library.

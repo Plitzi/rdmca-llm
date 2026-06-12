@@ -41,6 +41,10 @@ model:
   mtp_loss_weight: 0.3         # weight of each MTP head's CE in the loss
   ple_dim: 64                  # per-layer token-identity lookup width (≈ d_model/8)
   ple_gated: true              # sigmoid-gated identity↔context merge
+  # Recompute block activations in backward (5-10× less activation memory for ~20-30%
+  # more compute) — the lever that fits this 12-layer / 2048-ctx model on limited
+  # VRAM. Safe here: torch preserves the RNG, so dropout stays correct under recompute.
+  gradient_checkpointing: true
   languages: ["en"]
 
 training:
@@ -50,6 +54,10 @@ training:
   weight_decay: 0.1
   batch_size: 8
   grad_accumulation: 8
+  # 8-bit AdamW states (bitsandbytes, CUDA) — a further memory cut below the bf16
+  # states this bf16 model already keeps. Opt-in: needs `pip install bitsandbytes`
+  # on the CUDA box; falls back to bf16-AdamW with a warning if unavailable.
+  optimizer_states: int8
   warmup_steps: 2000
   save_every: 5000
   eval_every: 10000

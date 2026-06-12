@@ -207,26 +207,17 @@ class TransformerBlock(nn.Module):
         self.ffn  = SwiGLU(cfg.d_model, cfg.ffn_dim)
         self.drop = nn.Dropout(cfg.dropout)
 
-    def __call__(self, x, mask=None, token_ids=None, ple_fn=None, layer_idx=0):
+    def __call__(self, x, mask=None):
         x = x + self.drop(self.attn(self.ln1(x), mask))
-        # Per-Layer Embeddings (optional): inject a fresh per-layer token-identity
-        # signal once per block, after attention. No-op (and zero overhead) when
-        # PLE is disabled (ple_fn is None).
-        if ple_fn is not None:
-            x = x + ple_fn(token_ids, x, layer_idx)
         x = x + self.drop(self.ffn(self.ln2(x)))
         return x
 
-    def forward_cached(self, x, cache=None, pos_offset=0, token_ids=None,
-                       ple_fn=None, layer_idx=0):
-        """Cached-generation forward: same residual structure as __call__ (including
-        the optional PLE injection, so generation matches training), but the
+    def forward_cached(self, x, cache=None, pos_offset=0):
+        """Cached-generation forward: same residual structure as __call__, but the
         attention reads/writes the KV cache. Returns (x, (k, v)). Dropout is a no-op
         in eval, where this path runs."""
         a, kv = self.attn(self.ln1(x), cache=cache, pos_offset=pos_offset, return_kv=True)
         x = x + self.drop(a)
-        if ple_fn is not None:
-            x = x + ple_fn(token_ids, x, layer_idx)
         x = x + self.drop(self.ffn(self.ln2(x)))
         return x, kv
 
@@ -310,8 +301,16 @@ class RDMCAFoundational(nn.Module):
         self._aux_accum = 0.0          # reset MoE aux loss for this forward
         self._aux_count = 0
         x = self.drop(self.embed(tokens))
+        ckpt = getattr(self.cfg, "gradient_checkpointing", False)
         for i, block in enumerate(self.blocks):
-            x = block(x, mask, token_ids=tokens, ple_fn=self.ple, layer_idx=i)
+            # Optionally recompute the block in backward instead of storing its
+            # activations (engine.checkpoint checkpoints the block MODULE's params;
+            # it is a no-op at inference). PLE is injected OUTSIDE the checkpoint so
+            # its own params get ordinary gradients — a fresh per-layer token-identity
+            # signal added once after each block.
+            x = B.engine.checkpoint(block, x, mask) if ckpt else block(x, mask)
+            if self.ple is not None:
+                x = x + self.ple(tokens, x, i)
         return self.ln_f(x)
 
     def forward_cached(self, tokens, caches=None, pos_offset=0):
@@ -332,8 +331,9 @@ class RDMCAFoundational(nn.Module):
         new_caches = []
         for i, block in enumerate(self.blocks):
             past = caches[i] if caches is not None else None
-            x, kv = block.forward_cached(x, cache=past, pos_offset=pos_offset,
-                                         token_ids=tokens, ple_fn=self.ple, layer_idx=i)
+            x, kv = block.forward_cached(x, cache=past, pos_offset=pos_offset)
+            if self.ple is not None:                 # same per-layer PLE as training
+                x = x + self.ple(tokens, x, i)
             new_caches.append(kv)
         return self.ln_f(x), new_caches
 

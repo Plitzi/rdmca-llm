@@ -300,6 +300,19 @@ def _memory_stats() -> dict:
     return {"peak": mx.get_peak_memory(), "active": mx.get_active_memory()}
 
 
+def _checkpoint(module, *args):
+    """Gradient (activation) checkpointing of a MODULE: recompute its activations in
+    the backward pass instead of storing them — trades compute for a large drop in
+    activation memory. Uses `mlx.nn.utils.checkpoint`, which (unlike the bare
+    `mx.checkpoint`) differentiates w.r.t. the module's TRAINABLE PARAMETERS as well
+    as its inputs (the bare version only handles inputs, so module weights would get
+    zero gradient). NOTE: MLX recomputes with the live RNG, so use it with dropout=0
+    for exact gradients (the L4-L5 scale where checkpointing matters runs on torch,
+    which preserves the RNG)."""
+    import mlx.nn.utils as _nnu
+    return _nnu.checkpoint(module)(*args)
+
+
 def _set_seed(seed: int) -> None:
     """Seed every RNG that affects a training run (Python, numpy, MLX), so weight
     init + dropout + sampling are reproducible across runs."""
@@ -343,6 +356,7 @@ _engine = SimpleNamespace(
     param_count=_param_count,
     memory_stats=_memory_stats,
     set_seed=_set_seed,
+    checkpoint=_checkpoint,
 )
 
 

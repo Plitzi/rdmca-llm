@@ -442,6 +442,20 @@ def _make_optimizer(model, lr, weight_decay, states=None):
     return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 
+def _checkpoint(module, *args):
+    """Gradient (activation) checkpointing of a MODULE: run `module(*args)` WITHOUT
+    keeping its intermediate activations, recomputing them in the backward pass
+    instead — trades ~20-30% extra compute for a large drop in activation memory (the
+    dominant term for long contexts). `use_reentrant=False` preserves the RNG state,
+    so dropout is identical on the forward and the recompute (correct gradients), and
+    the module's parameters receive gradients normally. A no-op outside a grad context
+    (inference)."""
+    if torch.is_grad_enabled():
+        import torch.utils.checkpoint as _ckpt
+        return _ckpt.checkpoint(module, *args, use_reentrant=False)
+    return module(*args)
+
+
 def _set_seed(seed: int) -> None:
     """Seed every RNG that affects a training run (Python, numpy, torch CPU+CUDA),
     so weight init + dropout + sampling are reproducible across runs."""
@@ -481,6 +495,7 @@ _engine = SimpleNamespace(
     param_count=lambda module: sum(p.numel() for p in module.parameters()),
     memory_stats=_memory_stats,
     set_seed=_set_seed,
+    checkpoint=_checkpoint,
 )
 
 
