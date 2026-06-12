@@ -259,12 +259,10 @@ to `data/runtime/ltss.db`.
 
 ## 11. Start here — the Level 1 experiment
 
-Level 1 (`configs/levels/level1.yaml`) is the smallest base (~2M params, `skip_gate: true`):
-a child-sized vocabulary on simple graded data (TinyStories + synthetic dialogue +
-single-digit arithmetic). It trains fast on a laptop and already **holds a basic
-conversation and does simple arithmetic**. The active stages at L1 are
-**1 (Language), 2 (Patterns), 3 (Arithmetic), 5 (Reasoning)** plus the behavioral
-**7-9 (Tool/MCP/Skills)** — causal/ethics enter at L3/L4. Trained **in order** (each
+Level 1 (`configs/levels/level1.yaml`) is the smallest usable base: it trains fast on a
+laptop and already **holds a basic conversation and does simple arithmetic**. For what
+each level is and **exactly what it adds** over the previous one (sizes, active stages,
+the freeze point), see **[levels.md](levels.md)**. Train the stages **in order** (each
 starts from the previous one's weights):
 
 ```bash
@@ -294,12 +292,11 @@ override). Data lands in `data/level1/...`, checkpoints in `dist/checkpoints/lev
 **Faster first pass:** the `n_tokens` budgets in `level1.yaml` control run length — lower
 them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a fuller model.
 
-**Where MoE / continual learning fits (heads-up):** the cognitive *sectors* and the MoE
-gate are attached only **after the base is frozen**, which happens at the **ethics+BCF
-stage (stage 6)** — i.e. levels **4–5**. At L1 you chat with the pure **dense base**
-(language + arithmetic + reasoning); there are no sectors yet. To experiment with the
-per-token MoE routing + consolidation, train a level that reaches stage 6 and then run
-`consolidation_daemon.py --level N --once`.
+**Heads-up:** the cognitive *sectors*, the MoE gate and daily consolidation activate
+only at the **freeze point** (ethics+BCF, stage 6 → levels **4–5**). At L1 you chat with
+the pure **dense base** (no sectors yet). See **[levels.md](levels.md)** for the freeze
+point and what each level adds. To exercise MoE routing + consolidation, train a level
+that reaches stage 6, then run `consolidation_daemon.py --level N --once`.
 
 ## 12. Cleanup / fresh start
 
@@ -334,10 +331,10 @@ python scripts/purge.py --all --hf-cache --yes     # wipe everything incl. HF ca
 
 The model uses MRL (nested embeddings). A large model can be **truncated down** to a
 smaller tier at inference (not the other way around): train at the size you will use.
-**Levels** (`configs/levels/`) set the size from the information taught — 1 Preescolar
-(~2M) · 2 Primaria (~11M) · 3 Secundaria (~32M) · 4 Bachillerato (~76M, `torch`) ·
-5 Universidad (~200M, `torch`, no filters). A startup **resource guard** refuses a level
-that won't fit your hardware (override with `--force`). See
+**Levels** (`configs/levels/`) set the size from the information taught; a startup
+**resource guard** refuses a level that won't fit your hardware (`--force` overrides).
+For the per-level breakdown — sizes, active stages and exactly what each level adds —
+see **[levels.md](levels.md)**; architecture details in
 [reference/architecture.md](reference/architecture.md).
 
 ---

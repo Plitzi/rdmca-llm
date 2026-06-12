@@ -192,28 +192,19 @@ Checkpoints: `dist/checkpoints/level<N>/stage<N>/`, frozen core at
 
 ## Levels (educational curriculum)
 
-Levels replace the old hardware profiles. A level (`configs/levels/level{1..5}.yaml`,
-selected with `--level N`) sets the model size, the graded data complexity and the
-resource budget — the **information** drives the size, the **hardware** only caps how high
-a level you can run. The **frozen cognitive base** is six **stages** in natural
-developmental order — **1 Language, 2 Patterns, 3 Abstraction/Arithmetic, 4 Causal,
-5 Reasoning (chain-of-thought), 6 Ethics+BCF** — each with an `entry_level`:
-language/patterns/arithmetic and reasoning from level 1, causal at 3, ethics at 4.
-Reasoning (5) is the capstone cognition (it orchestrates the lower faculties), and the
-base **freezes after the last active cognitive stage** — Ethics+BCF (6) when present,
-else the highest base stage (e.g. reasoning (5) at level 1) — so neither competence nor
-values drift, and the behavioral stages (7-9) train as LoRA sectors on the frozen core
-instead of overwriting it. Data is graded per level via `src/data/graded.py` (a Flesch-Kincaid
-readability gate + synthetic arithmetic/dialogue/analogy/causal generators, GSM8K CoT for
-reasoning, and graded corpora like TinyStories / Simple-English-Wikipedia); **level 5
-applies no filter** and reuses the full corpora.
+> **Single source of truth for what each level is and exactly what it adds:
+> [../levels.md](../levels.md).** This section covers only the *architectural*
+> mechanics behind levels; the per-level sizes/stages/data live in that doc.
 
-On top of the frozen base, three **behavioral** stages (`entry_level: 0`, present from
-level 1, trained as post-freeze sectors) teach Claude-style interface registers the
-consumers reuse: **7 tool use, 8 MCP, 9 skills**. These live outside the base on purpose —
-tools, protocols and skills evolve and can be swapped without retraining the core. The
-reasoning *effort* is a runtime dial (`--think off|low|medium|high`) centralized in
-`src/agent.py`; see [uses/chat/](../../uses/chat/).
+A level (`configs/levels/level{0..5}.yaml`, `--level N`) sets the model size from the
+**information** it teaches (the hardware only caps how high you can run). The **frozen
+cognitive base** is six developmental **stages** (1 Language · 2 Patterns ·
+3 Arithmetic · 4 Causal · 5 Reasoning · 6 Ethics+BCF), each gated by an `entry_level`;
+the base **freezes after the last active cognitive stage**, so neither competence nor
+values drift. Three **behavioral** stages (7 tool use · 8 MCP · 9 skills, `entry_level:
+0`) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
+Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `src/agent.py`
+(see [uses/chat/](../../uses/chat/)). Data is graded per level via `src/data/graded.py`.
 
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
@@ -250,15 +241,5 @@ w = np.load("dist/checkpoints/level5/foundational/theta_f_frozen.npz")
 emb_t3 = w["embed.weight"][:, :512]       # 512-dim prefix
 ```
 
-| Level | Grade | d_model | n_layers | vocab | ~params (tied) | Default backend |
-|---|---|---|---|---|---|---|
-| 0 | Pruebas (smoke) | 64  | 2  | 4096  | ~0.3M | mlx |
-| 1 | Preescolar      | 256 | 8  | 8192  | ~10.5M | mlx |
-| 2 | Primaria        | 256 | 8  | 8192  | ~10.5M | mlx |
-| 3 | Secundaria      | 384 | 8  | 16384 | ~25M   | mlx |
-| 4 | Bachillerato    | 512 | 12 | 24576 | ~63M   | torch |
-| 5 | Universidad     | 768 | 16 | 32768 | ~176M  | torch |
-
-> Note: L1 and L2 share the d_model=256 tier with the same architecture (8 layers, the
-> paper's spec for the 256 tier) — they are differentiated by graded data + curriculum,
-> not model size. Distinct sizes resume at L3 (d_model 384).
+The per-level ladder (sizes, layers, vocab, backend and what each level adds) is in
+**[../levels.md](../levels.md)** — the single source of truth.

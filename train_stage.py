@@ -232,7 +232,7 @@ DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0, 6: 35.0}
 
 
 def evaluate_gate(model, stage: int,
-                  val_batches=None, cfg: dict = None, log=print) -> tuple:
+                  val_batches=None, cfg: dict = None, log=print, step=None) -> tuple:
     """
     Graduation gate. Operative metric is real validation perplexity (a proxy
     that actually measures the model); task-specific benchmarks (BLiMP, ARC,
@@ -254,9 +254,11 @@ def evaluate_gate(model, stage: int,
     ppl = validation_perplexity(model, val_batches)
     B.engine.set_train(model)
     passed = ppl <= max_ppl
-    log(f"[gate] Stage {stage}: {desc}")
-    log(f"[gate] val perplexity={ppl:.2f} | threshold<= {max_ppl:.1f} "
-        f"-> {'PASS' if passed else 'fail'}")
+    # One self-identifying line (with the step) so it reads in order next to the
+    # [ckpt] lines instead of two stepless lines floating between checkpoints.
+    tag = f"step={step:,} | " if step is not None else ""
+    log(f"[gate] {tag}val perplexity={ppl:.2f} <= {max_ppl:.1f} "
+        f"-> {'PASS' if passed else 'fail'}  ({desc})")
 
     if stage == BCF_STAGE:
         passed = passed and _bcf_gate(model, cfg)
@@ -604,7 +606,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False) -> bool:
             # training stops at the first eval_every (e.g. step 1000) far short of
             # the token budget. The stage then runs to its full budget.
             if step % eval_every == 0:
-                score, passed = evaluate_gate(model, stage, val_batches, cfg, log=dash.print)
+                score, passed = evaluate_gate(model, stage, val_batches, cfg,
+                                              log=dash.print, step=step)
                 dash.set_gate_result(score, passed)
                 if passed and not skip_gate:
                     save_checkpoint(model, step, stage, tokens_seen,

@@ -28,10 +28,11 @@ information:
 # ── Model — dimensioned to the information above (tiny). ──────────────────────
 model:
   d_model: 256                 # hidden width — wide enough for coherent simple conversation.
-  n_layers: 8                  # transformer blocks (depth). 8 is the paper's spec for the
-                               # d_model=256 tier (balanced aspect ratio); weight tying
-                               # (embed↔output head) frees ~vocab·d params to fund the
-                               # extra depth, so total stays ~10.5M / same memory.
+  n_layers: 6                  # transformer blocks (depth). L1 (Preescolar) is the LIGHT
+                               # variant of the d_model=256 tier: capacity was never L1's
+                               # bottleneck (data/training was), so 6 layers (~8.4M, weight-
+                               # tied) keeps it fast. L2 (Primaria) carries the tier's full
+                               # 8-layer spec (~10.5M), so the ladder grows L1<L2.
   n_heads: 4                   # head_dim = d_model/n_heads = 64 (≥64 ⇒ usable attention
                                # resolution + enough RoPE freq pairs; 8 heads gave 32).
   ffn_dim: 1024                # SwiGLU inner dim (≈4·d_model).

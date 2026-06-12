@@ -46,19 +46,14 @@ behavioral stages (tool/MCP/skills) → chat text/image/audio → daily consolid
 | Safety | BCF + attack taxonomy (adversarial filter in consolidation) |
 | Hardware | Apple Silicon (MLX) · NVIDIA/CUDA & CPU/MPS (PyTorch) |
 
-**Educational levels** in `configs/levels/` (the size follows the *information*,
-not the hardware — your hardware just caps how high you can go):
+**Educational levels** in `configs/levels/` — the size follows the *information*, not
+the hardware (your hardware just caps how high you can go). From **0 Pruebas** (smoke)
+through **1 Preescolar · 2 Primaria · 3 Secundaria · 4 Bachillerato · 5 Universidad**,
+each level grows the model and/or activates a new cognitive faculty (Language/Patterns/
+Arithmetic/Reasoning from L1, Causal at L3, Ethics+freeze at L4).
 
-| Level | Grade | ~params | Learns |
-|---|---|---|---|
-| 1 | Preescolar | ~10M | basic conversation, simple words, counting & single-digit +/− |
-| 2 | Primaria | ~11M | sentences/paragraphs, 2-digit + − ×, simple patterns |
-| 3 | Secundaria | ~32M | general knowledge, multi-digit/algebra, basic causal reasoning |
-| 4 | Bachillerato | ~76M | advanced text, word-problem math (GSM8K), causal + ethics |
-| 5 | Universidad | ~200M | everything, **no filters** (full Wikipedia, MATH, full ethics) |
-
-Cognitive stages (Language, Patterns, Arithmetic, Causal, Ethics) each enter at a
-level: language/patterns/arithmetic from level 1; causal at 3; ethics at 4.
+➡️ **See [docs/levels.md](docs/levels.md)** — the single source of truth for per-level
+sizes, active stages and **exactly what each level adds** over the previous one.
 
 ---
 
