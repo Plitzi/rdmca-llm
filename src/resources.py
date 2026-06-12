@@ -68,10 +68,18 @@ def count_params(model: dict) -> int:
 
 
 # ─────────────────────────── memory estimates ───────────────────────────────
-def _activation_bytes(model: dict, batch: int, b: int) -> int:
-    """Peak activation memory for one forward/backward, dominated by attention
-    scores [B,H,S,S], the projection/FFN intermediates, and the vocab logits
-    (MRL evaluates the head at each prefix dim). Conservative."""
+# Empirical multiplier for the activations the AUTOGRAD GRAPH must retain through
+# the backward pass (saved forward tensors for every op + dropout masks). The naive
+# forward-only footprint under-counts training memory ~2×; this is the fix for the
+# OOM-guard under-estimate (issue C5).
+_AUTOGRAD_RETENTION = 2.0
+
+
+def _activation_bytes(model: dict, batch: int, b: int, training: bool = False) -> int:
+    """Peak activation memory for one forward (and, when `training`, the retained
+    autograd graph), dominated by attention scores [B,H,S,S], the projection/FFN
+    intermediates, and the vocab logits (the head runs at each MRL prefix dim, and
+    once more per MTP head). Conservative."""
     d     = int(model["d_model"])
     nl    = int(model["n_layers"])
     h     = int(model["n_heads"])
@@ -82,33 +90,42 @@ def _activation_bytes(model: dict, batch: int, b: int) -> int:
 
     per_layer = (h * ctx * ctx          # attention score matrix [B,H,S,S]
                  + 6 * ctx * d          # q,k,v,o + residual buffers
-                 + 2 * ctx * ffn)       # SwiGLU gate/up intermediates
+                 + 3 * ctx * ffn)       # SwiGLU: gate + up + their product (3, not 2)
     logits = mrl * ctx * vocab          # head output at each MRL prefix dim
-    return batch * b * (nl * per_layer + logits)
+    # MTP (if enabled) materializes a FULL vocab logit tensor per auxiliary head.
+    logits += int(model.get("n_mtp_heads", 0) or 0) * ctx * vocab
+    acts = batch * b * (nl * per_layer + logits)
+    # Training keeps the forward activations alive for the backward pass (~2×).
+    return int(acts * _AUTOGRAD_RETENTION) if training else acts
 
 
 def estimate_train_memory_gb(model: dict, training: dict, precision: str) -> float:
-    """Peak training memory (GB): weights + grads + AdamW states + activations."""
+    """Peak training memory (GB): weights + grads + AdamW states + activations.
+    Activations include the autograd-retained graph (the dominant under-count)."""
     b = _BYTES[precision]
     p = count_params(model)
     batch = int(training.get("batch_size", 1))
     weights = p * b
     grads   = p * b
     adam    = p * _ADAM_STATE_BYTES * 2          # m and v
-    acts    = _activation_bytes(model, batch, b)
+    acts    = _activation_bytes(model, batch, b, training=True)
     return (weights + grads + adam + acts) / 1e9
 
 
 def estimate_infer_memory_gb(model: dict, precision: str, batch: int = 1) -> float:
-    """Peak inference memory (GB): weights + activations + a KV cache."""
+    """Peak inference memory (GB): weights + activations + a KV cache. The KV cache
+    holds n_kv_heads (GQA), not n_heads — so it is n_heads/n_kv_heads× smaller."""
     b = _BYTES[precision]
     p = count_params(model)
     d   = int(model["d_model"])
     nl  = int(model["n_layers"])
+    h   = int(model["n_heads"])
+    kvh = int(model.get("n_kv_heads") or h)
     ctx = int(model["context_len"])
+    kv_dim  = kvh * (d // h)                      # GQA-narrowed K/V width
     weights = p * b
-    acts    = _activation_bytes(model, batch, b)
-    kv      = batch * ctx * d * 2 * nl * b       # cached keys + values per layer
+    acts    = _activation_bytes(model, batch, b)            # forward-only at inference
+    kv      = batch * ctx * kv_dim * 2 * nl * b   # cached keys + values per layer
     return (weights + acts + kv) / 1e9
 
 

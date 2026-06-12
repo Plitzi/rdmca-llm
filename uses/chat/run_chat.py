@@ -118,6 +118,43 @@ def sample_top_p(logits, temperature: float, top_p: float, top_k: int = 0,
     return int(np.random.choice(top_idx, p=top_prob))
 
 
+class IncrementalDecoder:
+    """O(n) streaming decode. A naive streamer re-decodes the WHOLE token list every
+    step (`decode_fn(generated)`), which is O(n²) total work over a generation. This
+    keeps a frozen text PREFIX and only re-decodes a short live TAIL each step, so
+    total work is O(n).
+
+    It returns EXACTLY the text of a full decode (asserted token-by-token in
+    tests) — never a naive `+= decode([tok])`, which corrupts subword/byte-fallback
+    merges and SentencePiece's leading-space handling. The prefix is frozen only at a
+    boundary VERIFIED to reconstruct (`full.endswith(tail_redecode)`); since tokens
+    are only appended at the end, a once-clean left boundary stays clean, and the
+    whole live tail is re-decoded every step so any local merge is always inside the
+    tail, never across the frozen seam. If a split is never clean it simply keeps
+    re-decoding (still correct, just less amortized)."""
+
+    def __init__(self, decode_fn, keep: int = 16):
+        self._decode = decode_fn
+        self._keep   = keep              # tokens kept in the live tail
+        self._toks: list[int] = []
+        self._anchor = 0                 # tail re-decode starts here
+        self._prefix = ""                # verified prefix of decode(all toks)
+
+    def append(self, tok_id: int) -> str:
+        """Add one token; return the full decoded text so far (== decode(all))."""
+        self._toks.append(tok_id)
+        full = self._prefix + self._decode(self._toks[self._anchor:])
+        # Freeze more of the prefix once the live tail is long, but only if the cut
+        # reconstructs exactly — so the frozen text is always a true prefix.
+        if len(self._toks) - self._anchor > 2 * self._keep:
+            new_anchor = len(self._toks) - self._keep
+            new_tail = self._decode(self._toks[new_anchor:])
+            if full.endswith(new_tail):
+                self._prefix = full[: len(full) - len(new_tail)]
+                self._anchor = new_anchor
+        return full
+
+
 def generate(model,
              input_ids: list,
              max_new_tokens: int,
@@ -164,6 +201,9 @@ def generate(model,
     printed = ""
     repeat_run = 0
     boundary_hit = False        # broke at a turn-boundary leak → don't flush past it
+    # O(n) streaming decode: one short tail re-decode per token instead of
+    # re-decoding the whole sequence each step. Identical text, no O(n²) cost.
+    inc = IncrementalDecoder(decode_fn) if decode_fn is not None else None
     t0 = time.perf_counter()
 
     EOS_ID = 3
@@ -183,6 +223,9 @@ def generate(model,
             break
 
         generated.append(next_id)
+        # Decode incrementally ONCE per token (O(n) total); reused by both the
+        # stop-string check and the streamer below.
+        text = inc.append(next_id) if inc is not None else None
 
         if _looping(generated):
             break
@@ -192,8 +235,7 @@ def generate(model,
         # Stop-string check (e.g. role-tag turn-boundary leakage). Needs the
         # decoded text, so it runs on the tokenizer path; we print only up to the
         # boundary (in stream mode) and stop before emitting the leaked new turn.
-        if stop_strings and decode_fn is not None:
-            text = decode_fn(generated)
+        if stop_strings and text is not None:
             cut = agent.first_stop_index(text, stop_strings)
             if cut is not None:
                 if stream:
@@ -203,8 +245,7 @@ def generate(model,
                 break
 
         if stream:
-            if decode_fn is not None:
-                text = decode_fn(generated)         # re-decode (subwords join cleanly)
+            if text is not None:
                 # Emit only up to the safe boundary — hold back a trailing fragment
                 # that could still grow into a role tag (e.g. 'User' → 'User:'), so a
                 # forming turn boundary is never half-printed.
