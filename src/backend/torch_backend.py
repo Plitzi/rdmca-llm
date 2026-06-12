@@ -92,6 +92,14 @@ _ops = SimpleNamespace(
     concatenate=lambda arrays, axis=0: torch.cat(list(arrays), dim=axis),
     outer=torch.outer,
     softmax=lambda x, axis=-1: torch.softmax(x, dim=axis),
+    # Fused scaled-dot-product attention (selects Flash / mem-efficient kernels).
+    # q:[B,H,S,Hd], k/v:[B,Hkv,T,Hd] — enable_gqa handles Hkv<H natively. Uses the
+    # built-in causal mask when `is_causal` (and no explicit additive mask).
+    sdpa=lambda q, k, v, scale, is_causal=False, attn_mask=None:
+        F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, scale=scale,
+            is_causal=(is_causal and attn_mask is None),
+            enable_gqa=(q.shape[1] != k.shape[1])),
     triu=lambda x, k=0: torch.triu(x, diagonal=k),
     argmax=lambda x, axis=-1: torch.argmax(x, dim=axis),
     argmin=lambda x, axis=-1: torch.argmin(x, dim=axis),

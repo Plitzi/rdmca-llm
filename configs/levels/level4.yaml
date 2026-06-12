@@ -26,6 +26,7 @@ model:
   d_model: 512
   n_layers: 12
   n_heads: 8                   # head_dim = 64
+  n_kv_heads: 4                # GQA: KV cache 2× smaller.
   ffn_dim: 2048
   context_len: 2048            # Fibonacci ladder L1→L5: 512, 768, 1280, 2048, 3328.
   vocab_size: 24576

@@ -14,6 +14,11 @@ rich>=13.0                  # training dashboard / console UI
 datasets>=2.18              # HuggingFace dataset streaming (data preparation)
 psutil>=5.9                 # available-memory probe for the level resource guard
 python-dotenv>=1.0          # load .env into the environment (HF_TOKEN, etc.)
+# faiss-cpu>=1.8           # OPT-IN LTSS vector search (HNSW, O(log N)). Enable with
+                            # RDMCA_FAISS=1 at scale (100k+ nodes). Left commented: it
+                            # links its own libomp, which collides with PyTorch on
+                            # macOS (OMP Error #15). LTSS uses brute-force numpy by
+                            # default (sub-ms at dev scale). Install on Linux/CUDA.
 
 # Multimodal (image/audio tokenizers + perception). `soundfile` needs the
 # system libsndfile library.

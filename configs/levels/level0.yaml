@@ -29,6 +29,7 @@ model:
   d_model: 64
   n_layers: 2
   n_heads: 2                   # head_dim = 32
+  n_kv_heads: 1                # GQA/MQA: exercise the grouped-KV path even in smoke
   ffn_dim: 256
   context_len: 64
   vocab_size: 4096

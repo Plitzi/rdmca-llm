@@ -38,6 +38,7 @@ model:
                                # 8-layer spec (~10.5M), so the ladder grows L1<L2.
   n_heads: 4                   # head_dim = d_model/n_heads = 64 (≥64 ⇒ usable attention
                                # resolution + enough RoPE freq pairs; 8 heads gave 32).
+  n_kv_heads: 2                # GQA: 2 KV heads → KV cache 2× smaller (scales with level).
   ffn_dim: 1024                # SwiGLU inner dim (≈4·d_model).
   context_len: 512             # 256 truncated ~63% of TinyStories mid-story; 512 lets
                                # the model see complete short stories + multi-turn chats.

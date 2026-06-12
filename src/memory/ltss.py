@@ -65,7 +65,41 @@ class LTSS:
         self._embeddings: List[np.ndarray] = []
         self._ids:        List[str]        = []
         self._conn: Optional[sqlite3.Connection] = None
+        # Optional FAISS ANN index: search O(N)→O(log N) at scale. Trivial gain at
+        # small N (numpy is already sub-ms), decisive past ~100k nodes — present from
+        # the start so the progression is visible. Falls back to brute-force numpy
+        # otherwise (the index stays None).
+        #
+        # OPT-IN via RDMCA_FAISS=1. faiss-cpu and PyTorch each link their own libomp,
+        # which collides on macOS (OMP Error #15 → possible crash / wrong results).
+        # On Linux/CUDA — where L4-L5 run at the scale where FAISS actually matters —
+        # they share libgomp and coexist fine. So FAISS is off by default (numpy is
+        # plenty for dev-scale stores) and enabled explicitly when deploying at scale.
+        self._faiss = None
+        if os.environ.get("RDMCA_FAISS", "").lower() in ("1", "true", "yes", "on"):
+            try:
+                import faiss
+                self._faiss = faiss
+            except Exception:
+                self._faiss = None
+        self._faiss_index = None
         self._load()
+
+    def _new_faiss_index(self):
+        """A fresh HNSW (inner-product) index, or None if faiss is unavailable.
+        Vectors are L2-normalized on add/search, so inner product == cosine."""
+        if self._faiss is None:
+            return None
+        idx = self._faiss.IndexHNSWFlat(self.emb_dim, 32, self._faiss.METRIC_INNER_PRODUCT)
+        idx.hnsw.efSearch = 64
+        return idx
+
+    def _faiss_add(self, emb: np.ndarray) -> None:
+        if self._faiss_index is None:
+            return
+        v = np.asarray(emb, dtype=np.float32).reshape(1, -1).copy()
+        self._faiss.normalize_L2(v)
+        self._faiss_index.add(v)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -80,20 +114,21 @@ class LTSS:
         self._rebuild_index()
 
     def _rebuild_index(self) -> None:
-        """Load stored ids + embeddings on startup (persistence across restarts).
-        Vectors are searched brute-force in numpy (see search()), which stays
-        under the <10ms target at this scale; swap in FAISS here only if the
-        store grows past ~100k nodes."""
+        """Load stored ids + embeddings on startup (persistence across restarts) and
+        (re)build the FAISS index from them. Search uses FAISS when available, else
+        brute-force numpy — both kept in sync here."""
         rows = self._conn.execute(
             "SELECT id, embedding FROM ltss_nodes ORDER BY created_at"
         ).fetchall()
         self._ids = []
         self._embeddings = []
+        self._faiss_index = self._new_faiss_index()
         for node_id, blob in rows:
             self._ids.append(node_id)
             if blob is not None:
-                self._embeddings.append(
-                    np.frombuffer(blob, dtype=np.float32).copy())
+                emb = np.frombuffer(blob, dtype=np.float32).copy()
+                self._embeddings.append(emb)
+                self._faiss_add(emb)
 
     # ------------------------------------------------------------------
     # CRUD
@@ -115,6 +150,7 @@ class LTSS:
         self._conn.commit()
         self._embeddings.append(emb)
         self._ids.append(node.id)
+        self._faiss_add(emb)
 
     def add_edge(self, src_id: str, dst_id: str,
                  relation: str, weight: float = 1.0) -> None:
@@ -130,11 +166,21 @@ class LTSS:
 
     def search(self, query: np.ndarray, k: int = 5) -> List[Tuple[str, float]]:
         """
-        Return top-k (node_id, cosine_similarity) pairs.
-        Falls back to brute-force numpy if FAISS unavailable.
+        Return top-k (node_id, cosine_similarity) pairs. Uses the FAISS index when
+        available (O(log N)); falls back to brute-force numpy (O(N), exact).
         """
         if not self._embeddings:
             return []
+        # FAISS path — only when the index covers every id (all nodes embedded), so
+        # the returned indices map 1:1 onto self._ids.
+        if (self._faiss_index is not None
+                and self._faiss_index.ntotal == len(self._ids)):
+            q = np.asarray(query, dtype=np.float32).reshape(1, -1).copy()
+            self._faiss.normalize_L2(q)
+            sims, idx = self._faiss_index.search(q, min(k, len(self._ids)))
+            return [(self._ids[i], float(s))
+                    for s, i in zip(sims[0], idx[0]) if 0 <= i < len(self._ids)]
+        # numpy fallback (exact brute force)
         mat = np.stack(self._embeddings, axis=0)   # [N, dim]
         q   = query / (np.linalg.norm(query) + 1e-8)
         mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-8)

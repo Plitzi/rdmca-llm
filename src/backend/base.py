@@ -47,7 +47,7 @@ NN_SURFACE = (
 OPS_SURFACE = (
     "array", "arange", "zeros", "ones", "full", "randn",
     "cos", "sin", "sqrt", "mean", "sum", "concatenate", "outer",
-    "softmax", "sigmoid", "triu", "argmax", "argmin",
+    "softmax", "sdpa", "sigmoid", "triu", "argmax", "argmin",
     "transpose", "astype", "stop_gradient",
     "silu", "relu", "cross_entropy", "bce_with_logits",
     "to_numpy", "from_numpy",

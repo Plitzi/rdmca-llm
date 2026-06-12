@@ -48,7 +48,7 @@ def _make_adapter(model, sector_id: int, rank: int = BEHAVIORAL_RANK):
     from src.model.config import LoRAConfig
     return SectorAdapter(LoRAConfig(
         d_model=model.cfg.d_model, n_layers=len(model.blocks),
-        sector_id=sector_id, rank=rank))
+        sector_id=sector_id, rank=rank, kv_dim=model.cfg.kv_dim))
 
 
 def attach_for_training(model, stage: int, rank: int = BEHAVIORAL_RANK):

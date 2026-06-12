@@ -27,6 +27,7 @@ model:
   n_layers: 8                  # 8 = paper's spec for the d_model=256 tier (~10.5M tied). L1 is
                                # the lighter 6-layer variant (~8.4M), so the ladder grows L1<L2.
   n_heads: 4                   # head_dim = 64 (was 32 with 8 heads)
+  n_kv_heads: 2                # GQA: KV cache 2× smaller.
   ffn_dim: 1024
   context_len: 768             # Fibonacci ladder L1→L5: 512, 768, 1280, 2048, 3328
                                # (cada nivel = suma de los dos anteriores).

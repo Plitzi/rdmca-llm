@@ -104,6 +104,12 @@ _ops = SimpleNamespace(
     concatenate=lambda arrays, axis=0: mx.concatenate(arrays, axis=axis),
     outer=mx.outer,
     softmax=lambda x, axis=-1: mx.softmax(x, axis=axis),
+    # Fused scaled-dot-product attention (MLX "flash" kernel). q:[B,H,S,Hd],
+    # k/v:[B,Hkv,T,Hd] — GQA (Hkv<H) is handled natively. `is_causal` → built-in
+    # causal mask; otherwise `attn_mask` (additive array or None) is used.
+    sdpa=lambda q, k, v, scale, is_causal=False, attn_mask=None:
+        mx.fast.scaled_dot_product_attention(
+            q, k, v, scale=scale, mask=("causal" if is_causal else attn_mask)),
     triu=lambda x, k=0: mx.triu(x, k=k),
     argmax=lambda x, axis=-1: mx.argmax(x, axis=axis),
     argmin=lambda x, axis=-1: mx.argmin(x, axis=axis),

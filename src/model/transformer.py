@@ -94,18 +94,22 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         assert cfg.d_model % cfg.n_heads == 0
-        self.n_heads  = cfg.n_heads
-        self.head_dim = cfg.d_model // cfg.n_heads
+        self.n_heads    = cfg.n_heads
+        self.n_kv_heads = cfg.n_kv_heads or cfg.n_heads     # GQA: KV heads (≤ n_heads)
+        self.head_dim   = cfg.d_model // cfg.n_heads
+        self.kv_dim     = self.n_kv_heads * self.head_dim   # K/V projection width
         # RoPE splits head_dim into half cos / half sin pairs; an odd head_dim would
         # make x2 one element wider than cos/sin and break the rotation broadcast.
         assert self.head_dim % 2 == 0, f"head_dim must be even for RoPE, got {self.head_dim}"
         self.scale    = self.head_dim ** -0.5
 
-        self.q_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
-        self.k_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
-        self.v_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
-        self.o_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
-        self.dropout = nn.Dropout(cfg.dropout)
+        # GQA: Q is full width (n_heads·head_dim = d_model); K/V are narrower
+        # (n_kv_heads·head_dim), so the KV cache shrinks n_heads/n_kv_heads×. The
+        # KV heads are shared across query-head groups by the fused SDPA kernel.
+        self.q_proj = nn.Linear(cfg.d_model, cfg.d_model,  bias=False)
+        self.k_proj = nn.Linear(cfg.d_model, self.kv_dim,  bias=False)
+        self.v_proj = nn.Linear(cfg.d_model, self.kv_dim,  bias=False)
+        self.o_proj = nn.Linear(cfg.d_model, cfg.d_model,  bias=False)
 
         # RoPE tables (numpy host arrays — invisible to the param tree). Their
         # backend-tensor form is built lazily and cached on first forward (L9).
@@ -135,7 +139,7 @@ class CausalSelfAttention(nn.Module):
         to the next step. For single-token decode (S==1) no causal mask is needed —
         the new query legitimately attends to every cached key plus itself."""
         Bsz, S, D = x.shape
-        H, Hd = self.n_heads, self.head_dim
+        H, Hkv, Hd = self.n_heads, self.n_kv_heads, self.head_dim
 
         # Route once per block (per-token top-k over experts); reuse for q,k,v,o.
         route = self._sector_route(x) if self._sector_route is not None else None
@@ -143,14 +147,15 @@ class CausalSelfAttention(nn.Module):
         q = self.q_proj(x)
         k = self.k_proj(x)
         v = self.v_proj(x)
-        # Inject active LoRA sector deltas (zero-output at init).
+        # Inject active LoRA sector deltas (zero-output at init). K/V deltas are
+        # GQA-width (kv_dim), matching the narrower K/V projections above.
         if self._sector_delta is not None:
             q = q + self._sector_delta(self.layer_idx, "q", x, route)
             k = k + self._sector_delta(self.layer_idx, "k", x, route)
             v = v + self._sector_delta(self.layer_idx, "v", x, route)
-        q = q.reshape(Bsz, S, H, Hd)
-        k = k.reshape(Bsz, S, H, Hd)
-        v = v.reshape(Bsz, S, H, Hd)
+        q = q.reshape(Bsz, S, H,   Hd)
+        k = k.reshape(Bsz, S, Hkv, Hd)        # GQA: fewer KV heads than query heads
+        v = v.reshape(Bsz, S, Hkv, Hd)
 
         # Apply RoPE at absolute positions [pos_offset, pos_offset+S). Convert the
         # host tables to backend tensors ONCE (cached) and slice per pass — re-
@@ -165,36 +170,28 @@ class CausalSelfAttention(nn.Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        # [B, H, S, Hd]
-        q = ops.transpose(q, (0, 2, 1, 3))
-        k = ops.transpose(k, (0, 2, 1, 3))
+        q = ops.transpose(q, (0, 2, 1, 3))    # [B, H,   S, Hd]
+        k = ops.transpose(k, (0, 2, 1, 3))    # [B, Hkv, S, Hd]
         v = ops.transpose(v, (0, 2, 1, 3))
 
         # KV cache: prepend the past keys/values (seq axis = 2) so the new queries
-        # attend over the whole history without reprocessing it.
+        # attend over the whole history without reprocessing it. Cache holds Hkv
+        # heads — that is the GQA cache-size saving (n_heads/n_kv_heads× smaller).
         if cache is not None:
             past_k, past_v = cache
             k = ops.concatenate([past_k, k], axis=2)
             v = ops.concatenate([past_v, v], axis=2)
         new_kv = (k, v)
 
-        # Scaled dot-product attention. [B, H, S, T] (T = pos_offset + S with cache).
-        attn = (q @ ops.transpose(k, (0, 1, 3, 2))) * self.scale
-
-        # Causal mask only when processing >1 query position without a cache
-        # (training / prefill): query i may see keys ≤ i. Single-token decode needs
-        # no mask — the lone query attends to all cached keys and itself.
-        if cache is None and S > 1:
-            causal = ops.astype(ops.triu(ops.full((S, S), -1e9), k=1), attn.dtype)
-            attn = attn + causal[None, None, :, :]
-
-        if mask is not None:
-            attn = attn + mask
-
-        attn = ops.astype(ops.softmax(ops.astype(attn, ops.float32), axis=-1), x.dtype)
-        attn = self.dropout(attn)
-
-        out = ops.transpose((attn @ v), (0, 2, 1, 3)).reshape(Bsz, S, D)
+        # Fused scaled-dot-product attention (Flash / mem-efficient kernel). The
+        # kernel broadcasts the Hkv KV heads across the H query heads (GQA) and
+        # applies the causal mask internally. Causal only for multi-token prefill /
+        # training (cache is None, S>1); single-token decode attends to all cached
+        # keys, so no mask. Attention-weight dropout is dropped (residual + FFN
+        # dropout remain) — modern small LLMs train fine with 0 attention dropout.
+        out = ops.sdpa(q, k, v, scale=self.scale,
+                       is_causal=(cache is None and S > 1), attn_mask=mask)
+        out = ops.transpose(out, (0, 2, 1, 3)).reshape(Bsz, S, D)
         proj = self.o_proj(out)
         if self._sector_delta is not None:
             proj = proj + self._sector_delta(self.layer_idx, "o", out, route)
@@ -462,7 +459,7 @@ class RDMCAFoundational(nn.Module):
             self.attach_sectors({})
         adapter = SectorAdapter(LoRAConfig(
             d_model=self.cfg.d_model, n_layers=len(self.blocks),
-            sector_id=sector_id, rank=rank))
+            sector_id=sector_id, rank=rank, kv_dim=self.cfg.kv_dim))
         self.sectors[sector_id] = adapter
         # Re-register so the new adapter's params are tracked by the backend.
         B.engine.register_submodules(self, "_sector_store", list(self.sectors.values()))

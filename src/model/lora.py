@@ -76,11 +76,12 @@ class SectorAdapter(nn.Module):
         self.rank      = cfg.rank
         # One LoRA adapter per (layer, projection) pair. ModuleList of
         # ModuleDict so params register under both backends.
+        kv_dim = cfg.kv_dim or cfg.d_model        # GQA-narrowed K/V width (= d_model for MHA)
         self.adapters = nn.ModuleList([
             nn.ModuleDict({
                 "q": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
-                "k": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
-                "v": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
+                "k": LoRALinear(cfg.d_model, kv_dim,      cfg.rank, cfg.alpha),
+                "v": LoRALinear(cfg.d_model, kv_dim,      cfg.rank, cfg.alpha),
                 "o": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
             })
             for _ in range(cfg.n_layers)
@@ -100,12 +101,14 @@ class SectorAdapter(nn.Module):
         return self.rank
 
 
-def build_all_sectors(d_model: int, n_layers: int) -> Dict[int, SectorAdapter]:
-    """Instantiate all seven sector adapters."""
+def build_all_sectors(d_model: int, n_layers: int,
+                      kv_dim: int | None = None) -> Dict[int, SectorAdapter]:
+    """Instantiate all seven sector adapters. `kv_dim` (GQA K/V width) defaults to
+    d_model (plain MHA); pass model.cfg.kv_dim for a GQA model."""
     sectors = {}
     for sid, meta in SECTORS.items():
         cfg = LoRAConfig(d_model=d_model, n_layers=n_layers,
-                         sector_id=sid, rank=meta["rank"])
+                         sector_id=sid, rank=meta["rank"], kv_dim=kv_dim)
         sectors[sid] = SectorAdapter(cfg)
     return sectors
 
