@@ -1419,6 +1419,143 @@ def gen_definitions(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
     yield from _cycle_records(records, n, seed)
 
 
+# ─────────────────────────── grammar (compositional) ────────────────────────
+# A base must learn HOW LANGUAGE WORKS — grammar RULES + word USAGE — not just
+# vocabulary (user: "se le enseñan muchas palabras, pero no cómo funcionan las reglas
+# gramaticales, cómo se conforma una oración… el significado, cómo/dónde se usan,
+# adjetivos…"). Each rule is STATED and then APPLIED across many words (and asked as a
+# completion Q&A), so the model learns the RULE — and generalizes it to words it didn't
+# see the rule on — rather than memorizing fixed sentences. Morphology uses CURATED
+# correct forms (never naive +s/+ed, which would teach 'runned'/'gooses').
+# regular +s plural nouns ONLY (no -x/-s/-ch/-sh that need -es, no irregulars) — these are
+# pluralized with a bare +s in the rule examples, so they must be genuinely regular.
+_G_NOUNS_CONS = ["car", "dog", "cat", "tree", "book", "house", "friend", "school",
+                 "table", "garden", "river", "ball", "door", "cup"]
+_G_NOUNS_VOWEL = ["apple", "egg", "orange", "umbrella", "elephant", "island",
+                  "apron", "insect", "owl", "envelope"]
+_G_VERBS = ["run", "eat", "sleep", "play", "read", "walk", "help", "jump", "give", "learn"]
+_G_ADJS = ["big", "small", "happy", "fast", "kind", "brave", "cold", "quiet", "heavy", "red"]
+_PLURAL_IRREG = {"child": "children", "foot": "feet", "mouse": "mice", "man": "men",
+                 "tooth": "teeth", "person": "people", "woman": "women", "goose": "geese"}
+_PAST_REG = {"walk": "walked", "play": "played", "help": "helped", "jump": "jumped",
+             "learn": "learned", "open": "opened", "clean": "cleaned", "call": "called",
+             "look": "looked", "want": "wanted"}
+_PAST_IRREG = {"go": "went", "run": "ran", "eat": "ate", "sleep": "slept", "give": "gave",
+               "see": "saw", "make": "made", "come": "came", "take": "took", "find": "found"}
+_COMPARATIVE = {"big": ("bigger", "biggest"), "small": ("smaller", "smallest"),
+                "fast": ("faster", "fastest"), "slow": ("slower", "slowest"),
+                "hot": ("hotter", "hottest"), "cold": ("colder", "coldest"),
+                "kind": ("kinder", "kindest"), "happy": ("happier", "happiest"),
+                "sad": ("sadder", "saddest"), "tall": ("taller", "tallest")}
+# adjective synonyms only, so the example frame "A {noun} can be {w} (or {s})" is grammatical
+_SYNONYMS = {"happy": "glad", "big": "large", "small": "little", "fast": "quick",
+             "sad": "unhappy", "scared": "afraid", "cold": "chilly", "kind": "nice"}
+_G_ANIMATE = ["dog", "cat", "friend", "bird", "boy", "girl", "child", "man", "woman",
+              "teacher"]   # animate subjects for action sentences (avoid "the ball learns")
+# regular-plural animates ONLY — for the subject-verb-agreement form, which pluralizes the
+# subject with +s ("Two dogs run."); excludes irregulars (man→men, child→children, woman→women).
+_G_ANIMATE_REG = ["dog", "cat", "friend", "bird", "boy", "girl", "teacher"]
+_ANTONYMS = {"happy": "sad", "big": "small", "hot": "cold", "fast": "slow", "up": "down",
+             "open": "closed", "day": "night", "full": "empty", "new": "old", "near": "far"}
+# verbs that take a direct object → safe Subject-Verb-Object sentences
+_TRANSITIVE = {"eat": ["food", "an apple", "lunch"], "read": ["a book", "a story"],
+               "help": ["a friend", "her mom"], "give": ["a gift", "the ball"],
+               "build": ["a house", "a tower"], "see": ["a bird", "the moon"]}
+
+
+def gen_grammar(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
+    """Compositional grammar + word-usage for stage 1 (language). Teaches RULES applied
+    across many words (parts of speech, a/an, plurals, verb tense, comparatives, adjective
+    placement, sentence composition, subject-verb agreement) and word MEANING-IN-USE
+    (synonyms/antonyms + example sentences) — as statements and completion Q&A so the
+    model learns to APPLY the rule, not memorize sentences. All forms are grammatical.
+
+    SCALES with `level` (identical-structure principle): the part-of-speech / adjective /
+    sentence vocabulary is drawn from the tiered dictionary bank up to `level` UNIONED with
+    the curated function words, so as higher levels enrich the word bank (richer/scientific
+    vocab, toward a university-graduate base) the SAME rules are taught over a wider
+    vocabulary — no new generator needed. Morphology stays curated (correct forms)."""
+    rng = random.Random(seed)
+    bank: Dict[str, tuple] = {}
+    for t in _DICT_TIERS[:max(level, 1)]:
+        bank.update(t)
+    pos_nouns = list({*_G_NOUNS_CONS, *_G_NOUNS_VOWEL,
+                      *[w for w, (p, _) in bank.items() if p == "n"]})
+    pos_verbs = list({*_G_VERBS, *[w for w, (p, _) in bank.items() if p == "v"]})
+    pos_adjs  = list({*_G_ADJS, *[w for w, (p, _) in bank.items() if p == "a"]})
+    for _ in range(n):
+        k = rng.randint(0, 9)
+        if k == 0:                                # parts of speech (vocab scales with level)
+            pos, word = rng.choice([("noun", rng.choice(pos_nouns)),
+                                    ("verb", rng.choice(pos_verbs)),
+                                    ("adjective", rng.choice(pos_adjs))])
+            desc = {"noun": "names a person, place, or thing",
+                    "verb": "is an action you can do",
+                    "adjective": "describes a noun"}[pos]
+            art = "an" if pos[0] in "aeiou" else "a"          # an adjective / a noun / a verb
+            yield {"text": f"{art.capitalize()} {pos} {desc}. '{word}' is {art} {pos}.",
+                   "lang": "en"}
+        elif k == 1:                              # a / an (article + vowel rule)
+            if rng.random() < 0.5:
+                w = rng.choice(_G_NOUNS_VOWEL); art = "an"
+            else:
+                w = rng.choice(_G_NOUNS_CONS); art = "a"
+            if rng.random() < 0.5:                # never shows the wrong form, only the rule
+                yield {"text": f"User: Which article goes before '{w}', 'a' or 'an'?\n"
+                               f"Assistant: {art} — use 'an' before a vowel sound. {art} {w}.",
+                       "lang": "en"}
+            else:
+                yield {"text": f"We say '{art} {w}'.", "lang": "en"}
+        elif k == 2:                              # plurals (regular + irregular)
+            if rng.random() < 0.7:
+                w = rng.choice(_G_NOUNS_CONS)
+                yield {"text": (f"User: What is the plural of '{w}'?\nAssistant: {w}s. "
+                                f"Add 's' to make a plural.") if rng.random() < 0.5
+                               else f"One {w}, two {w}s.", "lang": "en"}
+            else:
+                sg, pl = rng.choice(list(_PLURAL_IRREG.items()))
+                yield {"text": f"Some plurals change: one {sg}, two {pl}.", "lang": "en"}
+        elif k == 3:                              # verb tense (regular + irregular)
+            if rng.random() < 0.6:
+                v, p = rng.choice(list(_PAST_REG.items()))
+                rule = " Add 'ed' for the past tense."
+            else:
+                v, p = rng.choice(list(_PAST_IRREG.items()))
+                rule = " Some verbs change in the past tense."
+            yield {"text": (f"User: What is the past tense of '{v}'?\nAssistant: {p}.{rule}")
+                           if rng.random() < 0.5
+                           else f"Today I {v}. Yesterday I {p}.", "lang": "en"}
+        elif k == 4:                              # comparatives
+            a, (comp, sup) = rng.choice(list(_COMPARATIVE.items()))
+            yield {"text": f"{a}, {comp}, {sup}. Use '{comp}' to compare two things.",
+                   "lang": "en"}
+        elif k == 5:                              # adjective placement (vocab scales w/ level)
+            adj, noun = rng.choice(pos_adjs), rng.choice(_G_NOUNS_CONS)
+            yield {"text": f"The {adj} {noun}. An adjective comes before the noun it "
+                           f"describes.", "lang": "en"}
+        elif k == 6:                              # sentence composition (SV, labeled)
+            noun, verb = rng.choice(_G_ANIMATE), rng.choice(_G_VERBS)
+            yield {"text": f"The {noun} {verb}s. A sentence needs a subject and a verb — "
+                           f"here the subject is '{noun}' and the verb is '{verb}s'.",
+                   "lang": "en"}
+        elif k == 7:                              # subject-verb agreement (regular plurals)
+            noun, verb = rng.choice(_G_ANIMATE_REG), rng.choice(_G_VERBS)
+            yield {"text": f"One {noun} {verb}s. Two {noun}s {verb}.", "lang": "en"}
+        elif k == 8:                              # SVO sentence (transitive only → grammatical)
+            verb, objs = rng.choice(list(_TRANSITIVE.items()))
+            noun, obj = rng.choice(_G_ANIMATE), rng.choice(objs)
+            yield {"text": f"The {noun} {verb}s {obj}.", "lang": "en"}
+        else:                                     # word meaning in use (synonym/antonym)
+            if rng.random() < 0.5 and _SYNONYMS:
+                w, s = rng.choice(list(_SYNONYMS.items()))
+                noun = rng.choice(_G_ANIMATE)
+                yield {"text": f"'{w}' means about the same as '{s}'. "
+                               f"A {noun} can be {w} or {s}.", "lang": "en"}
+            else:
+                w, a = rng.choice(list(_ANTONYMS.items()))
+                yield {"text": f"The opposite of '{w}' is '{a}'.", "lang": "en"}
+
+
 # ──────────────────────────── dispatcher ────────────────────────────────────
 def stream_source(key: str, *, langs: List[str], n_tokens: int,
                   arithmetic_level: int = 1, limit_mb: Optional[int] = None,
@@ -1442,6 +1579,8 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
                       gen_arithmetic(approx_examples, arithmetic_level), approx_examples)
     if key in ("definitions", "dictionary"):    # graded word meanings (statements + Q&A)
         return gen_definitions(approx_examples, level=arithmetic_level)
+    if key == "grammar":                        # grammar RULES + word usage (compositional)
+        return gen_grammar(approx_examples, level=arithmetic_level)
     if key in ("basic_chat", "smalltalk"):      # clean coherent everyday conversation
         return gen_basic_chat(approx_examples)
     if key == "analogies":                      # TEMPORARY synthetic (no real corpus yet)

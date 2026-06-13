@@ -33,6 +33,9 @@ def _strkeys(o):
 
 
 def test_every_level_resolves_to_its_frozen_snapshot():
+    """Each level's EFFECTIVE (base-merged) config must match the frozen fixture — a guard
+    against ACCIDENTAL drift while trimming/refactoring level yamls. Regenerate the fixture
+    (tests/fixtures/level_configs_snapshot.json from load_config) on an INTENTIONAL change."""
     for lvl, expected in SNAP.items():
         got = load_config(level_config_path(int(lvl)))
         assert _strkeys(got) == _strkeys(expected), f"level {lvl} merged config drifted"

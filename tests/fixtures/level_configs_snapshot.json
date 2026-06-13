@@ -207,6 +207,7 @@
             "basic_chat": 6,
             "definitions": 6,
             "dialogue": 70,
+            "grammar": 10,
             "instruct": 50,
             "simple_wikipedia": 25,
             "tinystories": 30
@@ -215,6 +216,7 @@
             "basic_chat": 1.5,
             "definitions": 1.5,
             "dialogue": 3.0,
+            "grammar": 2.0,
             "instruct": 3.0,
             "simple_wikipedia": 1.5
           },
@@ -224,7 +226,8 @@
             "instruct",
             "simple_wikipedia",
             "definitions",
-            "basic_chat"
+            "basic_chat",
+            "grammar"
           ]
         },
         "data_dir": "data/level1/stage1",

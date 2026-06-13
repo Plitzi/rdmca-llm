@@ -102,13 +102,18 @@ curriculum:
       #                      how-are-you / identity / simple facts / politeness) — the
       #                      high-frequency conversation a base must nail to feel
       #                      fluent; low-entropy, so it also pulls perplexity DOWN.
-      sources: [tinystories, dialogue, instruct, simple_wikipedia, definitions, basic_chat]
+      #   grammar          → grammar RULES + word USAGE (parts of speech, a/an, plurals,
+      #                      verb tense, comparatives, adjective placement, sentence
+      #                      composition, synonyms/antonyms) — so the base learns HOW
+      #                      language works (rules applied across many words), not just
+      #                      vocabulary. Compositional → generalizes, doesn't memorize.
+      sources: [tinystories, dialogue, instruct, simple_wikipedia, definitions, basic_chat, grammar]
       # PER-SOURCE token budgets (M) — the lever for the MIX. A tiny preschool base
       # learns to CONVERSE first, so conversation/instruction/clean-core lead and
       # narrative is supporting (not half the corpus). Curated clean sources get a
       # controlled, meaningful share here (cycled), then are oversampled at train time.
       source_budgets_m: {dialogue: 70, tinystories: 30, instruct: 50,
-                         simple_wikipedia: 25, definitions: 6, basic_chat: 6}
+                         simple_wikipedia: 25, definitions: 6, basic_chat: 6, grammar: 10}
       # Train-time oversampling on top of the written mix. Spend gradient where loss
       # actually lives: dialogue/instruct are the HARD, high-entropy registers (measured
       # masked val ppl ~24 / ~72) and carry the conversational goal, so they lead. The
@@ -116,7 +121,7 @@ curriculum:
       # heavy oversampling there just re-memorizes them and starves the hard sources, so
       # they keep only a light presence as a fluency/grounding floor.
       source_weights: {dialogue: 3.0, instruct: 3.0, simple_wikipedia: 1.5,
-                       basic_chat: 1.5, definitions: 1.5}
+                       basic_chat: 1.5, definitions: 1.5, grammar: 2.0}
       filter:
         # Flesch-Kincaid grade ceiling, applied to PROSE sources (tinystories,
         # simple_wikipedia). MEASURED: grade≤4 kept only 0.6% of Simple Wikipedia,
