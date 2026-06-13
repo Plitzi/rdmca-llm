@@ -149,7 +149,12 @@ def train_spm(combined_input: str, prefix: str,
     user_symbols = tokenizer_symbols(langs)
     params = dict(
         input=combined_input, model_prefix=prefix, vocab_size=vocab_size,
-        character_coverage=0.9995, model_type="bpe",
+        # character_coverage=1.0 + byte_fallback: EVERY character is representable —
+        # rare/unseen symbols (and anything in future messier corpora) decompose into
+        # UTF-8 byte tokens instead of collapsing to <unk>. No <unk> entropy spikes,
+        # and the model degrades gracefully on out-of-distribution input rather than
+        # going blind. (The 256 byte pieces cost a sliver of vocab; well worth it.)
+        character_coverage=1.0, model_type="bpe", byte_fallback=True,
         pad_id=0, unk_id=1, bos_id=2, eos_id=3,
         user_defined_symbols=user_symbols,
         num_threads=num_threads,

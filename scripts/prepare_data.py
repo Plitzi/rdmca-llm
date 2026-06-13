@@ -44,6 +44,8 @@ from typing import Iterator, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.data.textnorm import clean_record_text   # ingestion normalization + garbage gate
+
 # HuggingFace token — optional but raises rate limits significantly.
 # Supplied via the HF_TOKEN environment variable (set it in .env — see
 # .env.example). Never prompted: missing just means slower downloads.
@@ -325,8 +327,10 @@ def write_jsonl(records: Iterator[dict], out_path: Path,
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             for rec in records:
-                text = rec.get("text", "")
-                if not text.strip():
+                # Single normalization + garbage gate for EVERY source (current and
+                # future): consistent surface form in, clearly-broken lines dropped.
+                text = clean_record_text(rec.get("text", ""))
+                if not text:
                     continue
                 row = json.dumps({"text": text, "lang": rec.get("lang", "en")},
                                  ensure_ascii=False) + "\n"

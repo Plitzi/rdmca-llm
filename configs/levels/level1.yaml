@@ -123,10 +123,14 @@ curriculum:
       # controlled, meaningful share here (cycled), then are oversampled at train time.
       source_budgets_m: {dialogue: 70, tinystories: 30, instruct: 50,
                          simple_wikipedia: 25, definitions: 6, basic_chat: 6}
-      # Train-time oversampling on top of the written mix — push the CLEAN, sensible
-      # registers (answer-the-question, everyday chat, word meanings) over narrative.
-      source_weights: {dialogue: 2.0, instruct: 3.0, definitions: 3.0,
-                       basic_chat: 4.0, simple_wikipedia: 1.5}
+      # Train-time oversampling on top of the written mix. Spend gradient where loss
+      # actually lives: dialogue/instruct are the HARD, high-entropy registers (measured
+      # masked val ppl ~24 / ~72) and carry the conversational goal, so they lead. The
+      # templated anchors (basic_chat, definitions) are already ~solved (ppl ~1.2) —
+      # heavy oversampling there just re-memorizes them and starves the hard sources, so
+      # they keep only a light presence as a fluency/grounding floor.
+      source_weights: {dialogue: 3.0, instruct: 3.0, simple_wikipedia: 1.5,
+                       basic_chat: 1.5, definitions: 1.5}
       filter:
         # Flesch-Kincaid grade ceiling, applied to PROSE sources (tinystories,
         # simple_wikipedia). MEASURED: grade≤4 kept only 0.6% of Simple Wikipedia,
