@@ -419,6 +419,55 @@ def _apply_quant(model, quant) -> None:
     B.engine.quantize(model, bits=bits)
 
 
+def resolve_stage_checkpoint(stage_dir: Path):
+    """Pick the checkpoint inference should use for a stage, ALWAYS preferring the BEST
+    (lowest val-perplexity) over the latest training step. Returns (path|None, label,
+    meta) — meta is the tracked JSON (best.json / stage_complete.json / latest.json) so
+    the caller can report the model's quality. Priority:
+
+      1. best.npz   — the running/ratcheted best (the gate's moving bar), meta=best.json;
+      2. final.npz  — the graduated model (= the best at graduation);
+      3. latest.json — only when no eval-best exists yet (training just started).
+    """
+    import json as _json
+
+    def _read(p: Path):
+        try:
+            return _json.loads(p.read_text()) if p.exists() else None
+        except (OSError, ValueError):
+            return None
+
+    best_npz, final_npz = stage_dir / "best.npz", stage_dir / "final.npz"
+    if best_npz.exists():
+        return best_npz, "best", _read(stage_dir / "best.json")
+    if final_npz.exists():
+        return final_npz, "final (graduated)", (_read(stage_dir / "best.json")
+                                                or _read(stage_dir / "stage_complete.json"))
+    state = _read(stage_dir / "latest.json")
+    if state and state.get("checkpoint") and Path(state["checkpoint"]).exists():
+        return Path(state["checkpoint"]), "latest (in-progress)", state
+    return None, "none", None
+
+
+def describe_checkpoint_meta(meta: dict | None) -> str:
+    """One-line quality summary of a checkpoint's tracked metadata (best val ppl, step,
+    tokens, graduation status) for the load banner — "" when nothing is known."""
+    if not meta:
+        return ""
+    bits = []
+    score = meta.get("score", meta.get("gate_score"))
+    if isinstance(score, (int, float)):
+        bits.append(f"val ppl {score:.2f}")
+    if meta.get("step") is not None:
+        bits.append(f"step {int(meta['step']):,}")
+    toks = meta.get("tokens_seen", meta.get("tokens"))
+    if isinstance(toks, (int, float)):
+        bits.append(f"{toks/1e6:.1f}M tok")
+    if meta.get("met_bar") is not None:
+        bits.append(f"graduated: met_bar={meta['met_bar']}")
+    return " · ".join(bits)
+
+
 def load_model(args):
     cfg = load_config(args.config)
     require_backend(cfg)              # selects the configured backend (mlx | torch)
@@ -480,32 +529,16 @@ def load_model(args):
             B.engine.set_eval(model)
             return model, mcfg
 
-    # Find checkpoint — priority: final.npz > latest.json
+    # Find checkpoint. ALWAYS prefer the BEST (lowest-val-perplexity) checkpoint, and
+    # report which one + its tracked quality so the user knows exactly what's running.
     ckpt_path: Path | None = None
+    label, meta = "explicit", None
     if args.checkpoint:
         ckpt_path = Path(args.checkpoint)
     elif args.stage:
-        import json as _json
         level     = cfg.get("level")                # NB: level 0 is valid → use `is None`
         root      = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
-        stage_dir = root / f"stage{args.stage}"
-
-        def _resolve_json(p: Path) -> Path | None:
-            """Read a JSON state file and return the .npz path it points to."""
-            state = _json.loads(p.read_text())
-            target = Path(state["checkpoint"]) if "checkpoint" in state else None
-            return target if (target and target.exists()) else None
-
-        # 1. Prefer final.npz (gate passed)
-        final = stage_dir / "final.npz"
-        if final.exists():
-            ckpt_path = final
-
-        # 2. Fall back to latest checkpoint from latest.json
-        if ckpt_path is None:
-            latest_json = stage_dir / "latest.json"
-            if latest_json.exists():
-                ckpt_path = _resolve_json(latest_json)
+        ckpt_path, label, meta = resolve_stage_checkpoint(root / f"stage{args.stage}")
 
     if ckpt_path is None or not ckpt_path.exists():
         stage_hint = args.stage or 1
@@ -514,7 +547,10 @@ def load_model(args):
         print(f"  Or test now:  python uses/chat/run_chat.py --dummy")
         sys.exit(1)
 
-    print(f"  Loading checkpoint: {ckpt_path}")
+    print(f"  Loading checkpoint [{label}]: {ckpt_path}")
+    desc = describe_checkpoint_meta(meta)
+    if desc:
+        print(f"    └ tracking: {desc}")
     B.engine.load_weights(model, str(ckpt_path))
     set_model_precision(model, precision)    # cast to configured inference precision
     _apply_quant(model, getattr(args, "quant", "none"))   # optional 4-/8-bit
