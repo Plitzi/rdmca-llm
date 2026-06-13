@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root on pa
 
 import src.backend as backend
 from src import agent
+from uses.common.interaction import SessionInput, InterruptGuard
 from src.memory.experience_log import log_experience, detect_correction, load_experiences
 from src.config import require_backend, get_precision, load_config
 from src.modalities.text import BOS_ID
@@ -169,7 +170,8 @@ def generate(model,
              top_k: int = 0,
              rep_penalty: float = 1.0,
              rep_window: int = 128,
-             suppress_think: bool = False) -> tuple[list[int], float]:
+             suppress_think: bool = False,
+             should_stop=None) -> tuple[list[int], float]:
     """
     Returns (generated_ids, tokens_per_second).
 
@@ -210,6 +212,11 @@ def generate(model,
     EOS_ID = 3
 
     for _ in range(max_new_tokens):
+        # User abort (Ctrl-C via InterruptGuard): stop NOW, return what we have so
+        # far so the partial answer is kept and the session continues.
+        if should_stop is not None and should_stop():
+            break
+
         next_id = sample_top_p(next_logits, temperature, top_p, top_k=top_k,
                                recent_ids=generated[-rep_window:] if rep_penalty != 1.0 else None,
                                rep_penalty=rep_penalty)
@@ -292,7 +299,7 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
                       think_prefix: str = "", answer_prefix: str = "",
                       max_seconds: float | None = None,
                       answer_stop: tuple[str, ...] | None = agent.ANSWER_STOP_STRINGS,
-                      top_k: int = 0, rep_penalty: float = 1.0,
+                      top_k: int = 0, rep_penalty: float = 1.0, should_stop=None,
                       ) -> tuple[str, list[int], float]:
     """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
 
@@ -310,7 +317,7 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
     sgen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
                 context_len=context_len, stream=stream,
                 decode_fn=(decode_fn if stream else None), max_seconds=max_seconds,
-                top_k=top_k, rep_penalty=rep_penalty)
+                top_k=top_k, rep_penalty=rep_penalty, should_stop=should_stop)
 
     def _label(prefix):
         if stream and prefix:
@@ -627,12 +634,24 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         except Exception as e:
             print(f"  Context slots: off ({e}).")
 
+    # Background stdin reader: lets you TYPE WHILE the model generates — those lines
+    # QUEUE and are handled on the next turn (so you can correct a reply going wrong),
+    # and Ctrl-C during a reply ABORTS just that reply (see InterruptGuard below).
+    session = SessionInput()
+    print("  [tip] type while it answers to queue a follow-up · Ctrl-C to stop a reply\n")
+
     while True:
         try:
-            prompt = input(f"\n[{lang.upper()}] You: ").strip()
-        except (EOFError, KeyboardInterrupt):
+            queued = session.pending()                  # messages typed during the last reply
+            hint   = f" ({queued} queued)" if queued else ""
+            line = session.next_message(f"\n[{lang.upper()}]{hint} You: ")
+        except KeyboardInterrupt:
             print("\nBye.")
             break
+        if line is None:                                # EOF (Ctrl-D / piped input done)
+            print("\nBye.")
+            break
+        prompt = line.strip()
 
         if not prompt:
             continue
@@ -817,15 +836,18 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         stream_on = stream and tok_ready
         think_text = ""
         try:
-            think_text, gen_ids, tps = generate_thinking(
-                model, list(gen_history), tokenizer=tokenizer, lang=lang,
-                max_new_tokens=max_tokens, think_budget=budget,
-                temperature=temperature, top_p=top_p,
-                vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
-                stream=stream_on, max_seconds=deadline,
-                think_prefix="\n💭 thinking: ", answer_prefix="\nRDMCA: ",
-                top_k=top_k, rep_penalty=rep_penalty,
-            )
+            with InterruptGuard() as guard:              # Ctrl-C aborts THIS reply only
+                think_text, gen_ids, tps = generate_thinking(
+                    model, list(gen_history), tokenizer=tokenizer, lang=lang,
+                    max_new_tokens=max_tokens, think_budget=budget,
+                    temperature=temperature, top_p=top_p,
+                    vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
+                    stream=stream_on, max_seconds=deadline,
+                    think_prefix="\n💭 thinking: ", answer_prefix="\nRDMCA: ",
+                    top_k=top_k, rep_penalty=rep_penalty, should_stop=guard.stopped,
+                )
+            if guard.was_interrupted:
+                print("\n  [stopped]")
         except Exception as e:
             print(f"\n  [error] {e}")
             continue

@@ -333,7 +333,9 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
               skill_md: Optional[str] = None, max_steps: int = 6,
               think: str = "off", max_context_chars: int = 8000,
               system: Optional[str] = None, memory: str = "",
-              context_mgr=None, encode=None, decode=None) -> dict:
+              context_mgr=None, encode=None, decode=None,
+              should_stop: Optional[Callable[[], bool]] = None,
+              get_steering: Optional[Callable[[], List[str]]] = None) -> dict:
     """Drive the tool loop — multiple think→act→observe rounds until the model
     answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
     wraps the model; it may return a `<think>…</think>` scratchpad before the
@@ -363,6 +365,20 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
     use_slots = context_mgr is not None and encode is not None and decode is not None
     header_budget = len(encode(header)) if use_slots else 0
 
+    # Mid-run STEERING: messages the user types while the agent works (queued via
+    # get_steering) are injected as the latest User turn, so they can CORRECT an
+    # agent heading the wrong way — Claude Code-style. The prompt ends with the
+    # correction + a fresh "Assistant:" cue, so the next step answers it.
+    steering: list = []
+
+    def _apply_steering(prompt: str) -> str:
+        if not steering:
+            return prompt
+        prompt = prompt.rstrip()
+        if prompt.endswith("Assistant:"):                  # drop the stale cue
+            prompt = prompt[:-len("Assistant:")].rstrip()
+        return prompt + "".join(f"\nUser: {m}" for m in steering) + "\nAssistant:"
+
     def _block(st: dict) -> str:
         return (f"\nAction: {json.dumps(st['action'], ensure_ascii=False)}"
                 f"\nObservation: {json.dumps(st['observation'], ensure_ascii=False)}"
@@ -381,7 +397,11 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
         return header + "".join(reversed(kept))
 
     for _ in range(max_steps):
-        out = generate_fn(_transcript())
+        if should_stop is not None and should_stop():       # user aborted the run
+            return {"final": None, "steps": steps, "thinking": None, "note": "interrupted"}
+        if get_steering is not None:                         # pull queued corrections
+            steering.extend(m for m in get_steering() if m.strip())
+        out = generate_fn(_apply_steering(_transcript()))
         thinking, answer = split_thinking(out)
         action = parse_action(answer)
         if action is None:                          # no tool call → final answer

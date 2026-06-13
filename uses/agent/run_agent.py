@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO))
 
 from uses.chat import run_chat as chat        # reuse model loading + generation
 from src import agent
+from uses.common.interaction import SessionInput, InterruptGuard
 from src.config import resolve_config_path
 from uses.agent.tools.current_time import TOOL as CURRENT_TIME
 from uses.agent.tools.todo import TOOL as TODO
@@ -47,7 +48,7 @@ def load_skill(name: str) -> str | None:
 
 def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float,
                      max_new_tokens: int, think: str = "off", stream: bool = False,
-                     max_seconds: float | None = None):
+                     max_seconds: float | None = None, should_stop=None):
     """Wrap the model as generate_fn(prompt_text) -> response_text.
 
     Returns the model's full turn (a <think>…</think> scratchpad, if any, plus
@@ -68,7 +69,7 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
                 max_new_tokens=max_new_tokens, think_budget=budget,
                 temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
                 context_len=mcfg.context_len, stream=stream_on, max_seconds=max_seconds,
-                think_prefix="\n  💭 ", answer_prefix="\n  ▸ ")
+                think_prefix="\n  💭 ", answer_prefix="\n  ▸ ", should_stop=should_stop)
         else:
             if stream_on:
                 sys.stdout.write("\n  ▸ "); sys.stdout.flush()
@@ -76,7 +77,7 @@ def make_generate_fn(model, mcfg, tokenizer, *, temperature: float, top_p: float
                 model, list(ids), max_new_tokens=max_new_tokens,
                 temperature=temperature, top_p=top_p, vocab_size=mcfg.vocab_size,
                 context_len=mcfg.context_len, stream=stream_on, max_seconds=max_seconds,
-                decode_fn=(tokenizer.decode if stream_on else None))
+                decode_fn=(tokenizer.decode if stream_on else None), should_stop=should_stop)
             think_text = ""
         if not (tokenizer.ready and gen_ids):
             return ""
@@ -132,10 +133,15 @@ def main() -> None:
     from src.modalities.text import TextTokenizer
     tokenizer = TextTokenizer()
 
+    # Ctrl-C aborts the run; typing while it works queues a correction that steers
+    # the next step (Claude Code-style). The reader is harmless when non-interactive.
+    guard   = InterruptGuard()
+    session = SessionInput()
     generate_fn = make_generate_fn(model, mcfg, tokenizer, temperature=args.temp,
                                    top_p=args.topp, max_new_tokens=args.maxtok,
                                    think=args.think, stream=args.stream,
-                                   max_seconds=(args.max_seconds or None))
+                                   max_seconds=(args.max_seconds or None),
+                                   should_stop=guard.stopped)
     skill_md = load_skill(args.skill)
     print(f"  Tools: {[t.name for t in TOOLS]} | Skill: {args.skill if skill_md else '—'}"
           f" | Thinking: {args.think} | Stream: {'on' if args.stream else 'off'}"
@@ -192,10 +198,15 @@ def main() -> None:
         except Exception as e:
             print(f"  Context slots: off ({e}).")
 
-    result = agent.run_agent(generate_fn, TOOLS, args.query,
-                             skill_md=skill_md, max_steps=args.max_steps,
-                             think=args.think, system=sys_persona, memory=memory,
-                             context_mgr=context_mgr, encode=enc, decode=dec)
+    with guard:                                          # Ctrl-C → abort the run
+        result = agent.run_agent(generate_fn, TOOLS, args.query,
+                                 skill_md=skill_md, max_steps=args.max_steps,
+                                 think=args.think, system=sys_persona, memory=memory,
+                                 context_mgr=context_mgr, encode=enc, decode=dec,
+                                 should_stop=guard.stopped,
+                                 get_steering=session.drain_pending)
+    if guard.was_interrupted:
+        print("\n  [stopped]")
 
     # Structured recap of the rounds. Thinking is only re-printed here when it
     # was NOT already streamed live (avoids duplicating the scratchpad).
