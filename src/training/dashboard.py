@@ -128,16 +128,6 @@ class TrainingDashboard:
             except OSError as e:
                 self._console.print(f"[yellow][log] could not open {log_path}: {e}[/yellow]")
 
-    def _metric_row(self, kind, *, step="", tokens_m="", loss="", ppl="", lr="", tps="",
-                    grad_norm="", val_ppl="", best_val_ppl="", passed="") -> None:
-        if self._metrics is None:
-            return
-        try:
-            self._metrics.write(f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
-                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed}\n")
-            self._metrics.flush()
-        except (OSError, ValueError):
-            self._metrics = None
         # Model geometry — shown next to Speed so the dev sees WHY the tok/s is what it
         # is: throughput is compute-bound, and per-token compute ≈ 6·N (fwd+bwd, the
         # Kaplan/Chinchilla rule) scales with depth. Doubling layers ⇒ ~proportionally
@@ -266,6 +256,18 @@ class TrainingDashboard:
 
     def set_checkpoint(self, step: int) -> None:
         self.last_ckpt_step = step
+
+    def _metric_row(self, kind, *, step="", tokens_m="", loss="", ppl="", lr="", tps="",
+                    grad_norm="", val_ppl="", best_val_ppl="", passed="") -> None:
+        """Append one machine-readable row to metrics.csv (if any) — see plot_metrics.py."""
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.write(f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
+                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed}\n")
+            self._metrics.flush()
+        except (OSError, ValueError):
+            self._metrics = None
 
     def _record(self, msg: str) -> None:
         """Append a timestamped line to the persistent training log file (if any),
