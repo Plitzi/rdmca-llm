@@ -147,12 +147,17 @@ image/audio to discrete tokens in the matching range of the unified vocabulary. 
 backend with `--backend mlx|torch` (default: auto). Note their weight checkpoints are not
 cross-backend — train and load on the same backend.
 
-```bash
-# Image (CIFAR-10 by default; or --images-dir with your own images)
-python scripts/train_image_tokenizer.py --steps 1500
+The same `train_tokenizer.py` trains them — after the text tokenizer it trains image
+then audio, **skipping any modality whose data is absent** (text is the only required
+tokenizer):
 
-# Audio (dir of .wav; with no data it generates a synthetic smoke corpus)
-python scripts/train_audio_tokenizer.py --audio-dir path/to/wavs
+```bash
+# Text only (image/audio skipped automatically when no data is given)
+python scripts/train_tokenizer.py
+
+# Add image (your own images, or a HF dataset) and/or audio (dir of .wav)
+python scripts/train_tokenizer.py --images-dir path/ --audio-dir path/to/wavs
+python scripts/train_tokenizer.py --image-dataset uoft-cs/cifar10 --audio-synthetic
 ```
 
 Output: `dist/tokenizer/image_vqvae.npz` and `dist/tokenizer/audio_vqvae.npz`.

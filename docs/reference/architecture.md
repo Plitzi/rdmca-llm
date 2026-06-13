@@ -163,9 +163,8 @@ rdmca-llm/
 │   └── training/dashboard.py   Training dashboard (rich)
 ├── scripts/
 │   ├── prepare_data.py         Download corpus per language + per-stage datasets
-│   ├── train_tokenizer.py      SentencePiece + unified vocab
-│   ├── train_image_tokenizer.py  Train the image VQ-VAE
-│   ├── train_audio_tokenizer.py  Train the audio VQ-VAE
+│   ├── train_tokenizer.py      SentencePiece + unified vocab; also trains the
+│   │                           image/audio VQ-VAEs (skipped when no data)
 │   └── prepare_multimodal.py   Interleaved image/audio-text grounding data
 ├── configs/
 │   └── levels/                 level1..5 (preescolar..universidad) — size + data + resources

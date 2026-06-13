@@ -9,7 +9,7 @@ vocabulary (offset applied by the perception layer / caller).
 Pipeline:  image → encoder (conv ↓) → vector-quantize → indices  (encode)
            indices → codebook → decoder (conv ↑) → image          (decode)
 
-Train with: python scripts/train_image_tokenizer.py
+Train with: python scripts/train_tokenizer.py --images-dir path/ (or --image-dataset)
 
 Backend-neutral: convs use the channels-first (NCHW) convention via the backend
 facade. NOTE: VQ-VAE weight checkpoints are not cross-backend (conv weight

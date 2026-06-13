@@ -61,7 +61,7 @@ class MultimodalPerception:
         if self.image is None:
             raise RuntimeError(
                 "Image tokenizer not trained. Run: "
-                "python scripts/train_image_tokenizer.py")
+                "python scripts/train_tokenizer.py --images-dir path/ (or --image-dataset)")
         return self.image
 
     def _audio(self) -> AudioVQVAE:
@@ -70,7 +70,7 @@ class MultimodalPerception:
         if self.audio is None:
             raise RuntimeError(
                 "Audio tokenizer not trained. Run: "
-                "python scripts/train_audio_tokenizer.py")
+                "python scripts/train_tokenizer.py --audio-dir path/")
         return self.audio
 
     def _wrap(self, start_tok: Optional[int], body: List[int]) -> List[int]:

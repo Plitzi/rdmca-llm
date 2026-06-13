@@ -59,7 +59,8 @@ def load_mood_head(d_model: int, level=None, stage=None, checkpoint=None):
     """Load the trained mood head that sits beside a stage's checkpoint
     (`<ckpt_dir>/mood_head.npz`), or None if there is none. Shared by EVERY
     inference surface (chat, agent, future serving) so mood behaves identically
-    everywhere — train it with scripts/train_mood_head.py."""
+    everywhere — it is trained automatically at each cognitive stage's completion
+    by train_stage (via `train_mood_head` below)."""
     from pathlib import Path
     if checkpoint:
         path = Path(checkpoint).parent / "mood_head.npz"
@@ -130,6 +131,150 @@ def mood_probs(model, tokenizer, head: MoodHead, text: str, seq_len: int = 128):
     h = _pooled_states(model, tokenizer, [text], seq_len=seq_len)
     p = head.probs(h)[0]                              # [n_moods]
     return [float(B.engine.item(p[i])) for i in range(len(MOODS))]
+
+
+# ── Training data + end-to-end training ───────────────────────────────────────
+# Used by the normal training pipeline (train_stage._on_stage_complete). The mood
+# head is a cheap probe over the frozen core, so it is trained at each cognitive
+# stage's completion — no separate manual step (or script) needed.
+
+def _neutral_examples(level, stage, n: int, log=print) -> list:
+    """Sample NEUTRAL (text, "neutral") pairs from the already-prepared factual /
+    narrative files for the stage — factual/narrative carries no active mood."""
+    import json
+    from pathlib import Path
+    base = Path("data") / f"level{level}" / f"stage{stage}"
+    out: list = []
+    for stem in ("instruct", "simple_wikipedia", "tinystories", "basic_chat", "definitions"):
+        f = base / f"{stem}.jsonl"
+        if not f.exists():
+            continue
+        with open(f) as fh:
+            for line in fh:
+                try:
+                    t = json.loads(line).get("text", "")
+                except json.JSONDecodeError:
+                    continue
+                # Train on the RAW user-side utterance (what the chat classifies at
+                # inference): pull the `User:` line out of transcripts, prose as-is.
+                if "User:" in t:
+                    seg = t.split("User:", 1)[1].split("\nAssistant:", 1)[0].strip()
+                else:
+                    seg = t.strip()
+                if seg:
+                    out.append((seg[:300], "neutral"))
+                if len(out) >= n:
+                    return out
+    return out
+
+
+def _emotional_examples(per_mood: int, log=print) -> list:
+    """Stream EmpatheticDialogues, map each dialogue's emotion onto a mood, and take
+    the speaker's RAW first utterance (matching what the chat classifies). Best-effort:
+    returns [] if the dataset can't be loaded (offline) instead of raising."""
+    from collections import Counter
+    try:
+        from datasets import load_dataset
+    except Exception as e:                       # datasets not installed
+        log(f"  [mood] datasets unavailable: {e}")
+        return []
+    out, counts = [], Counter()
+    targets = ("happy", "sad", "angry", "afraid", "surprised", "caring")
+    try:
+        ds = load_dataset("Estwld/empathetic_dialogues_llm", split="train", streaming=True)
+    except Exception as e:
+        log(f"  [mood] EmpatheticDialogues unavailable: {e}")
+        return out
+    for ex in ds:
+        emo = (ex.get("emotion") or "").strip().lower()
+        mood = emotion_to_mood(emo)
+        if mood == "neutral" or counts[mood] >= per_mood:
+            continue
+        turns = [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]
+        utt = next((c for r, c in turns if c and (r or "").lower() in
+                    ("user", "human", "speaker", "0")), None)
+        if not utt and turns:
+            utt = turns[0][1]
+        if utt and utt.strip():
+            counts[mood] += 1
+            out.append((utt.strip()[:300], mood))
+        if all(counts[m] >= per_mood for m in targets):
+            break
+    return out
+
+
+def build_mood_examples(level, stage, per_mood: int = 300, neutral: int = 1500,
+                        seed: int = 0, log=print) -> list:
+    """Assemble the labeled (text, mood) set: emotional turns (EmpatheticDialogues)
+    + neutral turns (local factual/narrative files), shuffled. May be empty/small
+    when offline — callers decide whether that is enough to train."""
+    import random
+    data = _emotional_examples(per_mood, log=log) + _neutral_examples(level, stage, neutral, log=log)
+    random.Random(seed).shuffle(data)
+    return data
+
+
+def train_mood_head(model, tokenizer, ckpt_dir, *, level, stage, per_mood: int = 300,
+                    neutral: int = 1500, epochs: int = 8, batch: int = 32,
+                    lr: float = 2e-3, seed: int = 0, precision: str = "fp32",
+                    min_examples: int = 50, log=print):
+    """Train the MoodHead on the frozen core and save it to `<ckpt_dir>/mood_head.npz`.
+
+    Cheap (head-only over precomputed frozen features). Returns a metrics dict on
+    success, or None when there is too little labeled data (e.g. EmpatheticDialogues
+    is offline) — in which case nothing is written and the caller carries on. This is
+    the single implementation behind both the training pipeline and the CLI script."""
+    import numpy as np
+    from collections import Counter
+    from pathlib import Path
+
+    data = build_mood_examples(level, stage, per_mood=per_mood, neutral=neutral,
+                               seed=seed, log=log)
+    if len(data) < min_examples:
+        log(f"  [mood] only {len(data)} labeled examples (< {min_examples}) — skipping "
+            "(need HF EmpatheticDialogues; offline?)")
+        return None
+    log(f"  [mood] {len(data)} examples · per-mood: {dict(Counter(m for _, m in data))}")
+
+    # Precompute frozen pooled features ONCE (the LM does not change), then train the
+    # small head directly on them — fast, no model forward pass in the training loop.
+    feats  = np.array(_pooled_states(model, tokenizer, [t for t, _ in data]))   # [N, d]
+    labels = np.array([MOOD_INDEX[m] for _, m in data], dtype=np.float32)
+    n_val  = max(8, len(data) // 10)
+    Xv, yv = feats[:n_val], labels[:n_val]
+    Xt, yt = feats[n_val:], labels[n_val:]
+
+    head = MoodHead(model.cfg.d_model if hasattr(model, "cfg") else feats.shape[1])
+    B.engine.set_precision(head, precision)
+    opt  = B.engine.make_optimizer(head, lr, 0.0)
+
+    def _acc(X, y) -> float:
+        preds = np.array(ops.argmax(head(ops.array(X)), axis=-1))
+        return float((preds == y).mean()) if len(y) else 1.0
+
+    idx = np.arange(len(Xt))
+    last = {}
+    for ep in range(epochs):
+        np.random.shuffle(idx)
+        losses = []
+        for i in range(0, len(idx), batch):
+            j = idx[i:i + batch]
+            Hb, yb = ops.array(Xt[j]), ops.array(yt[j])
+            def loss_fn(hd, H=Hb, Y=yb):
+                return mood_loss(hd(H), Y)
+            loss, grads = B.engine.value_and_grad(head, loss_fn)(head)
+            B.engine.optimizer_step(opt, head, grads)
+            losses.append(float(B.engine.item(loss)))
+        last = {"loss": float(np.mean(losses)) if losses else 0.0,
+                "train_acc": _acc(Xt, yt), "val_acc": _acc(Xv, yv)}
+        log(f"  [mood] epoch {ep+1}/{epochs}: loss={last['loss']:.3f} "
+            f"train_acc={last['train_acc']:.2f} val_acc={last['val_acc']:.2f}")
+
+    out = Path(ckpt_dir) / "mood_head.npz"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    B.engine.save_weights(head, str(out))
+    log(f"  [mood] saved → {out}")
+    return {"examples": len(data), "path": str(out), **last}
 
 
 def _pick_mood(state) -> Tuple[str, float]:

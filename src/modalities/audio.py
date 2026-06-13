@@ -9,7 +9,7 @@ vocabulary (offset applied by the perception layer / caller).
 This keeps the project self-contained and torch-free. EnCodec (Meta) is a valid
 drop-in alternative if you prefer a pretrained codec — see docs/GUIDE.md.
 
-Train with: python scripts/train_audio_tokenizer.py
+Train with: python scripts/train_tokenizer.py --audio-dir path/to/wavs
 """
 from __future__ import annotations
 import json

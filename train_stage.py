@@ -427,10 +427,30 @@ def _on_stage_complete(model, stage: int, cfg: dict, root: Path, ckpt_dir: Path,
         if adapter is not None:
             print(f"  Behavioral sector saved: {sector_io.save_sector(adapter, root, stage)}")
         return
+    # Cognitive stage finished: train the conversation mood head on this checkpoint's
+    # core so the stage is chat-ready with mood tracking — no separate script needed.
+    _maybe_train_mood_head(model, stage, cfg, ckpt_dir, precision)
     if stage == last_cognitive_stage(cfg):
         if stage == BCF_STAGE:
             train_bcf_head(model, ckpt_dir, precision)
         freeze_model(model, root / "foundational")
+
+
+def _maybe_train_mood_head(model, stage: int, cfg: dict, ckpt_dir: Path,
+                           precision: str) -> None:
+    """Train + save the conversation mood head beside this stage's checkpoint. Best-
+    effort and OFF the critical path: gated by `training.mood_head` (default on) and
+    silently skipped if the labeled data is unavailable (e.g. offline) — it must never
+    fail a finished stage."""
+    if not cfg.get("training", {}).get("mood_head", True):
+        return
+    try:
+        from src.model.mood import train_mood_head as _train_mood
+        from src.modalities.text import TextTokenizer
+        _train_mood(model, TextTokenizer(), ckpt_dir,
+                    level=cfg.get("level"), stage=stage, precision=precision)
+    except Exception as e:
+        print(f"  [mood] skipped ({type(e).__name__}: {e})")
 
 
 # ---------------------------------------------------------------------------
