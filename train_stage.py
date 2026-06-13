@@ -306,8 +306,16 @@ def validation_perplexity(model, val_batches) -> float:
 # Proxy perplexity gates per stage until task-specific benchmarks
 # (BLiMP / ARC / GSM8K / COPA / BCF probes) are wired in. Overridable via
 # cfg["gate"]["max_perplexity"][stage].
-DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0,
-                    6: 36.0, 7: 35.0}   # 6 = memory, 7 = ethics/BCF
+#
+# Calibrated for COMPLETION-MASKED validation perplexity (validation_perplexity now
+# masks like training — measures the assistant tokens the model actually produces, not
+# the user/system context). The previous values (50/45/…) were from the UNMASKED era
+# and were ~3-7× looser, so a trained base passed them almost immediately — useless as a
+# quality bar. These are ambitious "genuinely good" targets; early_stop is the backstop
+# (ships the best model when training plateaus before the bar), so a too-tight threshold
+# never soft-locks a stage — it just defers completion to the plateau.
+DEFAULT_GATE_PPL = {1: 12.0, 2: 12.0, 3: 10.0, 4: 10.0, 5: 10.0,
+                    6: 10.0, 7: 10.0}   # 6 = memory, 7 = ethics/BCF
 
 
 def evaluate_gate(model, stage: int,
@@ -932,6 +940,10 @@ Examples:
                         help="Plain scrolling logs instead of the live dashboard (selectable/"
                              "copyable, no flicker). A full train.log is written to the stage's "
                              "checkpoint dir either way (also via RDMCA_PLAIN_LOGS=1).")
+    parser.add_argument("--skip-gate", dest="skip_gate", action="store_true",
+                        help="Manually disable the graduation gate for this run (the gate is "
+                             "ENFORCED from level 1 by default — quality first). Lets a stage "
+                             "complete at its token budget without meeting the perplexity bar.")
     args = parser.parse_args()
 
     from src.config import resolve_config_path
@@ -943,6 +955,10 @@ Examples:
     # larger level fit on the same hardware.
     if args.precision:
         cfg.setdefault("training", {})["precision"] = args.precision
+    # Manual gate override (CLI wins): force-disable the graduation gate for this run.
+    if args.skip_gate:
+        cfg["skip_gate"] = True
+        print("  [gate] manually disabled for this run (--skip-gate)")
     level = cfg.get("level", "?")
     active_backend = require_backend(cfg)   # selects mlx|torch (falls back if unavailable)
     print(f"  Level: {level} ({cfg.get('name','custom')}) | "

@@ -40,6 +40,23 @@ def test_empty_corpus_does_not_hang(tmp_path):
         loader.next_batch()
 
 
+# ── 1b. clean conversational providers parse into quality transcripts ────────
+def test_dailydialog_extractor_builds_quality_transcript():
+    """The DailyDialog corpus entry must turn alternating utterances into a clean
+    User:/Assistant: exchange that passes the conversational-quality gate — and be
+    exception-free on a missing/renamed schema (so a bad mirror is just empty)."""
+    from src.data.textnorm import conversational_quality_ok
+    extractors = {name: fn for name, fn in g._DIALOGUE_CORPORA["en"]}
+    assert "roskoN/dailydialog" in extractors
+    dd = extractors["roskoN/dailydialog"]
+    turns = dd({"utterances": ["Hi there!", "Hello! How are you?", "Good, thanks."]})
+    assert turns == [(0, "Hi there!"), (1, "Hello! How are you?"), (0, "Good, thanks.")]
+    text = g._format_dialogue(turns)
+    assert text.startswith("User: Hi there!\nAssistant: Hello!")
+    assert conversational_quality_ok(text)
+    assert dd({}) == [] and dd({"dialog": []}) == []          # schema-miss safe, no raise
+
+
 # ── 2. synthetic CoT closes its <think> block and gives an answer ────────────
 def test_gen_cot_closes_think_and_answers():
     for rec in itertools.islice(g.gen_cot(200, seed=7), 200):

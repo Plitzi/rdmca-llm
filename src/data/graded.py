@@ -713,6 +713,13 @@ _DIALOGUE_CORPORA: Dict[str, List[tuple]] = {
         # Provides the NEUTRAL register that keeps "hi" → "hi!" likely (vs apologising).
         ("allenai/soda",
          lambda ex: list(zip(ex.get("speakers") or [], ex.get("dialogue") or []))),
+        # DailyDialog: short, clean, HUMAN everyday two-party conversations (the canonical
+        # small-talk corpus) — exactly L1's target register. Parquet mirror; utterances
+        # alternate speakers, so tag them A/B by position. Extractor is exception-free so
+        # a schema mismatch just yields no turns; a missing dataset is skipped upstream.
+        ("roskoN/dailydialog",
+         lambda ex: [(i % 2, u) for i, u in enumerate(ex.get("utterances")
+                                                       or ex.get("dialog") or [])]),
     ],
 }
 
@@ -955,6 +962,20 @@ def stream_instruct(langs: List[str], limit_mb: Optional[int] = None,
                 yield rec
     except Exception as e:
         print(f"    [instruct/dolly] {e}")
+    # No Robots (HuggingFaceH4): 10K PRISTINE human-written instruction→response pairs.
+    # Small but the cleanest 'answer exactly what was asked' register there is — high
+    # value per token for a base whose #1 job is to converse. First user→assistant turn
+    # is taken (the quality gate caps length downstream). Fault-tolerant like the rest.
+    try:
+        for ex in load_dataset("HuggingFaceH4/no_robots", split="train", streaming=True):
+            msgs = ex.get("messages") or []
+            user = next((m.get("content", "") for m in msgs if m.get("role") == "user"), "")
+            asst = next((m.get("content", "") for m in msgs if m.get("role") == "assistant"), "")
+            rec = _emit(user, "", asst)
+            if rec:
+                yield rec
+    except Exception as e:
+        print(f"    [instruct/no_robots] {e}")
 
 
 def stream_simple_wikipedia(limit_mb: Optional[int] = None) -> Iterator[dict]:

@@ -85,7 +85,11 @@ resources:
   est_infer_mem_gb: 0.2        # ≈ inference memory.
   min_ram_gb: 3                # informational minimum to run comfortably.
 
-skip_gate: true                # no graduation gate at the basic level.
+# Graduation gate ENFORCED from level 1: quality/performance is the priority from the
+# very first level — a stage graduates only when it hits the quality bar (masked val
+# perplexity below the per-stage threshold), or ships its best model when training
+# plateaus (early_stop). Skip it manually only when needed with `--skip-gate`.
+skip_gate: false
 
 # ── Curriculum — which cognitive stages are active and their graded data. ────
 # A stage runs only if `entry_level` ≤ this level. Data complexity is graded per
