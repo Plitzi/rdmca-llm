@@ -84,10 +84,17 @@ class TrainingDashboard:
                  n_layers: int = 0,
                  d_model: int = 0,
                  plain: bool = False,
-                 log_path=None):
+                 log_path=None,
+                 loss_ce_weight: float = 1.0):
         self.stage           = stage
         self.n_tokens_target = n_tokens_target
         self.stage_name      = STAGE_NAMES.get(stage, f"Stage {stage}")
+        # The training `loss` is a COMPOSITE: the MRL head mean (1 CE-unit) plus
+        # `mtp_loss_weight` per MTP head. exp(composite) wildly OVERSTATES perplexity
+        # (e.g. exp(12)=184K at init, when the true per-token PP ≈ exp(9)=vocab size).
+        # Dividing by the CE-unit weight before exp() gives a FAITHFUL per-token PP.
+        # (The authoritative PP is still the gate's eval_ce; this is the live trend.)
+        self._loss_ce_weight = max(float(loss_ce_weight), 1e-6)
         # plain=True (or RDMCA_PLAIN_LOGS): no live/animated panel — emit ordinary
         # scrolling terminal lines instead. The live dashboard repaints its region
         # several times a second, which (a) drops older lines out of the fixed log
@@ -191,7 +198,7 @@ class TrainingDashboard:
         # echo there, but still record it to the file so the file has the full curve.
         if (self._plain or self._flog) and step != self._plain_last:
             self._plain_last = step
-            ppl = math.exp(min(loss, 20)) if loss > 0 else float("nan")
+            ppl = math.exp(min(loss / self._loss_ce_weight, 20)) if loss > 0 else float("nan")
             gn  = f" | gnorm={self._grad_norm:.2f}" if self._grad_norm is not None else ""
             line = (f"[step {step:>7,}] {tokens_seen/1e6:8.1f}M tok | loss={loss:.4f} "
                     f"| ppl~{ppl:6.2f} | lr={lr:.2e} | {tps:6.0f} tok/s "
@@ -301,9 +308,12 @@ class TrainingDashboard:
             if n >= 1_000_000:     return f"{n/1e6:.1f}M"
             return f"{n/1e3:.0f}K"
 
-        # Train perplexity proxy (exp of the loss) and best-loss-so-far.
+        # Train perplexity proxy and best-loss-so-far. Divide the COMPOSITE loss by
+        # its CE-unit weight first (see _loss_ce_weight) so this is a faithful
+        # per-token PP, not exp(MRL+MTP+aux) which overstates it badly.
+        ppl_loss = self._loss / self._loss_ce_weight
         try:
-            ppl = math.exp(self._loss) if self._loss < 30 else float("inf")
+            ppl = math.exp(ppl_loss) if ppl_loss < 30 else float("inf")
         except (OverflowError, ValueError):
             ppl = float("inf")
         best = "" if self._best_loss == float("inf") else f" · best {self._best_loss:.4f}"
@@ -317,7 +327,7 @@ class TrainingDashboard:
         stats.add_row("Loss",       f"{self._loss:.4f}  {arr}  "
                                     f"[dim]{_sparkline(loss_vals)}[/dim]")
         stats.add_row("Loss (avg)", f"{avg_loss:.4f}  [dim](last 20{best})[/dim]")
-        stats.add_row("Perplexity", f"{ppl:.1f}  [dim]~exp(loss)[/dim]")
+        stats.add_row("Perplexity", f"{ppl:.1f}  [dim]per-token est.[/dim]")
         stats.add_row("LR",         f"{self._lr:.2e}")
         stats.add_row("Speed",      f"{self._tps/1000:.1f} K tok/s  "
                                     f"[dim](avg {avg_tps/1000:.1f} K)[/dim]")

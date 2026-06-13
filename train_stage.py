@@ -647,6 +647,13 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
         hparams_extra={"rehearsal_fraction": getattr(data_loader, "replay_fraction", 0.0),
                        "early_stop_patience": patience, "early_stop_min_delta": min_delta})
 
+    # The dashboard's per-token perplexity divides the COMPOSITE loss by its CE-unit
+    # weight: the MRL head mean is 1 CE-unit, each MTP head adds `mtp_loss_weight`.
+    # Without this, exp(loss) reports a wildly inflated PP (e.g. 184K at init).
+    _n_mtp = int(getattr(model_cfg, "n_mtp_heads", 0) or 0)
+    _mtp_w = float(getattr(model_cfg, "mtp_loss_weight", 0.0) or 0.0)
+    loss_ce_weight = 1.0 + _n_mtp * _mtp_w
+
     dash = TrainingDashboard(stage, n_tokens_target,
                              resume_step=start_step,
                              resume_tokens=tokens_seen,
@@ -654,7 +661,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                              n_layers=model.cfg.n_layers,
                              d_model=model.cfg.d_model,
                              plain=plain,
-                             log_path=ckpt_dir / "train.log")
+                             log_path=ckpt_dir / "train.log",
+                             loss_ce_weight=loss_ce_weight)
 
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
