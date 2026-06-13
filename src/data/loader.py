@@ -24,6 +24,11 @@ from src.modalities.text import BOS_ID, EOS_ID
 _TURN_RE = re.compile(r"^(User|Assistant|System|Tools|Action|Observation):")
 _RESPONSE_ROLES = {"Assistant", "Action"}
 
+# Sentinel emitted (in place of real token ids) for cache-known records during a
+# --resume fast-skip: it is never a real id (ids are ≥ 0), so the loader can detect
+# and flush any partial carry-over it lands in, keeping the resumed stream exact.
+_SKIP_FILL = -1
+
 
 def _split_turns(text: str) -> Optional[List[Tuple[str, str]]]:
     """Split a transcript into [(role, block), …] when conversational (first line
@@ -95,6 +100,14 @@ class TextDataset:
         # small corpus toward an oversized token target.
         self.passes       = 0
         self.epoch_tokens: Optional[int] = None
+        # --resume fast-forward support. `_len_cache` maps a file name → the token
+        # LENGTH of each record (in read order), filled as records are encoded during
+        # training and persisted with the checkpoint. When `_skip_mode` is on (set by
+        # DataLoader.skip), a record whose length is cached is returned as dummy ids of
+        # that length: the batch boundaries — hence the exact downstream stream
+        # position — are reproduced WITHOUT paying the (expensive) BPE tokenization.
+        self._skip_mode = False
+        self._len_cache: Dict[str, List[int]] = {}
         self._files     = self._find_files()
         if not self._files:
             raise FileNotFoundError(
@@ -117,6 +130,8 @@ class TextDataset:
         """Yield parsed records from ONE file, in file order. JSONL rows are dicts;
         TXT lines become {"text": line}. A record may carry pre-tokenized multimodal
         ids under "tokens" (unified vocab) instead of "text"."""
+        stem = path.name
+        idx = 0                                  # counts YIELDED records (stable key)
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -124,11 +139,17 @@ class TextDataset:
                     continue
                 if path.suffix == ".jsonl":
                     try:
-                        yield json.loads(line)
+                        rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(rec, dict):
+                        continue
                 else:
-                    yield {"text": line}
+                    rec = {"text": line}
+                # (file, record#) — the key the length-cache uses to fast-skip on resume.
+                rec["__cache"] = (stem, idx)
+                idx += 1
+                yield rec
 
     def _iter_records(self) -> Iterator[dict]:
         """Yield records from all files, INTERLEAVED across sources.
@@ -188,6 +209,50 @@ class TextDataset:
         yield from buf
 
     def _encode_record(self, rec: dict) -> Tuple[List[int], List[int]]:
+        """Tokenize one record, with a fast-skip shortcut. During a --resume fast-
+        forward (`_skip_mode`) the token VALUES are discarded, so for a cache-known
+        record we return dummy ids of the cached LENGTH — that reproduces the exact
+        batch boundaries (and thus the downstream stream position) without the BPE
+        cost. Misses and normal training fall through to a real encode, whose length
+        is recorded so a later resume can skip it cheaply."""
+        ref = rec.get("__cache")
+        if ref is not None and getattr(self, "_skip_mode", False):
+            arr = self._len_cache.get(ref[0])
+            if arr is not None and ref[1] < len(arr) and arr[ref[1]] >= 0:
+                L = int(arr[ref[1]])              # ≥ 0 = a known length (0 is a valid
+                return [_SKIP_FILL] * L, [0] * L  # empty record); < 0 = not cached → miss
+        t_ids, m_ids = self._encode_record_live(rec)
+        if ref is not None:
+            self._record_len(ref[0], ref[1], len(t_ids))
+        return t_ids, m_ids
+
+    def _record_len(self, stem: str, idx: int, length: int) -> None:
+        """Remember that record `idx` of file `stem` produced `length` tokens. The
+        cache is keyed by the record's position in FILE order, but records are drawn
+        SHUFFLED, so the slot can be far ahead of what's filled — gaps are padded with
+        -1 (= "not cached yet"), which `_encode_record` treats as a miss (real encode).
+        A genuinely empty record stores 0, a valid known length."""
+        arr = self._len_cache.get(stem)
+        if arr is None:
+            arr = []
+            self._len_cache[stem] = arr
+        if idx == len(arr):
+            arr.append(length)
+        elif idx < len(arr):
+            arr[idx] = length
+        else:                                    # shuffled draw landed past the fill point
+            arr.extend([-1] * (idx - len(arr)))
+            arr.append(length)
+
+    def len_cache_arrays(self) -> Dict[str, np.ndarray]:
+        """Per-file token-length arrays gathered so far (for persistence)."""
+        return {stem: np.asarray(v, dtype=np.int32) for stem, v in self._len_cache.items()}
+
+    def load_len_cache(self, arrays: Dict[str, np.ndarray]) -> None:
+        for stem, a in arrays.items():
+            self._len_cache[stem] = [int(x) for x in a]
+
+    def _encode_record_live(self, rec: dict) -> Tuple[List[int], List[int]]:
         """Return parallel (token_ids, loss_mask) for one record — mask=1 trains the
         token, 0 ignores it in the loss. Pre-tokenized multimodal and prose train on
         EVERY token. Conversational transcripts train ONLY the assistant/action turns
@@ -295,6 +360,7 @@ class DataLoader:
                  replay_fraction: float = 0.0, seed: int = 1234):
         replay = replay or []
         self._ds       = dataset
+        self._replay_datasets = replay
         self._iter     = dataset.batches()
         self.tokens_per_batch = dataset.batch_size * dataset.seq_len
         self._replay_iters = [d.batches() for d in replay]
@@ -306,6 +372,8 @@ class DataLoader:
         self._replay_weights = [self._corpus_bytes(d) for d in replay] or None
         self._replay_fraction = float(replay_fraction) if self._replay_iters else 0.0
         self._rng = random.Random(seed)
+        self._has_skip_index = False    # a length index was loaded → skip() can fast-path
+        self._pushback: Optional[np.ndarray] = None   # first clean batch after a fast-skip
 
     @staticmethod
     def _corpus_bytes(ds: TextDataset) -> float:
@@ -317,6 +385,9 @@ class DataLoader:
             return 1.0
 
     def next_batch(self) -> np.ndarray:
+        if self._pushback is not None:        # hand back the clean batch a fast-skip held
+            b, self._pushback = self._pushback, None
+            return b
         if self._replay_iters and self._rng.random() < self._replay_fraction:
             it = self._rng.choices(self._replay_iters, weights=self._replay_weights, k=1)[0]
             return next(it)
@@ -329,15 +400,109 @@ class DataLoader:
         are fully seeded, replaying the same number of batches reproduces the exact
         stream position (same primary/replay interleaving). Returns how many were
         actually skipped (< n_batches only if the stream ended, which is rare for the
-        cycling corpus). Cost is one-time re-tokenization of the skipped span."""
+        cycling corpus).
+
+        When a token-length index has been loaded (`load_skip_index`, written at every
+        checkpoint), the skipped span is reproduced from cached record lengths instead
+        of re-tokenizing it — turning a multi-minute fast-forward into seconds. Since a
+        resume only ever skips data the interrupted run already consumed (= already
+        cached), hits are ~100%; any miss falls back to a real encode (still correct).
+
+        The fast path emits placeholder ids whose only meaning is their COUNT, so the
+        final batch holds a partial carry-over of placeholders. We then read forward in
+        live mode, discarding placeholder-tainted batches and HANDING BACK the first
+        clean one (via `_pushback`), so the resumed stream is bit-exact from the very
+        next call. The cost is over-skipping < 1 batch of real data — negligible."""
+        self._set_skip_mode(True)
         skipped = 0
-        for _ in range(max(0, int(n_batches))):
-            try:
-                self.next_batch()
-            except StopIteration:
-                break
-            skipped += 1
+        try:
+            for _ in range(max(0, int(n_batches))):
+                try:
+                    self.next_batch()
+                except StopIteration:
+                    break
+                skipped += 1
+        finally:
+            self._set_skip_mode(False)
+        # Flush the placeholder carry-over so no resumed batch contains sentinels.
+        if self._has_skip_index and skipped:
+            while True:
+                try:
+                    b = self.next_batch()
+                except StopIteration:
+                    break
+                if not bool((b == _SKIP_FILL).any()):
+                    self._pushback = b        # clean → return it on the next call
+                    break
         return skipped
+
+    def _set_skip_mode(self, on: bool) -> None:
+        self._ds._skip_mode = on
+        for d in self._replay_datasets:
+            d._skip_mode = on
+
+    # ── resume skip index (per-record token lengths) ──────────────────────────
+    def _tokenizer_sig(self) -> str:
+        """A signature that changes when the tokenizer changes, so a stale length
+        cache (built under a different/ retrained tokenizer) is ignored on load."""
+        tok = self._ds.tokenizer
+        try:
+            st = Path(getattr(tok, "model_path")).stat()
+            return f"{st.st_mtime_ns}:{st.st_size}:{getattr(tok, 'text_vocab_size', '')}"
+        except Exception:
+            return f"-:-:{getattr(tok, 'text_vocab_size', '')}"
+
+    def save_skip_index(self, path) -> None:
+        """Persist per-record token lengths gathered so far (primary + replay) next to
+        the checkpoint, so a later --resume can fast-forward without re-tokenizing.
+        Keyed `p::<file>` for the primary corpus, `r{i}::<file>` for replay i; `__sig__`
+        ties the cache to the tokenizer that built it."""
+        out = {"__sig__": np.array(self._tokenizer_sig())}
+        for stem, a in self._ds.len_cache_arrays().items():
+            out[f"p::{stem}"] = a
+        for i, d in enumerate(self._replay_datasets):
+            for stem, a in d.len_cache_arrays().items():
+                out[f"r{i}::{stem}"] = a
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_name(p.name + ".tmp")
+            with open(tmp, "wb") as f:           # explicit handle: np.savez won't append .npz
+                np.savez(f, **out)
+            os.replace(tmp, p)
+        except OSError:
+            pass
+
+    def load_skip_index(self, path) -> bool:
+        """Load a length index written by `save_skip_index`. Returns True when a
+        usable, tokenizer-matched cache was loaded (so `skip` runs fast); False on a
+        missing/stale/corrupt index (so `skip` falls back to live tokenization)."""
+        p = Path(path)
+        if not p.exists():
+            return False
+        try:
+            data = np.load(p, allow_pickle=False)
+        except Exception:
+            return False
+        files = set(data.files)
+        if "__sig__" not in files or str(data["__sig__"]) != self._tokenizer_sig():
+            return False                         # tokenizer changed → cache stale
+        pri: Dict[str, np.ndarray] = {}
+        rep: Dict[int, Dict[str, np.ndarray]] = {}
+        for k in files:
+            if k == "__sig__" or "::" not in k:
+                continue
+            tag, stem = k.split("::", 1)
+            if tag == "p":
+                pri[stem] = data[k]
+            elif tag.startswith("r") and tag[1:].isdigit():
+                rep.setdefault(int(tag[1:]), {})[stem] = data[k]
+        self._ds.load_len_cache(pri)
+        for i, d in enumerate(self._replay_datasets):
+            if i in rep:
+                d.load_len_cache(rep[i])
+        self._has_skip_index = True
+        return True
 
     @property
     def passes(self) -> int:

@@ -556,10 +556,15 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     # data while never reaching the rest (issue C3). The dataset + replay draws are
     # fully seeded, so replaying start_step×grad_acc batches lands EXACTLY where the
     # run stopped. One-time re-tokenization cost (an indexed loader would skip it).
+    skip_index_path = ckpt_dir / "skip_index.npz"
     if resume and start_step > 0:
         n_skip = start_step * grad_acc
+        # Load the per-record token-length index saved with the checkpoint: the skip
+        # then replays cached lengths instead of re-tokenizing the consumed span
+        # (seconds vs minutes). Missing/stale index → exact-but-slow live skip.
+        fast = data_loader.load_skip_index(skip_index_path)
         print(f"  [resume] fast-forwarding data stream past {n_skip:,} batches "
-              f"({start_step:,} steps)…")
+              f"({start_step:,} steps){' — cached lengths' if fast else ' — re-tokenizing (no index)'}…")
         skipped = data_loader.skip(n_skip)
         if skipped < n_skip:
             print(f"  [resume] stream shorter than expected — skipped {skipped:,}.")
@@ -773,6 +778,9 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             if step % save_every == 0:
                 save_checkpoint(model, step, stage, tokens_seen,
                                acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
+                # Persist the data-stream length index alongside the checkpoint so a
+                # later --resume can fast-forward without re-tokenizing the span.
+                data_loader.save_skip_index(skip_index_path)
                 dash.set_checkpoint(step)
 
             # Gate evaluation. On skip_gate levels (no graduation gate) the score
