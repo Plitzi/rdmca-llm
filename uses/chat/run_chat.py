@@ -602,8 +602,10 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     _think_arg = getattr(args, "think", "auto")
     if _think_arg == "auto":
         from src.training.stages import STAGE_NAMES
+        # The <think>/CoT stage is the one named exactly "Reasoning" (stage 5) — NOT
+        # stage 4 "Causal and procedural reasoning", which also contains the substring.
         reasoning_stage = next((s for s, n in STAGE_NAMES.items()
-                                if "reason" in n.lower()), 5)
+                                if n.lower().strip() == "reasoning"), 5)
         _stage = getattr(args, "stage", None)
         if _stage is not None and _stage < reasoning_stage:
             think_level = agent.normalize_thinking("off")
