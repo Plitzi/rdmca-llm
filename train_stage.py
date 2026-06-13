@@ -329,15 +329,19 @@ def gate_threshold(stage: int, cfg: dict = None) -> float:
 
 def gate_decision(score: float, best_score: float, threshold: float,
                   min_delta: float = 0.005) -> tuple:
-    """Ratcheting graduation gate. Returns (improved, passed):
-      • improved — `score` beats the running best by `min_delta` (→ it becomes the new
-        best, the moving bar; a non-improving checkpoint is discarded);
-      • passed   — improved AND clears the absolute floor (`threshold`, the starting
-        point). So the FIRST pass needs `score ≤ threshold`; after that each pass must
-        beat the prior best. Example (floor 50): 35→passed(bar 35), 39→not passed
-        (≥35, discarded), 30→passed(bar 30); a first 55→not passed (above the floor)."""
-    improved = math.isfinite(score) and score < best_score * (1.0 - min_delta)
-    return improved, (improved and score <= threshold)
+    """Ratcheting graduation gate. Returns (is_candidate, is_new_best):
+      • is_candidate — `score` clears the absolute floor (`threshold`, the starting
+        point), so it is ELIGIBLE to be a best at all. A checkpoint ABOVE the floor is
+        not viable yet and can NEVER become the best — no matter how much it improves on
+        a worse above-floor attempt it is not "the best" (the user's rule: it isn't the
+        best if it didn't even pass the default gate).
+      • is_new_best  — is_candidate AND beats the running best by `min_delta`. This is a
+        "pass": it becomes the new best (the moving bar) and ratchets the bar down.
+    Example (floor 50): 55→(False, False) above floor, not viable; 35→(True, True) bar
+    35; 39→(True, False) clears floor but ≥ best 35, discarded; 30→(True, True) bar 30."""
+    is_candidate = math.isfinite(score) and score <= threshold
+    is_new_best  = is_candidate and score < best_score * (1.0 - min_delta)
+    return is_candidate, is_new_best
 
 
 def evaluate_gate(model, stage: int,
@@ -682,6 +686,16 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     best_loss   = 0.0
     stale       = 0
     restored_best = False        # set when the diverged tail is rolled back to best
+    # Anti-divergence RESTORE point: the lowest val-PPL seen REGARDLESS of the floor.
+    # Distinct from `best` — a point above the floor is NOT a graduation best (it never
+    # becomes best.npz and the use cases never load it as "best"), but we still keep its
+    # weights so a budget-exhausted run that never reached the floor ships its lowest
+    # point instead of a diverged tail.
+    low_path    = ckpt_dir / "restore.npz"
+    low_score   = float("inf")
+    low_step    = start_step
+    low_tokens  = tokens_seen
+    low_loss    = 0.0
     # PERSISTENT monotonic best: the best checkpoint is the bar to beat ACROSS runs, not
     # just within one. On --resume we load the historical best so a later run REPLACES it
     # only on a genuine improvement — a worse checkpoint is discarded and never clobbers
@@ -692,6 +706,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             bm = json.loads(best_meta.read_text())
             best_score, best_step = float(bm["score"]), int(bm["step"])
             best_tokens, best_loss = int(bm["tokens"]), float(bm["loss"])
+            # The historical best is, by construction, a floor-clearing candidate and
+            # thus also the lowest seen — carry it into the restore tracker too.
+            low_score, low_step = best_score, best_step
+            low_tokens, low_loss = best_tokens, best_loss
             print(f"  [best] resuming against historical best val PPL {best_score:.2f} "
                   f"(step {best_step:,}) — only an improvement replaces it")
         except (OSError, json.JSONDecodeError, KeyError, ValueError):
@@ -878,63 +896,86 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                     model, stage, val_batches, cfg,
                     log=(dash.print if skip_gate else (lambda *a, **k: None)), step=step)
                 thr = gate_threshold(stage, cfg)
-                # Ratchet: improved = new best (the moving bar); passed = new best AND
-                # under the starting-point floor. The dash shows PASSED on a ratchet win.
-                improved, passed = gate_decision(score, best_score, thr, min_delta)
-                dash.set_gate_result(score, passed if not skip_gate else meets_bar)
+                # Ratchet: is_candidate = cleared the floor (eligible to be a best);
+                # is_new_best = candidate AND beats the running best. ONLY a floor-clearing
+                # checkpoint can be the best — an above-floor point is not viable yet and is
+                # never saved/labelled "best". The dash shows PASSED on a ratchet win.
+                is_candidate, is_new_best = gate_decision(score, best_score, thr, min_delta)
+                dash.set_gate_result(score, is_new_best if not skip_gate else meets_bar)
 
-                if improved:
+                # Anti-divergence restore point: lowest seen REGARDLESS of the floor. Kept
+                # so a run that never reaches the floor still ships its lowest point, not a
+                # diverged tail. This is NOT "the best" (separate file, never loaded as best).
+                if math.isfinite(score) and score < low_score * (1.0 - min_delta):
+                    low_score, low_step = score, step
+                    low_tokens, low_loss = tokens_seen, acc_loss / grad_acc
+                    B.engine.save_weights(model, str(low_path))
+
+                if is_new_best:
+                    # Cleared the floor AND beat the prior best → genuine new best (the
+                    # moving bar). The only thing called "best" and the only thing shipped.
                     if not skip_gate:
                         prev = "∞" if best_score == float("inf") else f"{best_score:.2f}"
-                        tag = (f"PASSED, bar↓ {score:.2f}" if passed
-                               else f"new best, still above floor {thr:.1f} (not passed yet)")
-                        dash.print(f"[gate] step={step:,} | val ppl {score:.2f} < best {prev} "
-                                   f"→ {tag}")
+                        dash.print(f"[gate] step={step:,} | val ppl {score:.2f} ≤ floor "
+                                   f"{thr:.1f} & < best {prev} → PASSED, bar↓")
                     best_score, best_step, best_tokens = score, step, tokens_seen
                     best_loss = acc_loss / grad_acc
                     _save_best(best_score, best_step, best_tokens, best_loss)
                     stale = 0
-                elif math.isfinite(best_score):
-                    stale += 1
+                else:
+                    # Not a new best — either still above the floor (not viable yet, NOT a
+                    # best per the gate) or a candidate that didn't beat the running best.
                     if not skip_gate:
-                        dash.print(f"[gate] step={step:,} | val ppl {score:.2f} ≥ best "
-                                   f"{best_score:.2f} → not passed, discarded "
-                                   f"({stale}/{patience})")
-                    if patience and stale >= patience:
-                        # Plateaued at the best — ship it. Graduate only if the best
-                        # clears the absolute quality bar (or the gate is skipped).
-                        B.engine.load_weights(model, str(best_path))
-                        save_checkpoint(model, best_step, stage, best_tokens,
-                                        best_loss, ckpt_dir, log=dash.print)
-                        best_meets = best_score <= thr
-                        if best_meets or skip_gate:
-                            B.engine.save_weights(model, str(ckpt_dir / "final.npz"))   # graduated model
+                        if not is_candidate:
+                            bar = ("no best yet" if best_score == float("inf")
+                                   else f"best {best_score:.2f}")
+                            dash.print(f"[gate] step={step:,} | val ppl {score:.2f} > floor "
+                                       f"{thr:.1f} → not viable yet, NOT a best ({bar})")
+                        elif math.isfinite(best_score):
+                            dash.print(f"[gate] step={step:,} | val ppl {score:.2f} ≥ best "
+                                       f"{best_score:.2f} → not passed, discarded "
+                                       f"({stale + 1}/{patience})")
+                    # Plateau only counts once we actually HAVE a floor-clearing best.
+                    if math.isfinite(best_score):
+                        stale += 1
+                        if patience and stale >= patience:
+                            # Plateaued at the best — ship it. The best is, by construction,
+                            # a floor-clearing candidate, so the stage graduates.
+                            B.engine.load_weights(model, str(best_path))
+                            save_checkpoint(model, best_step, stage, best_tokens,
+                                            best_loss, ckpt_dir, log=dash.print)
+                            B.engine.save_weights(model, str(ckpt_dir / "final.npz"))   # graduated
                             with open(ckpt_dir / "stage_complete.json", "w") as f:
                                 json.dump({"stage": stage, "step": best_step,
                                            "tokens_seen": best_tokens, "gate_score": best_score,
-                                           "gate_threshold": thr, "met_bar": bool(best_meets),
+                                           "gate_threshold": thr, "met_bar": True,
                                            "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
                                            "early_stopped": True, "timestamp": time.time()}, f, indent=2)
                             dash.print(f"✓ Stage {stage} COMPLETE — best val ppl "
-                                       f"{best_score:.2f} (≤ bar {thr:.1f}), plateaued")
+                                       f"{best_score:.2f} (≤ floor {thr:.1f}), plateaued")
                             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
                             return True
-                        dash.print(f"[gate] plateaued at best {best_score:.2f} > bar {thr:.1f} "
-                                   f"— NOT graduating. --resume to train more, lower "
-                                   f"gate.max_perplexity, or --skip-gate to accept the best.")
-                        return False
 
         # Final dashboard update so it shows 100%
         dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
 
-        # Budget exhausted — if a better (lower val PPL) point was seen earlier,
-        # restore it so the stage output is the BEST model, not a memorized/diverged
-        # tail (stage 6's 0.4→4.4 climb). Best is, by definition, ≤ every seen score.
-        if best_score < float("inf") and best_step != step and best_path.exists():
-            dash.print(f"[best] restoring best checkpoint (val PPL {best_score:.2f} @ "
-                       f"step {best_step:,}) over the tail before finishing")
-            B.engine.load_weights(model, str(best_path))
-            step, tokens_seen, acc_loss = best_step, best_tokens, best_loss * grad_acc
+        # Budget exhausted — ship the lowest-val-PPL point, not a memorized/diverged tail
+        # (stage 6's 0.4→4.4 climb). Prefer the graduation best (a floor-clearing
+        # candidate); if the floor was NEVER reached, fall back to the lowest-seen restore
+        # point so we still avoid the diverged tail.
+        if best_score < float("inf") and best_path.exists():
+            rs_path, rs_score, rs_step, rs_tokens, rs_loss = (
+                best_path, best_score, best_step, best_tokens, best_loss)
+        elif low_score < float("inf") and low_path.exists():
+            rs_path, rs_score, rs_step, rs_tokens, rs_loss = (
+                low_path, low_score, low_step, low_tokens, low_loss)
+        else:
+            rs_path = None
+        if rs_path is not None and rs_step != step:
+            dash.print(f"[best] restoring lowest-PPL checkpoint (val PPL {rs_score:.2f} @ "
+                       f"step {rs_step:,}) over the tail before finishing")
+            B.engine.load_weights(model, str(rs_path))
+            step, tokens_seen, acc_loss = rs_step, rs_tokens, rs_loss * grad_acc
             restored_best = True
 
         # Budget exhausted

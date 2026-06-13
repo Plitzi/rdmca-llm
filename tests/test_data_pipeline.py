@@ -97,27 +97,33 @@ def test_level1_gate_enforced_by_default():
 
 
 def test_gate_decision_ratchets_against_best():
-    """The graduation gate RATCHETS: a checkpoint passes only if it BEATS the best so
-    far (the moving bar) AND clears the starting-point floor. Worse checkpoints are
-    discarded. Mirrors the user's example with floor 50."""
+    """The graduation gate RATCHETS: a checkpoint is a new best (a "pass") only if it
+    CLEARS the floor (is a candidate) AND beats the best so far. An above-floor point is
+    NOT viable and is never the best, no matter how much it improves on a worse above-floor
+    attempt (the user's rule: it isn't the best if it didn't pass the default gate).
+    Returns (is_candidate, is_new_best). Mirrors the user's example with floor 50."""
     import train_stage as T
-    # 35 (from ∞) → new best + under floor → passed; bar is now 35.
+    # 35 (from ∞) → candidate + new best → PASSED; bar is now 35.
     assert T.gate_decision(35.0, float("inf"), 50.0) == (True, True)
-    # 39 ≥ best 35 → not a new best → NOT passed (discarded), even though 39 ≤ 50.
-    assert T.gate_decision(39.0, 35.0, 50.0) == (False, False)
-    # 30 < best 35 → new best → passed; bar ratchets to 30.
+    # 39 clears the floor (candidate) but ≥ best 35 → not a new best → discarded.
+    assert T.gate_decision(39.0, 35.0, 50.0) == (True, False)
+    # 30 < best 35 → new best → PASSED; bar ratchets to 30.
     assert T.gate_decision(30.0, 35.0, 50.0) == (True, True)
-    # A first checkpoint ABOVE the starting floor improves on ∞ but does NOT pass.
-    assert T.gate_decision(55.0, float("inf"), 50.0) == (True, False)
+    # A checkpoint ABOVE the floor is NOT a candidate and NOT a best — even from ∞.
+    assert T.gate_decision(55.0, float("inf"), 50.0) == (False, False)
+    # 87.59 > floor 50 → not viable, NOT a best (the reported log bug: it was being
+    # labelled "new best" though it never passed the default gate).
+    assert T.gate_decision(87.59, float("inf"), 50.0) == (False, False)
 
 
 def test_gate_decision_min_delta_requires_real_improvement():
-    """A negligible change (< min_delta) is not a new best — avoids ratchet churn."""
+    """A negligible change (< min_delta) is not a new best — avoids ratchet churn.
+    is_new_best is the SECOND return value (the first is mere floor-eligibility)."""
     import train_stage as T
-    improved, _ = T.gate_decision(34.99, 35.0, 50.0, min_delta=0.005)
-    assert improved is False                              # 0.03% < 0.5% → not a new best
-    improved, _ = T.gate_decision(34.0, 35.0, 50.0, min_delta=0.005)
-    assert improved is True
+    _, is_best = T.gate_decision(34.99, 35.0, 50.0, min_delta=0.005)
+    assert is_best is False                               # 0.03% < 0.5% → not a new best
+    _, is_best = T.gate_decision(34.0, 35.0, 50.0, min_delta=0.005)
+    assert is_best is True
 
 
 def test_evaluate_gate_respects_threshold_and_config_override():

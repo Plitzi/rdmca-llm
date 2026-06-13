@@ -565,7 +565,7 @@ def load_model(args):
 BANNER = """
 ╔══════════════════════════════════════════════════════╗
 ║           RDMCA Interactive Chat                     ║
-║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256     ║
+║  /lang es|en  /temp 0.7  /topp 0.9  /maxtok 256      ║
 ║  /think off|low|medium|high   /format text|json      ║
 ║  /system <prompt>   /mood <name|auto|off>            ║
 ║  /context  (full token/context breakdown)            ║
