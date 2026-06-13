@@ -537,11 +537,13 @@ class DataLoader:
         source_weights = None if val else (stage_cfg.get("data", {}) or {}).get("source_weights")
 
         def _ds(path: str) -> TextDataset:
+            # val batches may carry the completion mask too, so the gate can measure
+            # response-only perplexity (matching training); see validation_perplexity.
             return TextDataset(data_dir=path, tokenizer=tokenizer,
                                seq_len=mcfg["context_len"],
                                batch_size=tcfg["batch_size"], shuffle=True,
                                source_weights=source_weights, val=val,
-                               with_mask=(with_mask and not val))
+                               with_mask=with_mask)
 
         if val:
             return cls(_ds(data_dir))        # held-out split, no replay

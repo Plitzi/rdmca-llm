@@ -354,16 +354,29 @@ class RDMCAFoundational(nn.Module):
         h = self(tokens)
         return self.head_at_dim(h, self.cfg.mrl_dims[-1])
 
-    def eval_ce(self, tokens):
+    def eval_ce(self, tokens, mask=None):
         """
-        Plain next-token cross-entropy at full dimension — used for validation
-        perplexity (exp(eval_ce)). tokens: [B, S+1]. No MRL weighting.
+        Next-token cross-entropy at full dimension — used for validation perplexity
+        (exp(eval_ce)). tokens: [B, S+1]. No MRL weighting.
+
+        mask: [B, S+1] or None. When given, the CE is COMPLETION-ONLY — averaged over
+        the unmasked (assistant) target positions, MIRRORING the completion-only
+        training loss. Without it, validation would also average the user/system
+        CONTEXT tokens, which the model is deliberately NOT trained to predict — that
+        inflates perplexity far above what the model actually optimizes (measured: ppl
+        ~120 unmasked vs ~18 masked on the same stage-1 checkpoint). Prose (mask all-1)
+        is unaffected: masked == plain mean.
         """
         inputs, targets = tokens[:, :-1], tokens[:, 1:]
         logits = self.head_at_dim(self(inputs), self.cfg.mrl_dims[-1])
         Bsz, S, V = logits.shape
-        return ops.cross_entropy(
-            logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="mean")
+        if mask is None:
+            return ops.cross_entropy(
+                logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="mean")
+        ce = ops.cross_entropy(
+            logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="none")
+        m = ops.astype(mask[:, 1:].reshape(Bsz * S), ce.dtype)
+        return ops.sum(ce * m) / (ops.sum(m) + 1e-6)   # mean over assistant targets
 
     # ------------------------------------------------------------------
     # MRL loss (multi-scale Matryoshka)

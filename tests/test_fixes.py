@@ -206,6 +206,38 @@ def test_mrl_weights_are_uniform():
     assert abs(float(total.item()) - float(expected.item())) < 1e-3
 
 
+def test_eval_ce_mask_matches_training_objective():
+    """Validation eval_ce with a completion mask must equal the masked mean over the
+    unmasked (assistant) targets — the SAME objective training optimizes — and must
+    differ from the unmasked full-sequence mean. Otherwise the gate measures context
+    tokens the model is never trained to predict and perplexity is inflated ~7×."""
+    import mlx.core as mx
+    cfg = ModelConfig(d_model=64, n_heads=2, ffn_dim=128, context_len=16,
+                      vocab_size=256, mrl_dims=[32, 64], dropout=0.0)
+    m = RDMCAFoundational(cfg)
+    toks = mx.array(np.random.randint(0, 256, (2, 17)))
+    mask = np.zeros((2, 17), dtype=np.int32); mask[:, 9:] = 1   # only the tail trains
+    mask_mx = mx.array(mask)
+
+    masked   = float(m.eval_ce(toks, mask=mask_mx).item())
+    unmasked = float(m.eval_ce(toks).item())
+
+    # Manual masked-mean reference at full dim.
+    inputs, targets = toks[:, :-1], toks[:, 1:]
+    lg = m.head_at_dim(m(inputs), cfg.mrl_dims[-1])
+    Bsz, S, V = lg.shape
+    ce = B.ops.cross_entropy(lg.reshape(Bsz * S, V), targets.reshape(Bsz * S),
+                             reduction="none")
+    mm = mask_mx[:, 1:].reshape(Bsz * S).astype(ce.dtype)
+    ref = float((B.ops.sum(ce * mm) / B.ops.sum(mm)).item())
+    assert abs(masked - ref) < 1e-3
+    assert abs(masked - unmasked) > 1e-3        # masking actually changes the metric
+
+    # An all-ones mask reduces to the plain mean (prose stages are unaffected).
+    allone = float(m.eval_ce(toks, mask=mx.ones((2, 17))).item())
+    assert abs(allone - unmasked) < 1e-3
+
+
 # ─────────────────────────── MoE: top_k restored on grow (M4) ────────────────
 
 def test_moe_top_k_restored_on_grow():

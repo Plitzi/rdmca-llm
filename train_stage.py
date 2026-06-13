@@ -209,28 +209,27 @@ def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
 
 
 def _make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
-    """Return `n` fixed validation batches. Prefers a true held-out split
-    (`*.val.jsonl`, disjoint from training); falls back to the training stream
-    (comparable but not disjoint) when no split has been prepared."""
+    """Return `n` fixed validation batches as (tokens, mask) pairs. The mask is the
+    completion-only loss mask, so the gate measures perplexity on the SAME (assistant)
+    tokens training optimizes — not the user/system context the model never learns to
+    predict (which otherwise inflates val ppl ~7× and fails the gate spuriously).
+    Prefers a true held-out split (`*.val.jsonl`); falls back to the training stream."""
     from src.modalities.text import TextTokenizer
     from src.data.loader import DataLoader
     try:
-        vloader = DataLoader.from_config(stage, cfg, TextTokenizer(), val=True)
+        vloader = DataLoader.from_config(stage, cfg, TextTokenizer(), val=True,
+                                         with_mask=True)
         # An empty or sub-one-batch *.val.jsonl ends the stream early (StopIteration)
         # instead of hanging — fall through to training-stream sampling below.
         batches = [vloader.next_batch() for _ in range(n)]
-        print(f"  [val] held-out split (*.val.jsonl) — {n} batches")
+        print(f"  [val] held-out split (*.val.jsonl) — {n} batches (completion-masked)")
         return batches
     except (FileNotFoundError, KeyError, StopIteration):
         print("  [val] no usable held-out split — sampling from the training stream "
               "(run prepare_data to generate *.val.jsonl for a disjoint gate)")
-        # The training loader yields (tokens, mask) pairs; validation uses plain
-        # next-token perplexity (eval_ce), so keep only the tokens.
-        out = []
-        for _ in range(n):
-            b = train_loader.next_batch()
-            out.append(b[0] if isinstance(b, tuple) else b)
-        return out
+        # The training loader already yields (tokens, mask) pairs — keep both so the
+        # gate masks identically to training.
+        return [train_loader.next_batch() for _ in range(n)]
 
 
 def build_data_loader(stage: int, cfg: dict):
@@ -288,13 +287,17 @@ def build_data_loader(stage: int, cfg: dict):
 def validation_perplexity(model, val_batches) -> float:
     """Mean validation perplexity over a FIXED set of batches (the same arrays on
     every call), so the gate metric is comparable across evals instead of jumping
-    around on a fresh random slice each time. (Sampled from the training stream up
-    front — comparable, though not a fully disjoint held-out split.)"""
+    around on a fresh random slice each time. Batches are (tokens, mask) pairs; the
+    mask makes the CE COMPLETION-ONLY, matching the training objective (bare token
+    arrays without a mask are still accepted for back-compat)."""
     B = backend.current()
     losses = []
     for batch in val_batches:
-        b     = B.ops.array(batch)
-        loss  = model.eval_ce(b)
+        if isinstance(batch, tuple):
+            toks, mask = batch
+            loss = model.eval_ce(B.ops.array(toks), mask=B.ops.array(mask))
+        else:
+            loss = model.eval_ce(B.ops.array(batch))
         B.engine.eval(loss)
         losses.append(B.engine.item(loss))
     return float(np.exp(np.mean(losses)))
