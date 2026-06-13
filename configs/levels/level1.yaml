@@ -150,6 +150,10 @@ curriculum:
     entry_level: 1
     n_tokens: 20_000_000
     data_dir: "data/level1/stage2"
+    # NARROW synthetic stage: ppl→~1 here means MEMORIZED, not learned. Heavy rehearsal
+    # of earlier data (esp. conversation) keeps the shared core from collapsing onto the
+    # templated distribution. The retention gate (val folds in conversation) enforces it.
+    rehearsal_fraction: 0.35   # analogies — low-entropy, erodes conversation without this.
     data:
       sources: [analogies]       # synthetic simple analogies/sequences.
       filter: null               # already simple by construction.
@@ -158,6 +162,9 @@ curriculum:
     entry_level: 1             # basic arithmetic from the very start.
     n_tokens: 30_000_000
     data_dir: "data/level1/stage3"
+    rehearsal_fraction: 0.45   # arithmetic ("3 + 4 = 7") is the WORST eroder — extremely
+                               # low-entropy; without strong rehearsal the core answers
+                               # every prompt with a number ('hi'→'2'). 0.45 protects chat.
     data:
       sources: [arithmetic]
       filter:
@@ -167,6 +174,7 @@ curriculum:
     entry_level: 1             # causal reasoning present from level 1 (graded small).
     n_tokens: 15_000_000
     data_dir: "data/level1/stage4"
+    rehearsal_fraction: 0.35   # synthetic cause→effect — narrow, protect conversation.
     data:
       sources: [causal_synth]  # synthetic cause→effect (e-CARE), simple by construction.
       filter: null
@@ -199,6 +207,10 @@ curriculum:
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 25_000_000
     data_dir: "data/level1/stage5"
+    rehearsal_fraction: 0.45   # CoT ("…<think>… The answer is N") strongly imprints a
+                               # math-answer FORMAT onto the core — at stage 7 every reply
+                               # became "The answer is N". Heavy rehearsal keeps general
+                               # conversation alive alongside the reasoning skill.
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
@@ -220,6 +232,8 @@ curriculum:
                                # stage 6 at EVERY level (uniform structure). Graded small.
     n_tokens: 10_000_000
     data_dir: "data/level1/stage7"
+    rehearsal_fraction: 0.35   # last cognitive stage before the freeze — the core's
+                               # FINAL conversational state ships here, so protect it.
     data:
       sources: [ethics]
       filter: null

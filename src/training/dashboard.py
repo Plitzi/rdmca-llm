@@ -27,7 +27,7 @@ from rich import box
 _SPARKS = " ▁▂▃▄▅▆▇█"
 
 # Stage gates/names come from the shared source of truth (src/training/stages.py).
-from src.training.stages import STAGE_GATES, STAGE_NAMES
+from src.training.stages import STAGE_NAMES
 
 
 def _sparkline(values: list[float], width: int = 12) -> str:
@@ -110,12 +110,34 @@ class TrainingDashboard:
         # reach and the history is greppable/copyable after the fact. Opened in
         # append mode so --resume keeps adding to the same file.
         self._flog = None
+        # Structured metrics sink (metrics.csv next to the log) for plotting the run —
+        # loss/ppl/lr/tps per step + val-ppl/best per gate eval. Machine-readable so
+        # scripts/plot_metrics.py (or any tool) can chart the curves after the fact.
+        self._metrics = None
         if log_path is not None:
             try:
                 Path(log_path).parent.mkdir(parents=True, exist_ok=True)
                 self._flog = open(log_path, "a", encoding="utf-8")
+                mpath = Path(log_path).with_name("metrics.csv")
+                new = not mpath.exists() or mpath.stat().st_size == 0
+                self._metrics = open(mpath, "a", encoding="utf-8")
+                if new:
+                    self._metrics.write("kind,step,tokens_m,loss,ppl,lr,tps,grad_norm,"
+                                        "val_ppl,best_val_ppl,passed\n")
+                    self._metrics.flush()
             except OSError as e:
                 self._console.print(f"[yellow][log] could not open {log_path}: {e}[/yellow]")
+
+    def _metric_row(self, kind, *, step="", tokens_m="", loss="", ppl="", lr="", tps="",
+                    grad_norm="", val_ppl="", best_val_ppl="", passed="") -> None:
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.write(f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
+                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed}\n")
+            self._metrics.flush()
+        except (OSError, ValueError):
+            self._metrics = None
         # Model geometry — shown next to Speed so the dev sees WHY the tok/s is what it
         # is: throughput is compute-bound, and per-token compute ≈ 6·N (fwd+bwd, the
         # Kaplan/Chinchilla rule) scales with depth. Doubling layers ⇒ ~proportionally
@@ -138,9 +160,12 @@ class TrainingDashboard:
         self._tps_hist:  deque[float] = deque(maxlen=20)
         self._prev_loss: Optional[float] = None
 
-        # Gate evaluation result (updated externally)
+        # Gate evaluation result (updated externally). The gate is a PERPLEXITY proxy
+        # (LOWER is better), ratcheting toward `gate_best` and floored at `gate_floor`.
         self.gate_score:  Optional[float] = None
         self.gate_passed: bool = False
+        self.gate_floor:  Optional[float] = None   # per-stage perplexity floor (≤)
+        self.gate_best:   Optional[float] = None   # running best (the ratchet bar)
 
         # Last checkpoint info
         self.last_ckpt_step: Optional[int] = None
@@ -208,6 +233,11 @@ class TrainingDashboard:
                 # rich markup tags (which would silently drop them).
                 self._console.print(line, highlight=False, markup=False)
             self._record(line)
+            self._metric_row("train", step=step, tokens_m=f"{tokens_seen/1e6:.3f}",
+                             loss=f"{loss:.4f}", ppl=f"{ppl:.4f}", lr=f"{lr:.3e}",
+                             tps=f"{tps:.0f}",
+                             grad_norm=("" if self._grad_norm is None
+                                        else f"{self._grad_norm:.3f}"))
 
     def set_target(self, n_tokens_target: int) -> None:
         """Adjust the token target (and progress-bar total) mid-run — e.g. when the
@@ -218,10 +248,19 @@ class TrainingDashboard:
         if self._live:
             self._live.update(self._build_layout())
 
-    def set_gate_result(self, score: float, passed: bool) -> None:
+    def set_gate_result(self, score: float, passed: bool,
+                        threshold: float = None, best: float = None) -> None:
         self.gate_score  = score
         self.gate_passed = passed
-        self._record(f"[gate] score={score:.4f} -> {'PASS' if passed else 'FAIL'}")
+        if threshold is not None:
+            self.gate_floor = threshold
+        if best is not None and math.isfinite(best):
+            self.gate_best = best
+        self._record(f"[gate] score={score:.4f} -> {'NEW BEST' if passed else 'not a new best'}")
+        self._metric_row("gate", step=self._step, tokens_m=f"{self._tokens/1e6:.3f}",
+                         val_ppl=f"{score:.4f}",
+                         best_val_ppl=("" if self.gate_best is None else f"{self.gate_best:.4f}"),
+                         passed=int(bool(passed)))
         if self._live:
             self._live.update(self._build_layout())
 
@@ -280,6 +319,11 @@ class TrainingDashboard:
                 self._flog.close()
             finally:
                 self._flog = None
+        if self._metrics is not None:
+            try:
+                self._metrics.close()
+            finally:
+                self._metrics = None
 
     # ── Layout builder ────────────────────────────────────────────────────────
 
@@ -355,15 +399,21 @@ class TrainingDashboard:
                                        f"[dim]({steps_ago:,} steps ago)[/dim]")
 
         # ── Gate row ──────────────────────────────────────────────────────
-        # STAGE_GATES values are (metric_key, threshold, label).
-        _, gate_thresh, gate_name = STAGE_GATES.get(self.stage, ("", 0, "─"))
+        # The live gate is a PERPLEXITY proxy (LOWER is better), ratcheting toward the
+        # running best and gated by the per-stage floor — NOT the (future) accuracy
+        # benchmark in STAGE_GATES, so it must NOT render as "need ≥ <accuracy>".
+        gate_name = STAGE_NAMES.get(self.stage, "─")
         if self.gate_score is None:
             gate_val = Text("not evaluated yet", style="dim")
-        elif self.gate_passed:
-            gate_val = Text(f"{self.gate_score:.3f}  ✓  PASSED", style="bold green")
         else:
-            gate_val = Text(f"{self.gate_score:.3f}  ✗  need ≥ {gate_thresh:.2f}",
-                            style="yellow")
+            best_s  = f"  ·  best {self.gate_best:.2f}" if self.gate_best is not None else ""
+            floor_s = f"  ·  floor ≤ {self.gate_floor:.1f}" if self.gate_floor is not None else ""
+            if self.gate_passed:
+                gate_val = Text(f"ppl {self.gate_score:.2f}  ✓  new best{best_s}{floor_s}",
+                                style="bold green")
+            else:
+                gate_val = Text(f"ppl {self.gate_score:.2f}  ·  not a new best{best_s}{floor_s}",
+                                style="yellow")
         stats.add_row(f"Gate ({gate_name})", gate_val)
 
         # ── Progress bar ──────────────────────────────────────────────────

@@ -97,33 +97,41 @@ def test_level1_gate_enforced_by_default():
 
 
 def test_gate_decision_ratchets_against_best():
-    """The graduation gate RATCHETS: a checkpoint is a new best (a "pass") only if it
-    CLEARS the floor (is a candidate) AND beats the best so far. An above-floor point is
-    NOT viable and is never the best, no matter how much it improves on a worse above-floor
-    attempt (the user's rule: it isn't the best if it didn't pass the default gate).
-    Returns (is_candidate, is_new_best). Mirrors the user's example with floor 50."""
+    """The graduation gate RATCHETS. Returns (is_candidate, is_new_best, is_meaningful):
+    is_candidate = cleared the floor (eligible to be a best); is_new_best = candidate AND
+    STRICTLY beats the best (ANY gain → saved, never discarded); is_meaningful = the gain
+    exceeds min_delta (plateau accounting only). An above-floor point is never a best, no
+    matter how much it improves on a worse above-floor attempt. Mirrors the user's
+    example with floor 50."""
     import train_stage as T
-    # 35 (from ∞) → candidate + new best → PASSED; bar is now 35.
-    assert T.gate_decision(35.0, float("inf"), 50.0) == (True, True)
+    # 35 (from ∞) → candidate, new best, meaningful → PASSED; bar is now 35.
+    assert T.gate_decision(35.0, float("inf"), 50.0) == (True, True, True)
     # 39 clears the floor (candidate) but ≥ best 35 → not a new best → discarded.
-    assert T.gate_decision(39.0, 35.0, 50.0) == (True, False)
-    # 30 < best 35 → new best → PASSED; bar ratchets to 30.
-    assert T.gate_decision(30.0, 35.0, 50.0) == (True, True)
+    assert T.gate_decision(39.0, 35.0, 50.0) == (True, False, False)
+    # 30 < best 35 → new best (meaningful) → PASSED; bar ratchets to 30.
+    assert T.gate_decision(30.0, 35.0, 50.0) == (True, True, True)
     # A checkpoint ABOVE the floor is NOT a candidate and NOT a best — even from ∞.
-    assert T.gate_decision(55.0, float("inf"), 50.0) == (False, False)
+    assert T.gate_decision(55.0, float("inf"), 50.0) == (False, False, False)
     # 87.59 > floor 50 → not viable, NOT a best (the reported log bug: it was being
     # labelled "new best" though it never passed the default gate).
-    assert T.gate_decision(87.59, float("inf"), 50.0) == (False, False)
+    assert T.gate_decision(87.59, float("inf"), 50.0) == (False, False, False)
 
 
-def test_gate_decision_min_delta_requires_real_improvement():
-    """A negligible change (< min_delta) is not a new best — avoids ratchet churn.
-    is_new_best is the SECOND return value (the first is mere floor-eligibility)."""
+def test_gate_decision_any_gain_is_a_new_best():
+    """A strictly-better checkpoint is ALWAYS a new best (saved) — the user's confusion
+    ('16.11 ≥ best 16.14 → discarded' was wrong). min_delta NO LONGER gates saving; it
+    only flags whether the gain is 'meaningful' (for plateau/early-stop)."""
     import train_stage as T
-    _, is_best = T.gate_decision(34.99, 35.0, 50.0, min_delta=0.005)
-    assert is_best is False                               # 0.03% < 0.5% → not a new best
-    _, is_best = T.gate_decision(34.0, 35.0, 50.0, min_delta=0.005)
-    assert is_best is True
+    # 16.11 vs 16.14 (a 0.2% gain): a NEW BEST (saved), but below the 0.5% min_delta so
+    # not 'meaningful' — it ratchets the bar yet counts toward the plateau.
+    cand, new_best, meaningful = T.gate_decision(16.11, 16.14, 50.0, min_delta=0.005)
+    assert (cand, new_best) == (True, True)
+    assert meaningful is False
+    # A clearly-larger gain IS meaningful (resets the plateau when measured vs the ref).
+    _, new_best2, meaningful2 = T.gate_decision(16.0, 16.14, 50.0, min_delta=0.005)
+    assert new_best2 is True and meaningful2 is True
+    # No improvement at all → not a new best.
+    assert T.gate_decision(16.20, 16.14, 50.0)[1] is False
 
 
 def test_evaluate_gate_respects_threshold_and_config_override():

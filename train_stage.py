@@ -209,28 +209,56 @@ def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
     return state["step"], state["tokens_seen"]
 
 
-def _make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
-    """Return `n` fixed validation batches as (tokens, mask) pairs. The mask is the
-    completion-only loss mask, so the gate measures perplexity on the SAME (assistant)
-    tokens training optimizes — not the user/system context the model never learns to
-    predict (which otherwise inflates val ppl ~7× and fails the gate spuriously).
-    Prefers a true held-out split (`*.val.jsonl`); falls back to the training stream."""
+def _val_split_batches(stage: int, cfg: dict, n: int):
+    """`n` (tokens, mask) batches from a stage's held-out split (`*.val.jsonl`), or []
+    if there is no usable split (missing / empty / sub-one-batch). Completion-masked."""
     from src.modalities.text import TextTokenizer
     from src.data.loader import DataLoader
     try:
         vloader = DataLoader.from_config(stage, cfg, TextTokenizer(), val=True,
                                          with_mask=True)
-        # An empty or sub-one-batch *.val.jsonl ends the stream early (StopIteration)
-        # instead of hanging — fall through to training-stream sampling below.
-        batches = [vloader.next_batch() for _ in range(n)]
-        print(f"  [val] held-out split (*.val.jsonl) — {n} batches (completion-masked)")
-        return batches
+        return [vloader.next_batch() for _ in range(n)]
     except (FileNotFoundError, KeyError, StopIteration):
-        print("  [val] no usable held-out split — sampling from the training stream "
-              "(run prepare_data to generate *.val.jsonl for a disjoint gate)")
-        # The training loader already yields (tokens, mask) pairs — keep both so the
-        # gate masks identically to training.
-        return [train_loader.next_batch() for _ in range(n)]
+        return []
+
+
+def _make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
+    """Return fixed validation batches as (tokens, mask) pairs. The mask is the
+    completion-only loss mask, so the gate measures perplexity on the SAME (assistant)
+    tokens training optimizes — not the user/system context the model never learns to
+    predict (which otherwise inflates val ppl ~7×).
+
+    RETENTION GATE: for a later cognitive stage (2..BCF) the val set FOLDS IN held-out
+    CONVERSATION (stage 1) alongside the stage's own data. Without this the gate measures
+    only the narrow new skill — stages 2..7 'pass' at ppl ~1 by memorizing templated data
+    (arithmetic, CoT, ethics) while the shared core forgets how to converse (the observed
+    'hi'→'2' / 'The answer is N' collapse). Mixing conversation in makes a stage that
+    erodes it ratchet/fail instead of passing, so the best checkpoint kept is one that
+    learned the new skill WITHOUT forgetting. Prefers held-out splits; falls back to the
+    training stream for the stage's own slice."""
+    own = _val_split_batches(stage, cfg, n)
+    src_own = "held-out split" if own else None
+    if not own:
+        # The training loader already yields (tokens, mask) pairs — mask matches training.
+        own = [train_loader.next_batch() for _ in range(n)]
+        src_own = "training stream (no *.val.jsonl — run prepare_data for a disjoint gate)"
+
+    if is_behavioral_stage(stage) or stage <= 1:
+        print(f"  [val] {src_own} — {len(own)} batches (completion-masked)")
+        return own
+
+    # Retention: half conversation (stage 1), half the stage's own skill. Conversation
+    # is the priority skill and the one most eroded, so it anchors the gate.
+    half = max(n // 2, 1)
+    conv = _val_split_batches(1, cfg, half)
+    if not conv:
+        print(f"  [val] {src_own} — {len(own)} batches; NO stage-1 split for retention "
+              f"(run prepare_data on stage 1) — gate measures the new skill only")
+        return own
+    mixed = conv + own[:half]
+    print(f"  [val] RETENTION gate — {len(conv)} conversation (stage 1) + {len(own[:half])} "
+          f"stage-{stage} batches (completion-masked); a stage that forgets conversation fails")
+    return mixed
 
 
 def build_data_loader(stage: int, cfg: dict):
@@ -328,20 +356,29 @@ def gate_threshold(stage: int, cfg: dict = None) -> float:
 
 
 def gate_decision(score: float, best_score: float, threshold: float,
-                  min_delta: float = 0.005) -> tuple:
-    """Ratcheting graduation gate. Returns (is_candidate, is_new_best):
-      • is_candidate — `score` clears the absolute floor (`threshold`, the starting
+                  min_delta: float = 0.002) -> tuple:
+    """Ratcheting graduation gate. Returns (is_candidate, is_new_best, is_meaningful):
+      • is_candidate  — `score` clears the absolute floor (`threshold`, the starting
         point), so it is ELIGIBLE to be a best at all. A checkpoint ABOVE the floor is
         not viable yet and can NEVER become the best — no matter how much it improves on
         a worse above-floor attempt it is not "the best" (the user's rule: it isn't the
         best if it didn't even pass the default gate).
-      • is_new_best  — is_candidate AND beats the running best by `min_delta`. This is a
-        "pass": it becomes the new best (the moving bar) and ratchets the bar down.
-    Example (floor 50): 55→(False, False) above floor, not viable; 35→(True, True) bar
-    35; 39→(True, False) clears floor but ≥ best 35, discarded; 30→(True, True) bar 30."""
-    is_candidate = math.isfinite(score) and score <= threshold
-    is_new_best  = is_candidate and score < best_score * (1.0 - min_delta)
-    return is_candidate, is_new_best
+      • is_new_best   — is_candidate AND STRICTLY beats the running best. ANY genuine
+        improvement is a new best and is SAVED (the ratchet bar moves down). So a 16.11
+        always replaces a 16.14 — a better checkpoint is NEVER discarded (the user's
+        confusion: '16.11 ≥ best 16.14 → discarded' was wrong; min_delta did that).
+      • is_meaningful — is_new_best AND the gain exceeds `min_delta` (relative). This does
+        NOT gate saving; it only governs PLATEAU/early-stop: a string of sub-min_delta
+        improvements still saves each new best but counts toward the plateau so the stage
+        eventually graduates instead of chasing noise. min_delta is small (0.2%) so real
+        late-stage gains (which shrink with steps) still count as meaningful progress.
+    Example (floor 50): 55→(F,F,F) above floor; 35 from ∞→(T,T,T) bar 35; 30→(T,T,T) bar
+    30; 29.97 vs 30→(T,T,F) saved (new bar 29.97) but a plateauing tick; 31→(T,F,F)
+    worse, discarded."""
+    is_candidate  = math.isfinite(score) and score <= threshold
+    is_new_best   = is_candidate and score < best_score
+    is_meaningful = is_new_best and score < best_score * (1.0 - min_delta)
+    return is_candidate, is_new_best, is_meaningful
 
 
 def evaluate_gate(model, stage: int,
@@ -677,7 +714,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     # shipping the diverged tail. patience=0 disables the in-loop early stop but
     # best-restore at stage end still applies. Independent of the graduation gate.
     patience    = int(tcfg.get("early_stop_patience", 4))
-    min_delta   = float(tcfg.get("early_stop_min_delta", 0.005))   # 0.5% PPL improvement
+    min_delta   = float(tcfg.get("early_stop_min_delta", 0.002))   # 0.2% PPL gain = "meaningful"
+                                                                   # (only for plateau; any gain still saves)
     best_path   = ckpt_dir / "best.npz"
     best_meta   = ckpt_dir / "best.json"
     best_score  = float("inf")
@@ -685,6 +723,13 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     best_tokens = tokens_seen
     best_loss   = 0.0
     stale       = 0
+    # Plateau reference for early-stop. We compare CUMULATIVE improvement against this
+    # reference (which only moves on a meaningful drop), NOT step-to-step — because late
+    # gains shrink toward 0, a per-step min_delta would declare a plateau while the model
+    # is still slowly improving. With a cumulative reference, many tiny-but-real gains add
+    # up and keep training; only a genuine flatline (no min_delta drop over `patience`
+    # evals) graduates. Every strict improvement is still SAVED as the best regardless.
+    plateau_ref = float("inf")
     restored_best = False        # set when the diverged tail is rolled back to best
     # Anti-divergence RESTORE point: the lowest val-PPL seen REGARDLESS of the floor.
     # Distinct from `best` — a point above the floor is NOT a graduation best (it never
@@ -710,6 +755,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             # thus also the lowest seen — carry it into the restore tracker too.
             low_score, low_step = best_score, best_step
             low_tokens, low_loss = best_tokens, best_loss
+            plateau_ref = best_score          # measure further progress from here
             print(f"  [best] resuming against historical best val PPL {best_score:.2f} "
                   f"(step {best_step:,}) — only an improvement replaces it")
         except (OSError, json.JSONDecodeError, KeyError, ValueError):
@@ -897,34 +943,50 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                     log=(dash.print if skip_gate else (lambda *a, **k: None)), step=step)
                 thr = gate_threshold(stage, cfg)
                 # Ratchet: is_candidate = cleared the floor (eligible to be a best);
-                # is_new_best = candidate AND beats the running best. ONLY a floor-clearing
-                # checkpoint can be the best — an above-floor point is not viable yet and is
-                # never saved/labelled "best". The dash shows PASSED on a ratchet win.
-                is_candidate, is_new_best = gate_decision(score, best_score, thr, min_delta)
-                dash.set_gate_result(score, is_new_best if not skip_gate else meets_bar)
+                # is_new_best = candidate AND strictly beats the best (ANY gain → saved);
+                # is_meaningful = gain beyond min_delta (drives plateau only). ONLY a
+                # floor-clearing checkpoint can be the best — an above-floor point is not
+                # viable yet and is never saved/labelled "best".
+                is_candidate, is_new_best, _ = gate_decision(score, best_score, thr, min_delta)
+                dash.set_gate_result(score, is_new_best if not skip_gate else meets_bar,
+                                     threshold=thr, best=best_score)
+                # Plateau is measured against the cumulative reference (only moves on a
+                # meaningful drop), so shrinking late gains don't trigger a false plateau.
+                meaningful = is_new_best and score < plateau_ref * (1.0 - min_delta)
 
                 # Anti-divergence restore point: lowest seen REGARDLESS of the floor. Kept
                 # so a run that never reaches the floor still ships its lowest point, not a
                 # diverged tail. This is NOT "the best" (separate file, never loaded as best).
-                if math.isfinite(score) and score < low_score * (1.0 - min_delta):
+                if math.isfinite(score) and score < low_score:
                     low_score, low_step = score, step
                     low_tokens, low_loss = tokens_seen, acc_loss / grad_acc
                     B.engine.save_weights(model, str(low_path))
 
                 if is_new_best:
-                    # Cleared the floor AND beat the prior best → genuine new best (the
-                    # moving bar). The only thing called "best" and the only thing shipped.
+                    # Cleared the floor AND beat the prior best → new best (the moving
+                    # bar). ALWAYS saved, even on a sub-min_delta gain — a better
+                    # checkpoint is never discarded. The gain's size only affects plateau.
                     if not skip_gate:
                         prev = "∞" if best_score == float("inf") else f"{best_score:.2f}"
-                        dash.print(f"[gate] step={step:,} | val ppl {score:.2f} ≤ floor "
-                                   f"{thr:.1f} & < best {prev} → PASSED, bar↓")
+                        if meaningful:
+                            dash.print(f"[gate] step={step:,} | val ppl {score:.2f} < best "
+                                       f"{prev} → PASSED, new best (bar↓)")
+                        else:
+                            ref = "∞" if plateau_ref == float("inf") else f"{plateau_ref:.2f}"
+                            dash.print(f"[gate] step={step:,} | val ppl {score:.2f} < best "
+                                       f"{prev} → new best, SAVED — but cumulative gain since "
+                                       f"{ref} < {min_delta:.1%} min_delta, plateauing "
+                                       f"({stale + 1}/{patience})")
                     best_score, best_step, best_tokens = score, step, tokens_seen
                     best_loss = acc_loss / grad_acc
                     _save_best(best_score, best_step, best_tokens, best_loss)
-                    stale = 0
+                    if meaningful:
+                        plateau_ref, stale = score, 0
+                    else:
+                        stale += 1
                 else:
                     # Not a new best — either still above the floor (not viable yet, NOT a
-                    # best per the gate) or a candidate that didn't beat the running best.
+                    # best per the gate) or no better than the running best (discarded).
                     if not skip_gate:
                         if not is_candidate:
                             bar = ("no best yet" if best_score == float("inf")
@@ -933,28 +995,28 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                                        f"{thr:.1f} → not viable yet, NOT a best ({bar})")
                         elif math.isfinite(best_score):
                             dash.print(f"[gate] step={step:,} | val ppl {score:.2f} ≥ best "
-                                       f"{best_score:.2f} → not passed, discarded "
+                                       f"{best_score:.2f} → no improvement, discarded "
                                        f"({stale + 1}/{patience})")
-                    # Plateau only counts once we actually HAVE a floor-clearing best.
                     if math.isfinite(best_score):
                         stale += 1
-                        if patience and stale >= patience:
-                            # Plateaued at the best — ship it. The best is, by construction,
-                            # a floor-clearing candidate, so the stage graduates.
-                            B.engine.load_weights(model, str(best_path))
-                            save_checkpoint(model, best_step, stage, best_tokens,
-                                            best_loss, ckpt_dir, log=dash.print)
-                            B.engine.save_weights(model, str(ckpt_dir / "final.npz"))   # graduated
-                            with open(ckpt_dir / "stage_complete.json", "w") as f:
-                                json.dump({"stage": stage, "step": best_step,
-                                           "tokens_seen": best_tokens, "gate_score": best_score,
-                                           "gate_threshold": thr, "met_bar": True,
-                                           "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
-                                           "early_stopped": True, "timestamp": time.time()}, f, indent=2)
-                            dash.print(f"✓ Stage {stage} COMPLETE — best val ppl "
-                                       f"{best_score:.2f} (≤ floor {thr:.1f}), plateaued")
-                            _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
-                            return True
+
+                # Plateau (counts only once a floor-clearing best exists) → ship the best.
+                # The best is, by construction, a floor-clearing candidate, so it graduates.
+                if math.isfinite(best_score) and patience and stale >= patience:
+                    B.engine.load_weights(model, str(best_path))
+                    save_checkpoint(model, best_step, stage, best_tokens,
+                                    best_loss, ckpt_dir, log=dash.print)
+                    B.engine.save_weights(model, str(ckpt_dir / "final.npz"))   # graduated
+                    with open(ckpt_dir / "stage_complete.json", "w") as f:
+                        json.dump({"stage": stage, "step": best_step,
+                                   "tokens_seen": best_tokens, "gate_score": best_score,
+                                   "gate_threshold": thr, "met_bar": True,
+                                   "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
+                                   "early_stopped": True, "timestamp": time.time()}, f, indent=2)
+                    dash.print(f"✓ Stage {stage} COMPLETE — best val ppl "
+                               f"{best_score:.2f} (≤ floor {thr:.1f}), plateaued")
+                    _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
+                    return True
 
         # Final dashboard update so it shows 100%
         dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)

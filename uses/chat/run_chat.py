@@ -596,7 +596,23 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     rep_penalty = getattr(args, "rep_penalty", 1.0)
     max_tokens  = args.maxtok
     out_format  = agent.normalize_format(getattr(args, "format", "text"))
-    think_level = agent.normalize_thinking(getattr(args, "think", "medium"))
+    # think=auto: thinking only makes sense once the reasoning stage is trained. When
+    # testing a stage BELOW it, an under-trained <think> just emits garbage (e.g. stage 1
+    # answering "hi" with a broken scratchpad), so default think OFF there.
+    _think_arg = getattr(args, "think", "auto")
+    if _think_arg == "auto":
+        from src.training.stages import STAGE_NAMES
+        reasoning_stage = next((s for s, n in STAGE_NAMES.items()
+                                if "reason" in n.lower()), 5)
+        _stage = getattr(args, "stage", None)
+        if _stage is not None and _stage < reasoning_stage:
+            think_level = agent.normalize_thinking("off")
+            print(f"  Thinking → off (stage {_stage} is below the reasoning stage "
+                  f"{reasoning_stage}; use --think to override)")
+        else:
+            think_level = agent.normalize_thinking("medium")
+    else:
+        think_level = agent.normalize_thinking(_think_arg)
     stream      = bool(getattr(args, "stream", True))
     deadline    = getattr(args, "max_seconds", GEN_DEADLINE_S) or None   # 0 → unlimited
     # Seed context with the multimodal grounding prefix (image/audio), if any.
@@ -1018,9 +1034,11 @@ Examples:
                         help="Max new tokens per turn (default: 256)")
     parser.add_argument("--format",     choices=agent.OUTPUT_FORMATS, default="text",
                         help="Output format: text (default) or json (structured)")
-    parser.add_argument("--think",      choices=agent.THINKING_LEVELS, default="medium",
-                        help="Reasoning effort: off, low, medium (default), high — "
-                             "more thinking generally means better answers")
+    parser.add_argument("--think",      choices=[*agent.THINKING_LEVELS, "auto"],
+                        default="auto",
+                        help="Reasoning effort: off, low, medium, high, or auto (default). "
+                             "auto = off when testing a stage BELOW the reasoning stage "
+                             "(the model hasn't learned to think yet), medium otherwise.")
     parser.add_argument("--stream",     action=argparse.BooleanOptionalAction, default=True,
                         help="Stream tokens as they generate (default: on; --no-stream to disable)")
     parser.add_argument("--quant",       type=parse_quant, default=None, metavar="none|N",
