@@ -423,7 +423,12 @@ def prepare_stage_for_level(level: int, stage: int, cfg: dict,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     budget_m     = max(int(sc.get("n_tokens", 100_000_000) // 1_000_000), 1)
-    per_source_m = max(budget_m // max(len(sources), 1), 1)
+    default_per  = max(budget_m // max(len(sources), 1), 1)
+    # Optional PER-SOURCE token budgets (M tokens), so a small CLEAN curated source
+    # (basic_chat, definitions) gets a controlled, meaningful share and a large noisy
+    # one (tinystories) can be capped — instead of the naive uniform split that
+    # drowns curated sources. Falls back to the uniform default for unlisted sources.
+    src_budgets  = (data.get("source_budgets_m") or {})
     extra        = _full_corpus_streamers(stage, langs, limit_mb)
 
     print(f"\n{'='*60}")
@@ -432,6 +437,7 @@ def prepare_stage_for_level(level: int, stage: int, cfg: dict,
     print(f"{'='*60}")
 
     for src in sources:
+        per_source_m = max(int(src_budgets.get(src, default_per)), 1)
         out_path = out_dir / f"{src}.jsonl"
         ok, reason = _validate_jsonl(out_path, per_source_m)
         if ok:

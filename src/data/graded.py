@@ -766,6 +766,74 @@ def _stream_corpus(name: str, extract, lang: str) -> Iterator[dict]:
             yield {"text": text, "lang": lang}
 
 
+# ── basic everyday conversation (clean, coherent, low-entropy fluency anchor) ─
+# The real dialogue corpora are empathetic (adult emotional venting — abstract and
+# noisy for a tiny base) or narrative. To converse FLUENTLY and SENSIBLY a base must
+# first nail the high-frequency exchanges: greet, say who it is, be polite, answer a
+# simple question, say goodbye. These are scripted CLEAN and SHORT here (so "hi"→"hi!"
+# is strongly represented, not "hi"→"I'm sorry…"), and being low-entropy they also
+# pull perplexity DOWN. Generated as a BOUNDED, de-duplicated set (templates × slots),
+# then oversampled by the loader — variety without inflating the corpus with noise.
+_BC_GREET_IN  = ["Hi", "Hello", "Hey", "Hi there", "Hello there", "Good morning",
+                 "Good afternoon", "Good evening"]
+_BC_GREET_OUT = ["Hi!", "Hello!", "Hey!", "Hi there!", "Hello! Nice to meet you.",
+                 "Hi! How can I help you?", "Hello! How are you?"]
+_BC_HOW_IN    = ["How are you?", "How are you doing?", "How's it going?",
+                 "How do you feel today?"]
+_BC_HOW_OUT   = ["I'm doing well, thank you! How are you?",
+                 "I'm good, thanks for asking! How about you?",
+                 "I'm fine, thank you. How are you today?",
+                 "I'm great, thanks! How can I help?"]
+_BC_FACTS = [
+    ("What color is the sky?", "The sky is blue."),
+    ("What color is grass?", "Grass is green."),
+    ("What color is the sun?", "The sun is yellow."),
+    ("What sound does a dog make?", "A dog says woof."),
+    ("What sound does a cat make?", "A cat says meow."),
+    ("How many legs does a dog have?", "A dog has four legs."),
+    ("How many days are in a week?", "There are seven days in a week."),
+    ("What do bees make?", "Bees make honey."),
+    ("Where do fish live?", "Fish live in water."),
+    ("What do we use to see?", "We use our eyes to see."),
+    ("What is the opposite of hot?", "The opposite of hot is cold."),
+    ("What is the opposite of big?", "The opposite of big is small."),
+    ("What do you drink when you are thirsty?", "You drink water when you are thirsty."),
+    ("What comes after the number two?", "The number three comes after two."),
+]
+_BC_IDENTITY = [
+    ("What is your name?", "I'm RDMCA, your helpful assistant."),
+    ("Who are you?", "I'm RDMCA, a friendly assistant here to help you."),
+    ("What can you do?", "I can chat with you, answer simple questions, and help you learn."),
+    ("Can you help me?", "Yes, I'd be happy to help. What do you need?"),
+    ("Are you a robot?", "I'm a computer assistant. I'm here to help you."),
+]
+_BC_POLITE = [
+    ("Thank you!", "You're welcome!"),
+    ("Thanks a lot.", "You're welcome! Happy to help."),
+    ("Sorry.", "That's okay, no problem."),
+    ("Goodbye!", "Goodbye! Have a nice day."),
+    ("Bye!", "Bye! Take care."),
+    ("See you later.", "See you later! Take care."),
+    ("Please help me.", "Of course, I'm happy to help."),
+]
+
+
+def gen_basic_chat(n: int, seed: int = 1) -> Iterator[dict]:
+    """Clean, short, COHERENT everyday exchanges (greet / how-are-you / identity /
+    simple facts / politeness) — the high-frequency conversation a base must get
+    right to feel fluent. A bounded, de-duplicated set; oversampled by the loader."""
+    pairs: List[tuple] = []
+    for a in _BC_GREET_IN:
+        for b in _BC_GREET_OUT:
+            pairs.append((a, b))
+    for a in _BC_HOW_IN:
+        for b in _BC_HOW_OUT:
+            pairs.append((a, b))
+    pairs += _BC_FACTS + _BC_IDENTITY + _BC_POLITE
+    records = [{"text": f"User: {q}\nAssistant: {a}", "lang": "en"} for q, a in pairs]
+    yield from _cycle_records(records, n, seed)
+
+
 # EmpatheticDialogues carries an `emotion` label (32 categories — roughly HALF
 # positive: joyful/proud/grateful/excited/hopeful/content…; half negative:
 # sad/afraid/angry/anxious/lonely…) and pairs an emotional `situation` with an apt
@@ -773,7 +841,7 @@ def _stream_corpus(name: str, extract, lang: str) -> Iterator[dict]:
 # (cap per emotion) so the model sees the full mood range evenly instead of
 # over-fitting the support/apologetic subset (the "hi → I'm sorry…" failure). Deleting
 # the corpus would only skip the problem; balancing it fixes the root.
-def _stream_empathetic_balanced(per_emotion_cap: int = 700) -> Iterator[dict]:
+def _stream_empathetic_balanced(per_emotion_cap: int = 250) -> Iterator[dict]:
     from collections import Counter
     from datasets import load_dataset
     try:
@@ -852,22 +920,41 @@ def stream_instruct(langs: List[str], limit_mb: Optional[int] = None,
     answers are skipped to keep entries digestible for the small early levels."""
     if "en" not in langs:
         return
+    from datasets import load_dataset
+    seen: set = set()
+
+    def _emit(instr: str, inp: str, out: str):
+        instr, inp, out = instr.strip(), (inp or "").strip(), (out or "").strip()
+        if not instr or not out or len(out) > 600:          # keep short, simple Q&A
+            return None
+        user = f"{instr}\n{inp}" if inp else instr
+        text = f"User: {user}\nAssistant: {out}"
+        if _hash01(instr) < system_frac:                    # condition on a system prompt
+            text = _prepend_system(text, _persona_for(instr))
+        h = _stable_hash(text)
+        if h in seen:
+            return None
+        seen.add(h)
+        return {"text": text, "lang": "en"}
+
+    # Alpaca + Dolly: two clean instruction→response corpora chained (Dolly adds
+    # ~15K real-world Q&A so 'answer the request' isn't starved at Alpaca's ~3.5M
+    # tokens). Each is independently fault-tolerant (a load failure skips just it).
     try:
-        from datasets import load_dataset
-        ds = load_dataset("tatsu-lab/alpaca", split="train", streaming=True)
-        for ex in ds:
-            instr = (ex.get("instruction") or "").strip()
-            inp   = (ex.get("input") or "").strip()
-            out   = (ex.get("output") or "").strip()
-            if not instr or not out or len(out) > 600:      # keep short, simple Q&A
-                continue
-            user = f"{instr}\n{inp}" if inp else instr
-            text = f"User: {user}\nAssistant: {out}"
-            if _hash01(instr) < system_frac:                # condition on a system prompt
-                text = _prepend_system(text, _persona_for(instr))
-            yield {"text": text, "lang": "en"}
+        for ex in load_dataset("tatsu-lab/alpaca", split="train", streaming=True):
+            rec = _emit(ex.get("instruction", ""), ex.get("input", ""), ex.get("output", ""))
+            if rec:
+                yield rec
     except Exception as e:
-        print(f"    [instruct] {e}")
+        print(f"    [instruct/alpaca] {e}")
+    try:
+        for ex in load_dataset("databricks/databricks-dolly-15k", split="train", streaming=True):
+            # Dolly's `context` is the optional input; closed-QA/creative/brainstorm etc.
+            rec = _emit(ex.get("instruction", ""), ex.get("context", ""), ex.get("response", ""))
+            if rec:
+                yield rec
+    except Exception as e:
+        print(f"    [instruct/dolly] {e}")
 
 
 def stream_simple_wikipedia(limit_mb: Optional[int] = None) -> Iterator[dict]:
@@ -1152,6 +1239,24 @@ _DICT_TIER2: Dict[str, tuple] = {
 _DICT_TIERS = [_DICT_TIER1, _DICT_TIER2]   # index 0 → level 1, index 1 → levels ≥2
 
 
+def _cycle_records(records: List[dict], n: int, seed: int = 1) -> Iterator[dict]:
+    """Yield up to `n` records by CYCLING a small bounded set, reshuffling each pass.
+    For CLEAN canonical data (definitions, basic_chat) controlled repetition is
+    desirable anchoring — the model should see 'A car is …' / 'hi'→'hi!' many times —
+    while a per-source token budget (prepare_data) keeps the volume controlled."""
+    if not records:
+        return
+    rng = random.Random(seed)
+    out = 0
+    while out < n:
+        rng.shuffle(records)
+        for r in records:
+            yield r
+            out += 1
+            if out >= n:
+                return
+
+
 def _article(word: str) -> str:
     return "an" if word[:1].lower() in "aeiou" else "a"
 
@@ -1193,8 +1298,7 @@ def gen_definitions(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
     records = [{"text": s, "lang": "en"}
                for word, (pos, d) in bank.items()
                for s in _definition_surfaces(word, pos, d)]
-    random.Random(seed).shuffle(records)
-    yield from records[:n]
+    yield from _cycle_records(records, n, seed)
 
 
 # ──────────────────────────── dispatcher ────────────────────────────────────
@@ -1220,6 +1324,8 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
                       gen_arithmetic(approx_examples, arithmetic_level), approx_examples)
     if key in ("definitions", "dictionary"):    # graded word meanings (statements + Q&A)
         return gen_definitions(approx_examples, level=arithmetic_level)
+    if key in ("basic_chat", "smalltalk"):      # clean coherent everyday conversation
+        return gen_basic_chat(approx_examples)
     if key == "analogies":                      # TEMPORARY synthetic (no real corpus yet)
         return gen_analogies(approx_examples)
     if key in ("memory", "memory_synth"):       # synthetic recall/use-of-memory (<mem>)

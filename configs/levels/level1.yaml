@@ -112,21 +112,31 @@ curriculum:
       #   definitions      → graded dictionary: word MEANINGS as statements + Q&A
       #                      ("what is a car?") so the base UNDERSTANDS words, not
       #                      just predicts them; the word bank grows per level.
-      sources: [tinystories, dialogue, instruct, simple_wikipedia, definitions]
-      # Oversample conversation/instruction/definitions so the model learns to
-      # converse/answer/define, not just narrate (stories+wiki dominate by raw size).
-      source_weights: {dialogue: 2.5, instruct: 2.5, definitions: 4.0}
+      #   basic_chat       → clean, short, COHERENT everyday exchanges (greet /
+      #                      how-are-you / identity / simple facts / politeness) — the
+      #                      high-frequency conversation a base must nail to feel
+      #                      fluent; low-entropy, so it also pulls perplexity DOWN.
+      sources: [tinystories, dialogue, instruct, simple_wikipedia, definitions, basic_chat]
+      # PER-SOURCE token budgets (M) — the lever for the MIX. A tiny preschool base
+      # learns to CONVERSE first, so conversation/instruction/clean-core lead and
+      # narrative is supporting (not half the corpus). Curated clean sources get a
+      # controlled, meaningful share here (cycled), then are oversampled at train time.
+      source_budgets_m: {dialogue: 70, tinystories: 30, instruct: 50,
+                         simple_wikipedia: 25, definitions: 6, basic_chat: 6}
+      # Train-time oversampling on top of the written mix — push the CLEAN, sensible
+      # registers (answer-the-question, everyday chat, word meanings) over narrative.
+      source_weights: {dialogue: 2.0, instruct: 3.0, definitions: 3.0,
+                       basic_chat: 4.0, simple_wikipedia: 1.5}
       filter:
         # Flesch-Kincaid grade ceiling, applied to PROSE sources (tinystories,
-        # simple_wikipedia). MEASURED: grade≤4 kept only 0.6% of Simple Wikipedia
-        # (1.2K articles, ~0.1M tokens) — the factual/expository register that
-        # teaches word MEANINGS in context was almost entirely dropped, leaving the
-        # base ~97% narrative+chat. grade≤10 keeps ~33% (Simple Wikipedia is already
-        # curated-simple), restoring real world-knowledge vocabulary. This RAISES
-        # loss slightly (factual text is higher-entropy than TinyStories) but is the
-        # right trade: lower loss on a narrative-only diet is not better understanding.
-        max_grade: 10
-        max_word_len: 18
+        # simple_wikipedia). MEASURED: grade≤4 kept only 0.6% of Simple Wikipedia,
+        # grade≤7 ~11%, grade≤10 ~33%. grade≤4 left the base ~97% narrative+chat with
+        # almost no factual register. grade≤7 restores ~18× more factual prose while
+        # staying ACCESSIBLE for an 11M model (grade≤10 prose is harder → higher loss
+        # with little gain at this size). Word-meaning grounding comes mainly from the
+        # curated `definitions` source; wiki adds usage-in-context breadth.
+        max_grade: 7
+        max_word_len: 16
   stage2:
     name: "Perception and pattern recognition"
     entry_level: 1

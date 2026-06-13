@@ -124,6 +124,30 @@ def test_definitions_vocabulary_grows_per_level():
     assert len(l2) > len(l1)                                # vocabulary grew
 
 
+# ── 5c. clean everyday-conversation anchor (basic_chat) ──────────────────────
+def test_gen_basic_chat_clean_qa_and_cycles_to_budget():
+    """basic_chat is clean User/Assistant Q&A, and a SMALL unique set CYCLED to fill
+    a budget (controlled clean repetition — the fluency anchor)."""
+    sample = list(itertools.islice(g.gen_basic_chat(40), 40))
+    for r in sample:
+        assert r["text"].startswith("User: ") and "\nAssistant: " in r["text"]
+        assert r["lang"] == "en"
+    # greeting must map to a greeting-style reply, never an apology ("hi"→"I'm sorry")
+    greet = [r["text"] for r in itertools.islice(g.gen_basic_chat(3000), 3000)
+             if r["text"].startswith("User: Hi\n")]
+    assert greet and all("sorry" not in t.lower() for t in greet)
+    # cycles: far more records than unique exchanges, but bounded unique count
+    big = list(itertools.islice(g.gen_basic_chat(4000), 4000))
+    assert len(big) == 4000 and 20 < len({r["text"] for r in big}) < 400
+
+
+def test_cycle_records_fills_n_and_handles_empty():
+    recs = [{"text": f"r{i}", "lang": "en"} for i in range(5)]
+    out = list(g._cycle_records(list(recs), 17))
+    assert len(out) == 17                                   # cycles 5 → 17
+    assert list(g._cycle_records([], 10)) == []             # empty never hangs
+
+
 # ── 6. rehearsal selection is weighted by corpus size ────────────────────────
 def test_replay_weights_track_corpus_size(tmp_path):
     big, small = tmp_path / "big", tmp_path / "small"

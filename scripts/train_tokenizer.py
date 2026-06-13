@@ -87,7 +87,8 @@ def build_text_sample(files: list, label: str, out_txt: str,
     max_bytes   = max_mb * 1024 * 1024
     jsonl_files = sorted(files)
     total_size  = sum(f.stat().st_size for f in jsonl_files)
-    progress.update(task_id, total=min(total_size, max_bytes))
+    bar_total   = min(total_size, max_bytes)
+    progress.update(task_id, total=bar_total)
 
     written = 0
     docs    = 0
@@ -113,8 +114,14 @@ def build_text_sample(files: list, label: str, out_txt: str,
                                     completed=min(written, max_bytes),
                                     info=f"{done_mb:.1f} / {total_mb:.0f} MB  •  {docs:,} docs")
                     if written >= max_bytes:
-                        progress.update(task_id, completed=max_bytes)
+                        progress.update(task_id, completed=bar_total)
                         return written
+    # All input consumed before the cap: the extracted TEXT is smaller than the raw
+    # JSONL bytes (JSON wrapper + UTF-8 multibyte chars), so `written` never reaches
+    # the file-size-based total. Snap the bar to 100% so the task completes and its
+    # spinner stops — the read really is done.
+    progress.update(task_id, completed=bar_total,
+                    info=f"{written/1_000_000:.1f} MB  •  {docs:,} docs")
     return written
 
 
