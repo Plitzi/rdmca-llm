@@ -117,29 +117,71 @@ def stream_arithmetic(langs: List[str], level: int,
             yield {"text": out, "lang": lang}
 
 
-# ──────────────────────────── analogies (TEMPORARY synthetic) ───────────────
-# TODO: replace with a real graded analogy corpus once one is available in a
-# loadable (parquet) form — current public analogy datasets are script-based and
-# no longer load on datasets>=3. Kept synthetic for now so stage 2 (perception /
-# pattern recognition) still has data at the lower levels.
-_ANALOGY_PAIRS = [
-    ("dog", "puppy", "cat", "kitten"), ("big", "small", "tall", "short"),
-    ("hot", "cold", "up", "down"), ("day", "night", "sun", "moon"),
-    ("happy", "sad", "fast", "slow"), ("bird", "fly", "fish", "swim"),
-    ("king", "queen", "man", "woman"), ("hand", "glove", "foot", "sock"),
-]
+# ──────────────────────────── analogies (compositional synthetic) ───────────
+# COMPOSITIONAL by RELATION, not a fixed list of analogy tuples. Each relation holds
+# MANY instance pairs; an analogy is built by sampling TWO different instances of the
+# SAME relation ("a:b :: c:d"). The model thus sees each relation generalize across many
+# pairs and learns the RELATION (baby-animal, antonym, gender, …), not specific tuples —
+# the project tenet that a stage must LEARN a faculty, not memorize instances. With k
+# instances a relation yields k·(k-1) ordered analogies, so the pairs vastly outnumber a
+# fixed tuple list and an OOD probe (held-out instances) can test generalization.
+# TODO: fold in a real graded analogy corpus (BATS/Google) when one loads on datasets>=3.
+_ANALOGY_RELATIONS = {
+    "baby_animal": [("dog", "puppy"), ("cat", "kitten"), ("cow", "calf"),
+                    ("horse", "foal"), ("sheep", "lamb"), ("bear", "cub"),
+                    ("frog", "tadpole"), ("hen", "chick"), ("kangaroo", "joey"),
+                    ("goat", "kid"), ("lion", "cub"), ("deer", "fawn")],
+    "antonym": [("hot", "cold"), ("big", "small"), ("up", "down"), ("fast", "slow"),
+                ("happy", "sad"), ("day", "night"), ("open", "closed"), ("light", "dark"),
+                ("high", "low"), ("full", "empty"), ("wet", "dry"), ("hard", "soft"),
+                ("near", "far"), ("old", "new"), ("loud", "quiet"), ("rich", "poor")],
+    "gender": [("king", "queen"), ("man", "woman"), ("boy", "girl"),
+               ("prince", "princess"), ("actor", "actress"), ("uncle", "aunt"),
+               ("father", "mother"), ("son", "daughter"), ("brother", "sister"),
+               ("husband", "wife"), ("nephew", "niece"), ("rooster", "hen")],
+    "animal_sound": [("dog", "bark"), ("cat", "meow"), ("cow", "moo"), ("duck", "quack"),
+                     ("lion", "roar"), ("bird", "chirp"), ("horse", "neigh"),
+                     ("sheep", "baa"), ("frog", "croak"), ("bee", "buzz"),
+                     ("snake", "hiss"), ("wolf", "howl")],
+    "animal_home": [("dog", "kennel"), ("bird", "nest"), ("bee", "hive"), ("fish", "water"),
+                    ("cow", "barn"), ("horse", "stable"), ("spider", "web"),
+                    ("lion", "den"), ("rabbit", "burrow"), ("ant", "anthill"),
+                    ("pig", "pen"), ("bat", "cave")],
+    "plural": [("child", "children"), ("foot", "feet"), ("mouse", "mice"), ("man", "men"),
+               ("tooth", "teeth"), ("person", "people"), ("goose", "geese"),
+               ("woman", "women"), ("leaf", "leaves"), ("knife", "knives")],
+    "worker_tool": [("painter", "brush"), ("writer", "pen"), ("farmer", "plow"),
+                    ("chef", "knife"), ("teacher", "chalk"), ("carpenter", "hammer"),
+                    ("gardener", "spade"), ("doctor", "stethoscope"), ("tailor", "needle"),
+                    ("barber", "scissors")],
+    "whole_part": [("car", "wheel"), ("tree", "leaf"), ("book", "page"), ("hand", "finger"),
+                   ("house", "door"), ("clock", "hand"), ("bike", "pedal"),
+                   ("body", "arm"), ("flower", "petal"), ("shirt", "sleeve")],
+}
 
 
 def gen_analogies(n: int, seed: int = 1) -> Iterator[dict]:
+    """Compositional analogies + numeric patterns for stage 2 (pattern recognition).
+    An analogy samples TWO instances of one relation so the model learns the relation,
+    not fixed tuples (see _ANALOGY_RELATIONS). Three forms: a STATEMENT, a COMPLETION
+    Q&A ('a is to b as c is to ___?' → d, the analogy skill), and a numeric pattern."""
     rng = random.Random(seed)
+    rels = list(_ANALOGY_RELATIONS.values())
     for _ in range(n):
-        if rng.random() < 0.5:
-            a, b, c, d = rng.choice(_ANALOGY_PAIRS)
-            yield {"text": f"{a} is to {b} as {c} is to {d}.", "lang": "en"}
-        else:
+        r = rng.random()
+        if r < 0.75:                              # word analogy (relation-based)
+            pairs = rng.choice(rels)
+            (a, b), (c, d) = rng.sample(pairs, 2)
+            if rng.random() < 0.5:                # completion Q&A (answer-masked skill)
+                yield {"text": f"User: {a} is to {b} as {c} is to what?\n"
+                               f"Assistant: {d}.", "lang": "en"}
+            else:                                 # statement
+                yield {"text": f"{a} is to {b} as {c} is to {d}.", "lang": "en"}
+        else:                                     # numeric pattern (sequence completion)
             start = rng.randint(1, 9); step = rng.randint(1, 5)
             seq = [start + step * i for i in range(4)]
-            yield {"text": f"Pattern: {seq[0]} {seq[1]} {seq[2]} {seq[3]} -> {seq[3]+step}", "lang": "en"}
+            yield {"text": f"Pattern: {seq[0]} {seq[1]} {seq[2]} {seq[3]} -> {seq[3]+step}",
+                   "lang": "en"}
 
 
 # ──────────────────────────── memory (synthetic, EN) ────────────────────────
@@ -1055,10 +1097,60 @@ def _grade_arith(rng: random.Random, level: int):
     return a, b, op, res
 
 
+def _worked_operands(rng: random.Random, level: int):
+    """Operands for a WORKED (step-by-step) +/- example. Wider than the bare single-digit
+    facts so the carry/borrow ALGORITHM is actually exercised (and can generalize to
+    unseen, longer numbers), growing with level. +/- only — column steps teach the
+    algorithm; ×/÷ stay as facts. Returns (a, b, op) with a≥b for subtraction."""
+    digits = {1: (1, 3), 2: (2, 4)}.get(level, (3, 6))   # L1 up to 3-digit → carries appear
+    d = rng.randint(*digits)
+    hi = 10 ** d - 1
+    a, b = rng.randint(0, hi), rng.randint(0, hi)
+    op = rng.choice(["+", "-"])
+    if op == "-" and b > a:
+        a, b = b, a
+    return a, b, op
+
+
+def _add_worked(a: int, b: int) -> str:
+    """Compact column-addition steps (right→left, with carry). Stated result is a+b."""
+    w = max(len(str(a)), len(str(b)))
+    da, db = str(a).zfill(w), str(b).zfill(w)
+    carry, parts = 0, []
+    for i in range(w - 1, -1, -1):
+        x, y = int(da[i]), int(db[i])
+        s = x + y + carry
+        head = f"{x} + {y}" + (f" + {carry}" if carry else "")
+        parts.append(f"{head} = {s}, write {s % 10}" + (", carry 1" if s >= 10 else ""))
+        carry = 1 if s >= 10 else 0
+    if carry:
+        parts.append("write the carried 1")
+    return "; ".join(parts) + f". So {a} + {b} = {a + b}."
+
+
+def _sub_worked(a: int, b: int) -> str:
+    """Compact column-subtraction steps (right→left, with borrow). Requires a≥b."""
+    w = max(len(str(a)), len(str(b)))
+    da, db = str(a).zfill(w), str(b).zfill(w)
+    borrow, parts = 0, []
+    for i in range(w - 1, -1, -1):
+        x, y = int(da[i]) - borrow, int(db[i])
+        if x < y:
+            parts.append(f"{x + 10} - {y} = {x + 10 - y} (borrow 1)")
+            borrow = 1
+        else:
+            parts.append(f"{x} - {y} = {x - y}")
+            borrow = 0
+    return "; ".join(parts) + f". So {a} - {b} = {a - b}."
+
+
 def gen_arithmetic(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
-    """Synthetic graded arithmetic with VARIED surface forms — symbolic, worded,
-    Q&A (teaches ANSWERING, not just echoing), counting sequences and comparisons —
-    so the model learns number facts and to answer arithmetic, not one fixed format."""
+    """Synthetic graded arithmetic with VARIED surface forms — symbolic, worded, Q&A
+    (teaches ANSWERING, not just echoing), counting, comparisons, and WORKED step-by-step
+    solutions. The worked form (column add/subtract with carry/borrow over multi-digit
+    operands) teaches the ALGORITHM so the model COMPUTES and generalizes to unseen
+    numbers, instead of memorizing a single-digit lookup table (which fails on 12+7).
+    Worked steps are INLINE (not <think> — that scaffolding is the reasoning stage's)."""
     rng = random.Random(seed)
     for _ in range(n):
         r = rng.random()
@@ -1067,8 +1159,13 @@ def gen_arithmetic(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
             seq = [start + step * i for i in range(rng.randint(4, 6))]
             yield {"text": "Counting: " + " ".join(map(str, seq)), "lang": "en"}
             continue
+        if r < 0.42:                              # WORKED step-by-step (+/-) → generalizes
+            a, b, op = _worked_operands(rng, level)
+            steps = _add_worked(a, b) if op == "+" else _sub_worked(a, b)
+            yield {"text": f"User: What is {a} {op} {b}?\nAssistant: {steps}", "lang": "en"}
+            continue
         a, b, op, res = _grade_arith(rng, level)
-        if r < 0.24 and level <= 1:               # comparison
+        if r < 0.52 and level <= 1:               # comparison
             sign = ">" if a > b else ("<" if a < b else "=")
             yield {"text": f"{a} {sign} {b}", "lang": "en"}
             continue
