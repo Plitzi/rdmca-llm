@@ -85,7 +85,8 @@ class TrainingDashboard:
                  d_model: int = 0,
                  plain: bool = False,
                  log_path=None,
-                 loss_ce_weight: float = 1.0):
+                 loss_ce_weight: float = 1.0,
+                 append: bool = True):
         self.stage           = stage
         self.n_tokens_target = n_tokens_target
         self.stage_name      = STAGE_NAMES.get(stage, f"Stage {stage}")
@@ -114,13 +115,16 @@ class TrainingDashboard:
         # loss/ppl/lr/tps per step + val-ppl/best per gate eval. Machine-readable so
         # scripts/plot_metrics.py (or any tool) can chart the curves after the fact.
         self._metrics = None
+        # append=True (a --resume) keeps the existing log/metrics; a FRESH run truncates
+        # them so a re-train doesn't append to (and mix old-schema rows into) the old file.
+        _mode = "a" if append else "w"
         if log_path is not None:
             try:
                 Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-                self._flog = open(log_path, "a", encoding="utf-8")
+                self._flog = open(log_path, _mode, encoding="utf-8")
                 mpath = Path(log_path).with_name("metrics.csv")
-                new = not mpath.exists() or mpath.stat().st_size == 0
-                self._metrics = open(mpath, "a", encoding="utf-8")
+                new = (_mode == "w") or not mpath.exists() or mpath.stat().st_size == 0
+                self._metrics = open(mpath, _mode, encoding="utf-8")
                 if new:
                     self._metrics.write("kind,step,tokens_m,loss,ppl,lr,tps,grad_norm,"
                                         "val_ppl,best_val_ppl,passed,replay\n")

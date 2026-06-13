@@ -827,7 +827,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                              d_model=model.cfg.d_model,
                              plain=plain,
                              log_path=ckpt_dir / "train.log",
-                             loss_ce_weight=loss_ce_weight)
+                             loss_ce_weight=loss_ce_weight,
+                             append=resume)   # fresh run truncates log+metrics; --resume appends
 
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
