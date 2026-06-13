@@ -270,6 +270,12 @@ class TextDataset:
             self.passes += 1
             if self.epoch_tokens is None:
                 self.epoch_tokens = epoch_count
+            if epoch_count == 0:
+                # The corpus yields NO trainable tokens (empty *.val.jsonl, or a
+                # split whose records all mask out). Re-entering the while-loop
+                # would spin forever and hang next_batch(); end the stream instead
+                # so callers (e.g. _make_val_batches) get StopIteration and fall back.
+                return
 
     def __iter__(self):
         return self.batches()
@@ -287,16 +293,33 @@ class DataLoader:
 
     def __init__(self, dataset: TextDataset, replay: Optional[List[TextDataset]] = None,
                  replay_fraction: float = 0.0, seed: int = 1234):
+        replay = replay or []
         self._ds       = dataset
         self._iter     = dataset.batches()
         self.tokens_per_batch = dataset.batch_size * dataset.seq_len
-        self._replay_iters = [d.batches() for d in (replay or [])]
+        self._replay_iters = [d.batches() for d in replay]
+        # Weight replay selection by corpus SIZE so the largest earlier stage —
+        # conversation (stage 1), by far the biggest — DOMINATES rehearsal and is
+        # the skill most protected from erosion. Uniform selection gave a 200M-token
+        # conversation corpus the SAME refresh weight as a 4K-token arithmetic one,
+        # so a late stage's frozen core forgot how to converse (it "went crazy").
+        self._replay_weights = [self._corpus_bytes(d) for d in replay] or None
         self._replay_fraction = float(replay_fraction) if self._replay_iters else 0.0
         self._rng = random.Random(seed)
 
+    @staticmethod
+    def _corpus_bytes(ds: TextDataset) -> float:
+        """Total on-disk bytes of a dataset's files — a cheap proxy for token count,
+        used to weight rehearsal toward the larger (more important) earlier stages."""
+        try:
+            return float(max(sum(f.stat().st_size for f in ds._files), 1))
+        except Exception:
+            return 1.0
+
     def next_batch(self) -> np.ndarray:
         if self._replay_iters and self._rng.random() < self._replay_fraction:
-            return next(self._rng.choice(self._replay_iters))
+            it = self._rng.choices(self._replay_iters, weights=self._replay_weights, k=1)[0]
+            return next(it)
         return next(self._iter)
 
     def skip(self, n_batches: int) -> int:

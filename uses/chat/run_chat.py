@@ -322,6 +322,19 @@ def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
         _label(answer_prefix)
         ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens,
                             stop_strings=answer_stop, suppress_think=True, **sgen)
+        # Fallback: if the model OPENED a <think> it never CLOSED, the visible answer
+        # is empty (a blank reply — the symptom on an under-trained reasoning stage).
+        # Force-close the scratchpad and continue from it (Phase-B style) so 'think
+        # off' NEVER returns blank — without ever showing the raw scratchpad.
+        raw = decode_fn(ids) if ids else ""
+        if ids and agent.THINK_OPEN in raw and not agent.visible_stream_text(raw).strip():
+            scratch = (raw.split(agent.THINK_OPEN, 1)[1]
+                          .split(agent.THINK_CLOSE, 1)[0].strip())
+            closed = f"{agent.THINK_OPEN} {scratch} {agent.THINK_CLOSE}\n"
+            _label(answer_prefix)
+            ids, tps2 = generate(model, list(prompt_ids) + tokenizer.encode_raw(closed),
+                                 max_new_tokens=max_new_tokens, stop_strings=answer_stop, **sgen)
+            tps = tps2 or tps
         return "", ids, tps
 
     # Raw pieces only — NO `<lang:XX>` prefix. encode() would inject the language

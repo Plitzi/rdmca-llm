@@ -68,7 +68,8 @@ training:
                                # accumulation). bs=16 is already plenty here, so 1.
   warmup_steps: 500             # 2.0% of schedule (was 0.82%) — safer warmup→cosine transition
   save_every: 500
-  eval_every: 1000
+  eval_every: 500              # finer val sampling → the anti-divergence best-checkpoint
+                              # (restored at stage end) is well-sampled on short stages.
   clip_grad_norm: 1.0
   max_corpus_passes: 4         # cap re-reads of a small corpus (anti-overfit). If the
                                # corpus × this < n_tokens, the stage stops here (default 3).
@@ -108,16 +109,24 @@ curriculum:
       #   simple_wikipedia → factual/expository, plain language (world-knowledge vocab)
       # Variety of REGISTER + topic — not just more tokens — is what lets a tiny
       # model converse and understand rather than only be grammatical.
-      sources: [tinystories, dialogue, instruct, simple_wikipedia]
-      # Oversample conversation/instruction so the model learns to converse/answer,
-      # not just narrate or recite (stories+wiki dominate by raw size). Tunable.
-      source_weights: {dialogue: 2.5, instruct: 2.5}
+      #   definitions      → graded dictionary: word MEANINGS as statements + Q&A
+      #                      ("what is a car?") so the base UNDERSTANDS words, not
+      #                      just predicts them; the word bank grows per level.
+      sources: [tinystories, dialogue, instruct, simple_wikipedia, definitions]
+      # Oversample conversation/instruction/definitions so the model learns to
+      # converse/answer/define, not just narrate (stories+wiki dominate by raw size).
+      source_weights: {dialogue: 2.5, instruct: 2.5, definitions: 4.0}
       filter:
         # Flesch-Kincaid grade ceiling, applied to PROSE sources (tinystories,
-        # simple_wikipedia). Raised 2→4 (still elementary) so simple factual prose
-        # contributes real vocabulary breadth instead of being almost all dropped.
-        max_grade: 4
-        max_word_len: 14
+        # simple_wikipedia). MEASURED: grade≤4 kept only 0.6% of Simple Wikipedia
+        # (1.2K articles, ~0.1M tokens) — the factual/expository register that
+        # teaches word MEANINGS in context was almost entirely dropped, leaving the
+        # base ~97% narrative+chat. grade≤10 keeps ~33% (Simple Wikipedia is already
+        # curated-simple), restoring real world-knowledge vocabulary. This RAISES
+        # loss slightly (factual text is higher-entropy than TinyStories) but is the
+        # right trade: lower loss on a narrative-only diet is not better understanding.
+        max_grade: 10
+        max_word_len: 18
   stage2:
     name: "Perception and pattern recognition"
     entry_level: 1
@@ -181,6 +190,9 @@ curriculum:
                                # to recall and USE injected memory (LTSS + episodic).
     n_tokens: 15_000_000
     data_dir: "data/level1/stage6"
+    rehearsal_fraction: 0.35   # memory Q&A is uniformly short/factual — without heavy
+                               # rehearsal it shifts the output distribution and the
+                               # model stops conversing. 0.35 protects conversation.
     data:
       sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
       filter: null

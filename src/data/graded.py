@@ -884,6 +884,319 @@ def stream_simple_wikipedia(limit_mb: Optional[int] = None) -> Iterator[dict]:
         print(f"    [simple_wikipedia] {e}")
 
 
+# ─────────────────── synthetic fill generators (offline, unlimited) ──────────
+# The real graded corpora for the lower cognitive stages are SMALL and finite:
+# single-digit arithmetic is ≈200 facts, e-CARE ≈15K causal pairs, GSM8K ≈7.5K
+# CoT problems, the ethics seed ≈12 maxims. On their own they exhaust at a few %
+# of a stage's token budget, so stages 3/4/5/7 got a handful of gradient steps and
+# never actually learned — in particular stage 5 never learned to CLOSE a <think>
+# block and emit an answer (the cause of empty `--think off` replies). These
+# generators synthesize UNLIMITED, level-graded, format-correct examples with
+# VARIED surface forms (not bare repetition) to top the real seed up to budget.
+# They need no network, so a stage is never starved even fully offline.
+_SYN_NAMES   = ["Tom", "Mia", "Ana", "Leo", "Sam", "Noa", "Eva", "Ravi",
+                "Kai", "Lia", "Omar", "Zoe", "Ben", "Ivy", "Max", "Nia"]
+_SYN_OBJECTS = ["apples", "oranges", "cookies", "marbles", "stickers", "crayons",
+                "blocks", "balloons", "coins", "pencils", "books", "candies",
+                "toys", "cards", "shells", "buttons"]
+_OP_WORD = {"+": "plus", "-": "minus", "x": "times", "/": "divided by"}
+
+
+def _blend(real_it: Iterator[dict], synth_it: Iterator[dict],
+           n_examples: int) -> Iterator[dict]:
+    """Interleave a finite REAL corpus with an unlimited SYNTHETIC one (≈1:1 while
+    the real seed lasts, then pure synthetic) up to `n_examples` — so real records
+    are spread THROUGHOUT the file (not front-loaded as one block, which the loader
+    would only locally reshuffle). Stops early if synthetic runs out. Robust when
+    the real stream is empty (offline / dataset load failed): becomes pure synthetic."""
+    produced = 0
+    real_done = False
+    while produced < n_examples:
+        if not real_done:
+            rec = next(real_it, None)
+            if rec is None:
+                real_done = True
+            elif rec.get("text", "").strip():
+                yield rec
+                produced += 1
+                if produced >= n_examples:
+                    return
+        rec = next(synth_it, None)
+        if rec is None:
+            return
+        if rec.get("text", "").strip():
+            yield rec
+            produced += 1
+
+
+def _grade_arith(rng: random.Random, level: int):
+    """(a, b, op, result) graded so level 1 = single-digit +/− (never negative),
+    level 2 = two-digit +/−/×, level 3+ = larger + exact division."""
+    if level <= 1:
+        op = rng.choice(["+", "-"]); a, b = rng.randint(0, 9), rng.randint(0, 9)
+    elif level == 2:
+        op = rng.choice(["+", "-", "x"]); a, b = rng.randint(0, 99), rng.randint(0, 99)
+    else:
+        op = rng.choice(["+", "-", "x", "/"])
+        a, b = rng.randint(0, 999), rng.randint(1, 99)
+    if op == "-" and b > a:                       # keep subtraction non-negative
+        a, b = b, a
+    if op == "/":                                 # make division exact
+        b = max(b, 1); a -= a % b
+    res = {"+": a + b, "-": a - b, "x": a * b, "/": (a // b if b else 0)}[op]
+    return a, b, op, res
+
+
+def gen_arithmetic(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
+    """Synthetic graded arithmetic with VARIED surface forms — symbolic, worded,
+    Q&A (teaches ANSWERING, not just echoing), counting sequences and comparisons —
+    so the model learns number facts and to answer arithmetic, not one fixed format."""
+    rng = random.Random(seed)
+    for _ in range(n):
+        r = rng.random()
+        if r < 0.12:                              # counting sequence
+            start, step = rng.randint(0, 5), rng.choice([1, 1, 1, 2])
+            seq = [start + step * i for i in range(rng.randint(4, 6))]
+            yield {"text": "Counting: " + " ".join(map(str, seq)), "lang": "en"}
+            continue
+        a, b, op, res = _grade_arith(rng, level)
+        if r < 0.24 and level <= 1:               # comparison
+            sign = ">" if a > b else ("<" if a < b else "=")
+            yield {"text": f"{a} {sign} {b}", "lang": "en"}
+            continue
+        form = rng.random()
+        if form < 0.40:                           # symbolic equation
+            yield {"text": f"{a} {op} {b} = {res}", "lang": "en"}
+        elif form < 0.70:                         # worded statement
+            yield {"text": f"{a} {_OP_WORD[op]} {b} equals {res}.", "lang": "en"}
+        else:                                     # Q&A (User/Assistant → answer-masked)
+            yield {"text": f"User: What is {a} {op} {b}?\nAssistant: {res}", "lang": "en"}
+
+
+_CAUSE_EFFECT = [
+    ("it rained", "the ground got wet"), ("she dropped the glass", "it broke"),
+    ("he forgot his umbrella", "he got wet"), ("the sun came out", "the snow melted"),
+    ("they ran very fast", "they got tired"), ("she watered the plant", "it grew"),
+    ("he ate too much candy", "his stomach hurt"), ("the fire was hot", "the ice melted"),
+    ("nobody fed the cat", "it got hungry"), ("the wind blew hard", "the leaves fell"),
+    ("she studied a lot", "she passed the test"), ("he touched the hot stove", "he got burned"),
+    ("it got dark", "they turned on the light"), ("the baby was tired", "it fell asleep"),
+    ("they planted seeds", "flowers grew"), ("he did not sleep", "he felt sleepy"),
+    ("the cup had a hole", "the water leaked out"), ("she told a funny joke", "everyone laughed"),
+    ("the ice cream sat in the sun", "it melted"), ("he opened the window", "the room got cold"),
+    ("the dog heard a noise", "it barked"), ("she pushed the swing", "it went up"),
+    ("they shared the cake", "everyone was happy"), ("he tripped on a rock", "he fell down"),
+    ("the balloon got too big", "it popped"), ("she turned the key", "the door opened"),
+]
+
+
+def gen_causal(n: int, seed: int = 1) -> Iterator[dict]:
+    """Synthetic simple cause→effect (statements + 'what happened next?' Q&A) at a
+    preschool reading level — augments the finite e-CARE corpus for stage 4."""
+    rng = random.Random(seed)
+    cap = lambda s: s[0].upper() + s[1:]
+    for _ in range(n):
+        cause, effect = rng.choice(_CAUSE_EFFECT)
+        r = rng.random()
+        if r < 0.4:
+            yield {"text": f"{cap(cause)}, so {effect}.", "lang": "en"}
+        elif r < 0.7:
+            yield {"text": f"Because {cause}, {effect}.", "lang": "en"}
+        else:                                     # cause → effect as a Q&A
+            yield {"text": f"User: {cap(cause)}. What happened next?\n"
+                           f"Assistant: {cap(effect)}.", "lang": "en"}
+
+
+def gen_cot(n: int, seed: int = 1) -> Iterator[dict]:
+    """Synthetic chain-of-thought word problems in the EXACT stage-5 format — a
+    <think>…</think> scratchpad with the arithmetic steps, then 'The answer is N.'
+    This is what teaches the model to OPEN and then CLOSE the think block and emit
+    an answer; GSM8K (7.5K problems) exhausted at 6.5% of budget so the model never
+    learned it (empty `--think off` replies). Mirrors `_cot_transcript`'s shape."""
+    rng = random.Random(seed)
+    for _ in range(n):
+        name, obj = rng.choice(_SYN_NAMES), rng.choice(_SYN_OBJECTS)
+        kind = rng.randint(0, 3)
+        if kind == 0:                             # addition
+            a, b = rng.randint(1, 20), rng.randint(1, 20); res = a + b
+            q = f"{name} has {a} {obj} and gets {b} more. How many {obj} does {name} have now?"
+            steps = f"{name} starts with {a} {obj} and gets {b} more. {a} + {b} = {res}."
+        elif kind == 1:                           # subtraction
+            a = rng.randint(5, 20); b = rng.randint(1, a); res = a - b
+            q = f"{name} has {a} {obj} and gives away {b}. How many {obj} are left?"
+            steps = f"{name} starts with {a} {obj} and gives away {b}. {a} - {b} = {res}."
+        elif kind == 2:                           # multiplication (equal groups)
+            a, b = rng.randint(2, 9), rng.randint(2, 9); res = a * b
+            q = f"There are {a} boxes with {b} {obj} in each. How many {obj} in total?"
+            steps = f"Each of the {a} boxes has {b} {obj}. {a} x {b} = {res}."
+        else:                                     # division (equal sharing)
+            b, per = rng.randint(2, 6), rng.randint(2, 6); a = b * per; res = per
+            q = f"{name} shares {a} {obj} equally among {b} friends. How many does each get?"
+            steps = f"{a} {obj} are shared among {b} friends. {a} / {b} = {res}."
+        yield {"text": f"User: {q}\nAssistant: {_THINK_OPEN} {steps} {_THINK_CLOSE}\n"
+                       f"The answer is {res}.", "lang": "en"}
+
+
+# Preschool right/wrong scenarios. Phrased to slot into "It is good/wrong to {act}"
+# and "Is it okay to {act}?" — kept concrete and simple (level-1 ethics/BCF seed).
+_ETHIC_GOOD = {
+    "en": ["share your toys", "help a friend", "tell the truth", "say thank you",
+           "be kind to others", "wait your turn", "clean up your mess",
+           "listen when someone talks", "help someone who is hurt", "be gentle with pets"],
+    "es": ["compartir tus juguetes", "ayudar a un amigo", "decir la verdad", "dar las gracias",
+           "ser amable con los demás", "esperar tu turno", "recoger lo que ensucias",
+           "escuchar cuando alguien habla", "ayudar a quien está herido", "tratar bien a las mascotas"],
+}
+_ETHIC_BAD = {
+    "en": ["hit someone", "lie to a friend", "take what is not yours", "be mean to others",
+           "break things on purpose", "cheat in a game", "call people names",
+           "push other children", "make a big mess and leave it", "ignore someone who needs help"],
+    "es": ["pegarle a alguien", "mentirle a un amigo", "tomar lo que no es tuyo", "ser malo con los demás",
+           "romper cosas a propósito", "hacer trampa en un juego", "insultar a la gente",
+           "empujar a otros niños", "hacer un desorden y dejarlo", "ignorar a quien necesita ayuda"],
+}
+_ETHIC_T = {
+    "en": {"good_stmt": "It is good to {a}.", "bad_stmt": "It is wrong to {a}.",
+           "q": "User: Is it okay to {a}?\nAssistant: {yn}, it is {jud} to {a}.",
+           "yes": "Yes", "no": "No", "jgood": "good", "jbad": "wrong"},
+    "es": {"good_stmt": "Está bien {a}.", "bad_stmt": "Está mal {a}.",
+           "q": "User: ¿Está bien {a}?\nAssistant: {yn}, {jud} {a}.",
+           "yes": "Sí", "no": "No", "jgood": "está bien", "jbad": "está mal"},
+}
+
+
+def gen_ethics(n: int, seed: int = 1, langs: Optional[List[str]] = None) -> Iterator[dict]:
+    """Synthetic preschool ethics: good/wrong judgments on concrete actions, as
+    statements and yes/no Q&A. Emits only requested languages (en/es) so stage 7
+    isn't a 12-line, 347-token corpus."""
+    rng = random.Random(seed)
+    pool = [l for l in (langs or ["en"]) if l in _ETHIC_T] or ["en"]
+    for _ in range(n):
+        lang = rng.choice(pool)
+        t = _ETHIC_T[lang]
+        good = rng.random() < 0.5
+        act = rng.choice((_ETHIC_GOOD if good else _ETHIC_BAD)[lang])
+        if rng.random() < 0.5:                    # statement
+            text = (t["good_stmt"] if good else t["bad_stmt"]).format(a=act)
+        else:                                     # yes/no Q&A
+            text = t["q"].format(a=act, yn=(t["yes"] if good else t["no"]),
+                                 jud=(t["jgood"] if good else t["jbad"]))
+        yield {"text": text, "lang": lang}
+
+
+# ─────────────────────── dictionary / word meanings ─────────────────────────
+# A base must UNDERSTAND words, not only predict them — so each level teaches a
+# graded dictionary: child-first definitions of common words, as both statements
+# and "what does X mean?" Q&A (the chat/agent ask shape). The word bank is TIERED;
+# a level includes every tier ≤ its number, so vocabulary AND definitions grow per
+# level (the identical-structure principle: same source, size scales with level).
+# Curated (offline, guaranteed child-appropriate); a real lexical corpus can be
+# blended in later for breadth the same way the other sources are.
+#   entry: word -> (pos, definition)   pos: 'n' noun · 'v' verb · 'a' adjective
+_DICT_TIER1: Dict[str, tuple] = {
+    "car": ("n", "a road vehicle with wheels and an engine that people drive"),
+    "dog": ("n", "an animal with four legs that many people keep as a pet"),
+    "cat": ("n", "a small furry animal that people keep as a pet"),
+    "sun": ("n", "the bright star in the sky that gives us light and warmth"),
+    "moon": ("n", "the round light we see in the sky at night"),
+    "rain": ("n", "water that falls from the clouds"),
+    "tree": ("n", "a tall plant with a trunk, branches and leaves"),
+    "house": ("n", "a building where people live"),
+    "book": ("n", "pages with words and pictures that you read"),
+    "water": ("n", "the clear liquid we drink and that fills rivers and seas"),
+    "food": ("n", "what people and animals eat to live and grow"),
+    "friend": ("n", "someone you like and enjoy spending time with"),
+    "hand": ("n", "the part of your body at the end of your arm, with fingers"),
+    "school": ("n", "a place where children go to learn"),
+    "bird": ("n", "an animal with wings and feathers that can usually fly"),
+    "fish": ("n", "an animal that lives in water and swims"),
+    "ball": ("n", "a round object you throw, kick or catch in games"),
+    "door": ("n", "the part of a building you open to go in or out"),
+    "run": ("v", "move quickly using your legs, faster than walking"),
+    "eat": ("v", "put food in your mouth and swallow it"),
+    "sleep": ("v", "rest with your eyes closed, the way you do at night"),
+    "play": ("v", "do something fun, like a game"),
+    "read": ("v", "look at words and understand what they say"),
+    "walk": ("v", "move along on your feet at a normal speed"),
+    "help": ("v", "do something useful for someone"),
+    "jump": ("v", "push yourself up into the air with your legs"),
+    "give": ("v", "let someone have something"),
+    "happy": ("a", "feeling good and pleased"),
+    "sad": ("a", "feeling unhappy"),
+    "big": ("a", "large in size"),
+    "small": ("a", "little in size"),
+    "hot": ("a", "having a high temperature, the opposite of cold"),
+    "cold": ("a", "having a low temperature, the opposite of hot"),
+    "fast": ("a", "moving quickly"),
+    "slow": ("a", "moving with little speed"),
+    "kind": ("a", "friendly and caring toward others"),
+}
+_DICT_TIER2: Dict[str, tuple] = {
+    "river": ("n", "a long line of water that flows across the land to the sea"),
+    "mountain": ("n", "a very high hill of rock and earth"),
+    "doctor": ("n", "a person whose job is to help sick people get better"),
+    "machine": ("n", "a thing built from parts that does work using power"),
+    "music": ("n", "sounds put together in a way that is nice to listen to"),
+    "money": ("n", "the coins and notes people use to buy things"),
+    "language": ("n", "the words and rules people use to speak and write"),
+    "weather": ("n", "what the air outside is like, such as sunny or rainy"),
+    "build": ("v", "make something by putting parts together"),
+    "learn": ("v", "get to know something new by studying or practising"),
+    "remember": ("v", "keep something in your mind and bring it back"),
+    "explain": ("v", "make something clear by telling about it"),
+    "brave": ("a", "ready to face danger or pain without being too afraid"),
+    "honest": ("a", "telling the truth and not cheating"),
+    "heavy": ("a", "weighing a lot, hard to lift"),
+    "quiet": ("a", "making little or no noise"),
+}
+_DICT_TIERS = [_DICT_TIER1, _DICT_TIER2]   # index 0 → level 1, index 1 → levels ≥2
+
+
+def _article(word: str) -> str:
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
+def _definition_surfaces(word: str, pos: str, d: str) -> List[str]:
+    """All distinct surface forms for one dictionary entry — a definition statement
+    plus the 'what does X mean?' Q&A phrasings the chat/agent actually use."""
+    cap = word.capitalize()
+    art = _article(word)
+    if pos == "n":
+        stmt = f"{art.capitalize()} {word} is {d}."
+        return [stmt,
+                f"User: What is {art} {word}?\nAssistant: {stmt}",
+                f"User: What does {word!r} mean?\nAssistant: {stmt}"]
+    if pos == "v":
+        stmt = f"To {word} means to {d}."
+        return [stmt,
+                f"User: What does it mean to {word}?\nAssistant: {stmt}",
+                f"User: What does {word!r} mean?\nAssistant: {stmt}"]
+    stmt = f"{cap} means {d}."
+    return [stmt,
+            f"User: What does {word!r} mean?\nAssistant: {stmt}",
+            f"User: What is the meaning of {word!r}?\nAssistant: {stmt}"]
+
+
+def gen_definitions(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
+    """Graded dictionary entries — statements + 'what does X mean?' Q&A — so the
+    model learns word MEANINGS, not just word sequences. Includes every tier up to
+    `level`, so vocabulary grows per level.
+
+    A dictionary is a FIXED set of facts, so this yields each unique (word, surface)
+    record ONCE (deterministically shuffled), then stops — it does NOT pad to `n`
+    with repetition. The writer therefore produces a small, clean file; the model
+    sees each definition many times via the loader's source oversampling + cycling,
+    not via a bloated corpus of duplicates."""
+    bank: Dict[str, tuple] = {}
+    for t in _DICT_TIERS[:max(level, 1)]:
+        bank.update(t)
+    records = [{"text": s, "lang": "en"}
+               for word, (pos, d) in bank.items()
+               for s in _definition_surfaces(word, pos, d)]
+    random.Random(seed).shuffle(records)
+    yield from records[:n]
+
+
 # ──────────────────────────── dispatcher ────────────────────────────────────
 def stream_source(key: str, *, langs: List[str], n_tokens: int,
                   arithmetic_level: int = 1, limit_mb: Optional[int] = None,
@@ -902,22 +1215,33 @@ def stream_source(key: str, *, langs: List[str], n_tokens: int,
         return stream_dialogue(langs, limit_mb)
     if key == "simple_wikipedia":
         return stream_simple_wikipedia(limit_mb)
-    if key == "arithmetic":
-        return stream_arithmetic(langs, arithmetic_level, limit_mb)
+    if key == "arithmetic":                     # real seed + synthetic graded fill
+        return _blend(stream_arithmetic(langs, arithmetic_level, limit_mb),
+                      gen_arithmetic(approx_examples, arithmetic_level), approx_examples)
+    if key in ("definitions", "dictionary"):    # graded word meanings (statements + Q&A)
+        return gen_definitions(approx_examples, level=arithmetic_level)
     if key == "analogies":                      # TEMPORARY synthetic (no real corpus yet)
         return gen_analogies(approx_examples)
     if key in ("memory", "memory_synth"):       # synthetic recall/use-of-memory (<mem>)
         return gen_memory(approx_examples)
-    if key in ("causal_synth", "causal"):       # real cause→effect (EN) from e-CARE
-        return stream_causal(langs, limit_mb)
+    if key in ("causal_synth", "causal"):       # real e-CARE seed + synthetic cause→effect
+        return _blend(stream_causal(langs, limit_mb),
+                      gen_causal(approx_examples), approx_examples)
     if key in ("agentic", "tools"):             # real tool-use loop (EN), Claude-style JSON
         return stream_agentic(langs, limit_mb)
-    if key in ("reasoning", "cot"):             # real chain-of-thought (EN), <think>…</think>
-        return stream_reasoning(langs, limit_mb)
+    if key in ("reasoning", "cot"):             # real GSM8K CoT seed + synthetic <think> fill
+        return _blend(stream_reasoning(langs, limit_mb),
+                      gen_cot(approx_examples), approx_examples)
     if key == "mcp":                            # real tool use over MCP / JSON-RPC (EN)
         return stream_mcp(langs, limit_mb)
     if key == "skills":                         # real skills (EN), Claude-style SKILL.md
         return stream_skills(langs, limit_mb)
     if extra_streamers and key in extra_streamers:
+        # Ethics has only a ~12-line seed corpus → top it up with synthetic
+        # preschool good/wrong examples so stage 7 fills its budget (and its val
+        # split is non-empty). Other full corpora are large enough as-is.
+        if key == "ethics":
+            return _blend(extra_streamers[key](),
+                          gen_ethics(approx_examples, langs=langs), approx_examples)
         return extra_streamers[key]()
     return None

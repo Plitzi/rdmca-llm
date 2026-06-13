@@ -133,6 +133,64 @@ def save_checkpoint(model, step: int, stage: int,
         f"loss={loss:.4f} -> {fname.name}")
 
 
+def _git_commit() -> str:
+    try:
+        import subprocess
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                       cwd=str(Path(__file__).parent),
+                                       stderr=subprocess.DEVNULL, text=True).strip()
+    except Exception:
+        return "unknown"
+
+
+def write_stage_audit(ckpt_dir: Path, *, stage: int, cfg: dict, model, model_cfg,
+                      tcfg: dict, data_loader, target: int, total_steps: int,
+                      precision: str, seed, hparams_extra: dict) -> dict:
+    """Persist the COMPLETE training CONTEXT for this stage to `audit.json`, so a run
+    is fully auditable/reproducible after the fact: exact hyperparameters, data
+    provenance (per-source tokens + 'exhausted' flags), the rehearsal mix and its
+    size-weights, model geometry, and env/git. The run TIMELINE (loss curve, gates,
+    early-stop, COMPLETE) lives in train.log; the OUTCOME in stage_complete.json."""
+    from datetime import datetime
+    ddir = Path(cfg["curriculum"][f"stage{stage}"].get("data_dir", ""))
+    sources = []
+    for m in sorted(ddir.glob("*.meta.json")):
+        try:
+            sources.append({"source": m.name[:-len(".meta.json")], **json.loads(m.read_text())})
+        except (OSError, json.JSONDecodeError):
+            pass
+    rw = getattr(data_loader, "_replay_weights", None)
+    rec = {
+        "stage": stage, "level": cfg.get("level"), "stage_name": stage_name(stage, cfg),
+        "started": datetime.now().isoformat(timespec="seconds"),
+        "git_commit": _git_commit(), "backend": cfg.get("backend"),
+        "precision": precision, "seed": seed,
+        "command": "python " + " ".join(sys.argv),
+        "model": {"params": int(model.count_params()), "d_model": model_cfg.d_model,
+                  "n_layers": model_cfg.n_layers, "n_heads": model_cfg.n_heads,
+                  "vocab_size": model_cfg.vocab_size, "context_len": model_cfg.context_len,
+                  "mrl_dims": list(model_cfg.mrl_dims)},
+        "hparams": {"lr": tcfg.get("lr"), "lr_min": tcfg.get("lr_min"),
+                    "batch_size": tcfg.get("batch_size"),
+                    "grad_accumulation": tcfg.get("grad_accumulation"),
+                    "warmup_steps": tcfg.get("warmup_steps"),
+                    "max_corpus_passes": tcfg.get("max_corpus_passes"),
+                    "clip_grad_norm": tcfg.get("clip_grad_norm"),
+                    "save_every": tcfg.get("save_every"), "eval_every": tcfg.get("eval_every"),
+                    **hparams_extra},
+        "data": {"dir": str(ddir), "target_tokens": int(target),
+                 "lr_horizon_steps": int(total_steps), "sources": sources},
+        "rehearsal": {"fraction": getattr(data_loader, "replay_fraction", 0.0),
+                      "dirs": getattr(data_loader, "replay_dirs", []),
+                      "weights_pct": ([round(100 * w / sum(rw), 1) for w in rw] if rw else [])},
+    }
+    try:
+        (ckpt_dir / "audit.json").write_text(json.dumps(rec, indent=2))
+    except OSError:
+        pass
+    return rec
+
+
 def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
     latest = ckpt_dir / "latest.json"
     if not latest.exists():
@@ -158,11 +216,13 @@ def _make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
     from src.data.loader import DataLoader
     try:
         vloader = DataLoader.from_config(stage, cfg, TextTokenizer(), val=True)
+        # An empty or sub-one-batch *.val.jsonl ends the stream early (StopIteration)
+        # instead of hanging — fall through to training-stream sampling below.
         batches = [vloader.next_batch() for _ in range(n)]
         print(f"  [val] held-out split (*.val.jsonl) — {n} batches")
         return batches
-    except (FileNotFoundError, KeyError):
-        print("  [val] no held-out split found — sampling from the training stream "
+    except (FileNotFoundError, KeyError, StopIteration):
+        print("  [val] no usable held-out split — sampling from the training stream "
               "(run prepare_data to generate *.val.jsonl for a disjoint gate)")
         # The training loader yields (tokens, mask) pairs; validation uses plain
         # next-token perplexity (eval_ce), so keep only the tokens.
@@ -192,7 +252,12 @@ def build_data_loader(stage: int, cfg: dict):
     replay_dirs: list[str] = []
     frac = 0.0
     if not is_behavioral_stage(stage):
-        frac = float(cfg.get("training", {}).get("rehearsal_fraction", 0.15))
+        # Per-stage override > global default. Format-shifting stages (e.g. stage 6
+        # memory, all short factual Q&A) can request MORE rehearsal so they don't
+        # erode conversation; see curriculum.stageN.rehearsal_fraction.
+        scfg = cfg.get("curriculum", {}).get(f"stage{stage}", {}) or {}
+        frac = float(scfg.get("rehearsal_fraction",
+                              cfg.get("training", {}).get("rehearsal_fraction", 0.15)))
         if frac > 0:
             cur = cfg.get("curriculum", {})
             earlier = sorted(s for s in (int(k.replace("stage", "")) for k in cur)
@@ -205,6 +270,8 @@ def build_data_loader(stage: int, cfg: dict):
         loader = DataLoader.from_config(stage, cfg, tokenizer,
                                         replay_dirs=replay_dirs, replay_fraction=frac,
                                         with_mask=True)   # completion-only loss masking
+        loader.replay_dirs = replay_dirs        # expose for the per-stage audit record
+        loader.replay_fraction = frac
         data_dir = cfg["curriculum"][f"stage{stage}"].get("data_dir")   # key-based (stages may be non-contiguous)
         print(f"  [data] Real data loader: {data_dir}")
         if replay_dirs:
@@ -537,6 +604,23 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     _NAN_ABORT  = 20      # consecutive non-finite losses ⇒ the run has diverged
     nan_streak  = 0
 
+    # Best-checkpoint tracking (anti-divergence). Stages whose data is narrow and
+    # format-shifting (esp. stage 6 memory) MEMORIZE then DIVERGE as they re-cycle
+    # the corpus — train loss fell to ~0.4 then climbed to 4.4 in the reported run.
+    # We remember the lowest-val-perplexity point, and at stage end (or after
+    # `early_stop_patience` evals with no improvement) we RESTORE it instead of
+    # shipping the diverged tail. patience=0 disables the in-loop early stop but
+    # best-restore at stage end still applies. Independent of the graduation gate.
+    patience    = int(tcfg.get("early_stop_patience", 4))
+    min_delta   = float(tcfg.get("early_stop_min_delta", 0.005))   # 0.5% PPL improvement
+    best_path   = ckpt_dir / "best.npz"
+    best_score  = float("inf")
+    best_step   = start_step
+    best_tokens = tokens_seen
+    best_loss   = 0.0
+    stale       = 0
+    restored_best = False        # set when the diverged tail is rolled back to best
+
     # MoE load-balance aux loss: with routing active (behavioral stages) the gate
     # otherwise gets no gradient and experts collapse. aux_loss() is 0.0 when there
     # is no routing (cognitive stages), so this is a no-op there.
@@ -554,6 +638,15 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     # generalization; fall back to the training stream when no split was prepared.
     val_batches = _make_val_batches(stage, cfg, data_loader, n=8)
 
+    # Persist the full training CONTEXT (config, data provenance, rehearsal mix,
+    # model geometry, env/git) for post-hoc audits — see write_stage_audit.
+    audit = write_stage_audit(
+        ckpt_dir, stage=stage, cfg=cfg, model=model, model_cfg=model_cfg, tcfg=tcfg,
+        data_loader=data_loader, target=target, total_steps=total_steps,
+        precision=precision, seed=seed,
+        hparams_extra={"rehearsal_fraction": getattr(data_loader, "replay_fraction", 0.0),
+                       "early_stop_patience": patience, "early_stop_min_delta": min_delta})
+
     dash = TrainingDashboard(stage, n_tokens_target,
                              resume_step=start_step,
                              resume_tokens=tokens_seen,
@@ -565,6 +658,18 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
 
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
+        # Echo the audit context into train.log so the text log is self-contained.
+        dash.print(f"[audit] full context → {ckpt_dir/'audit.json'} | git {audit['git_commit']} "
+                   f"| seed {seed} | precision {precision}")
+        dash.print("[data] sources: " + (", ".join(
+            f"{s['source']}={s.get('tokens',0)/1e6:.1f}M{'*' if s.get('exhausted') else ''}"
+            for s in audit["data"]["sources"]) or "(none)"))
+        if audit["rehearsal"]["dirs"]:
+            dash.print(f"[rehearsal] {audit['rehearsal']['fraction']:.0%} replay over "
+                       f"{len(audit['rehearsal']['dirs'])} stage(s), weights%="
+                       f"{audit['rehearsal']['weights_pct']}")
+        dash.print(f"[hparams] lr={tcfg['lr']} bs={bs} warmup={warmup} "
+                   f"max_passes={max_passes} early_stop=patience{patience}/δ{min_delta}")
 
         while tokens_seen < target:
             # Update learning rate
@@ -670,6 +775,33 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                 score, passed = evaluate_gate(model, stage, val_batches, cfg,
                                               log=dash.print, step=step)
                 dash.set_gate_result(score, passed)
+
+                # Track the best (lowest val PPL) point so the stage ships it, not a
+                # diverged tail. On `patience` consecutive non-improving evals, stop
+                # early and restore best (only when a finite score exists).
+                if math.isfinite(score) and score < best_score * (1.0 - min_delta):
+                    best_score, best_step, best_tokens = score, step, tokens_seen
+                    best_loss = acc_loss / grad_acc
+                    B.engine.save_weights(model, str(best_path))
+                    stale = 0
+                elif math.isfinite(best_score):
+                    stale += 1
+                    if patience and stale >= patience:
+                        dash.print(f"[early-stop] val PPL {score:.2f} has not beaten "
+                                   f"best {best_score:.2f} for {patience} evals — "
+                                   f"restoring best (step {best_step:,}) and finishing")
+                        B.engine.load_weights(model, str(best_path))
+                        save_checkpoint(model, best_step, stage, best_tokens,
+                                        best_loss, ckpt_dir, log=dash.print)
+                        with open(ckpt_dir / "stage_complete.json", "w") as f:
+                            json.dump({"stage": stage, "step": best_step,
+                                       "tokens_seen": best_tokens, "gate_score": best_score,
+                                       "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
+                                       "early_stopped": True, "timestamp": time.time()}, f, indent=2)
+                        dash.print(f"✓ Stage {stage} COMPLETE (early-stopped at best)")
+                        _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
+                        return True
+
                 if passed and not skip_gate:
                     save_checkpoint(model, step, stage, tokens_seen,
                                    acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
@@ -687,6 +819,16 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
         # Final dashboard update so it shows 100%
         dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
 
+        # Budget exhausted — if a better (lower val PPL) point was seen earlier,
+        # restore it so the stage output is the BEST model, not a memorized/diverged
+        # tail (stage 6's 0.4→4.4 climb). Best is, by definition, ≤ every seen score.
+        if best_score < float("inf") and best_step != step and best_path.exists():
+            dash.print(f"[best] restoring best checkpoint (val PPL {best_score:.2f} @ "
+                       f"step {best_step:,}) over the tail before finishing")
+            B.engine.load_weights(model, str(best_path))
+            step, tokens_seen, acc_loss = best_step, best_tokens, best_loss * grad_acc
+            restored_best = True
+
         # Budget exhausted
         save_checkpoint(model, step, stage, tokens_seen,
                        acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
@@ -698,6 +840,9 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                 json.dump({"stage": stage, "step": step,
                            "tokens_seen": tokens_seen, "gate_score": None,
                            "checkpoint": ckpt_file,
+                           "best_val_ppl": (best_score if best_score < float("inf") else None),
+                           "best_step": (best_step if best_score < float("inf") else None),
+                           "restored_best": restored_best,
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
             dash.print(f"✓ Stage {stage} COMPLETE (gate skipped)")
             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
