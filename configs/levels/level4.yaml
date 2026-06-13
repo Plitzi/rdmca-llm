@@ -69,7 +69,6 @@ resources:
   est_infer_mem_gb: 1
   min_vram_gb: 16
 
-skip_gate: false
 gate:
   max_perplexity: {1: 42.0, 2: 40.0, 3: 38.0, 4: 36.0, 5: 34.0, 6: 36.0, 7: 36.0}
 
@@ -160,15 +159,3 @@ curriculum:
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
-
-# ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
-# Como el cerebro, no todos los sectores se activan por token: el gate elige los
-# top_k sectores más relevantes (S1..S6) y SOLO esos computan, así el cómputo
-# activo queda acotado aunque el pool de sectores crezca (equipos pequeños siguen
-# corriéndolo). S7 (Conductual/BCF) NO es experto: queda siempre activo y aislado.
-moe:
-  enabled: true            # enruta los sectores con MoE en consolidación/inferencia
-  experts: 6               # sectores expertos enrutados (S1..S6)
-  top_k: 2                 # sectores activados por token (sparsity tipo cerebro)
-  aux_loss_weight: 0.01    # peso del aux loss de balanceo de expertos
-  capacity_factor: 1.25    # slack de capacidad por experto (dispatch estático MLX)

@@ -374,6 +374,10 @@ class DataLoader:
         self._rng = random.Random(seed)
         self._has_skip_index = False    # a length index was loaded → skip() can fast-path
         self._pushback: Optional[np.ndarray] = None   # first clean batch after a fast-skip
+        self.last_was_replay = False    # was the LAST next_batch() a rehearsal (replay) draw?
+                                        # lets the trainer tag metrics so the bimodal
+                                        # narrow-skill vs conversation-rehearsal loss can be
+                                        # charted as two clean curves (not one spiky mess).
 
     @staticmethod
     def _corpus_bytes(ds: TextDataset) -> float:
@@ -390,7 +394,9 @@ class DataLoader:
             return b
         if self._replay_iters and self._rng.random() < self._replay_fraction:
             it = self._rng.choices(self._replay_iters, weights=self._replay_weights, k=1)[0]
+            self.last_was_replay = True
             return next(it)
+        self.last_was_replay = False
         return next(self._iter)
 
     def skip(self, n_batches: int) -> int:

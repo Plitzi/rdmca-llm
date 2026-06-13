@@ -81,9 +81,41 @@ def get_level(cfg: dict) -> Optional[int]:
     return int(lvl) if lvl is not None else None
 
 
+BASE_CONFIG_NAME = "_base.yaml"          # shared defaults every level inherits
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge `override` INTO a copy of `base` — the override always wins.
+    Dicts merge key-by-key (so a level can set just curriculum.stage3.n_tokens without
+    redeclaring the stage); lists and scalars REPLACE wholesale (a level's `sources: […]`
+    fully replaces the base's). Used for level-config inheritance from _base.yaml."""
+    out = dict(base)
+    for k, v in (override or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def load_config(path: str) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+    """Load a level config, deep-merged OVER the shared `_base.yaml` in the same dir (if
+    present), so each level declares only what DIFFERS — the shared training/model/moe
+    defaults and the curriculum structure (stage names + entry_levels) live once in the
+    base. The level's values always win. A config opts out with `inherit_base: false`
+    (e.g. the level-0 smoke tier, which has its own minimal structure)."""
+    p = Path(path)
+    with open(p) as f:
+        cfg = yaml.safe_load(f) or {}
+    base_path = p.parent / BASE_CONFIG_NAME
+    if (cfg.get("inherit_base", True) and base_path.exists()
+            and p.resolve() != base_path.resolve()):
+        with open(base_path) as f:
+            base = yaml.safe_load(f) or {}
+        base.pop("inherit_base", None)
+        cfg = _deep_merge(base, cfg)
+    cfg.pop("inherit_base", None)
+    return cfg
 
 
 def get_languages(cfg: dict) -> List[str]:

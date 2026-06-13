@@ -12,8 +12,9 @@
 
 level: 1                       # level number (1..5). Selected with `--level 1`.
 name: "Preescolar"             # human grade name, shown by the startup announce.
-backend: mlx                   # mlx | torch  (both supported)
 tier: edge                     # informational tag (edge = runs on a laptop)
+# Inherits configs/levels/_base.yaml (backend, skip_gate, shared training/model knobs,
+# moe, curriculum stage structure). Only level-1 DIFFS are below.
 
 # What the model learns at this level — printed by the resource 'announce' so
 # you always know what areas the base is being taught.
@@ -45,36 +46,26 @@ model:
   vocab_size: 8192             # child vocabulary, richer than a toy (tokenizer trained to this).
   mrl_dims: [128, 256]         # Matryoshka prefix dims used by the MRL loss.
   dropout: 0.05
-  rope_theta: 10000.0
-  # MTP (multi-token prediction) + PLE (per-layer embeddings): perf knobs present at
-  # EVERY level — the function is uniform, only the size scales (like n_kv_heads), so
-  # the identical-structure principle holds. Off in code by default; enabled here.
+  # MTP/PLE size-scaling knobs (rope_theta, mtp_loss_weight, ple_gated are in _base.yaml).
   n_mtp_heads: 1               # auxiliary future-token heads (denser training signal)
   mtp_hidden_dim: 128          # head inner width (≈ d_model/2)
-  mtp_loss_weight: 0.3         # weight of each MTP head's CE in the loss
   ple_dim: 32                  # per-layer token-identity lookup width (≈ d_model/8)
-  ple_gated: true              # sigmoid-gated identity↔context merge
   languages: ["en"]            # config-driven languages (edit to add "es").
 
-# ── Training hyperparameters. ────────────────────────────────────────────────
+# ── Training hyperparameters (only level-1 diffs; precision/grad_accumulation/
+#    clip_grad_norm are in _base.yaml). ────────────────────────────────────────────────
 training:
-  precision: bf16              # fp32 | bf16 | fp16 (default bf16).
   lr: 3.0e-4                   # validated across transformer scales (Chinchilla, GPT-2, Pythia)
   lr_min: 5.0e-5
   weight_decay: 0.01             # 0.1 shrinks params to 30% norm over 24k steps; 0.01 is standard for <100M
   batch_size: 16               # big batch fits easily at this size.
-  grad_accumulation: 1         # effective batch = batch_size × grad_accumulation
-                               # (the loop now sums micro-batch grads — true
-                               # accumulation). bs=16 is already plenty here, so 1.
   warmup_steps: 500             # 2.0% of schedule (was 0.82%) — safer warmup→cosine transition
   save_every: 500
   eval_every: 500              # finer val sampling → the anti-divergence best-checkpoint
                               # (restored at stage end) is well-sampled on short stages.
-  clip_grad_norm: 1.0
   max_corpus_passes: 4         # cap re-reads of a small corpus (anti-overfit). If the
                                # corpus × this < n_tokens, the stage stops here (default 3).
-  rehearsal_fraction: 0.15     # cognitive stages mix this fraction of earlier-stage data
-                               # (rehearsal) so new faculties don't erode conversation (default 0.15).
+  rehearsal_fraction: 0.15     # global fallback for stages with no STAGE_REHEARSAL default.
 
 # ── Resource estimates (documented; the live guard recomputes from `model`). ──
 # These are reference figures so you can compare levels at a glance. The actual
@@ -85,20 +76,11 @@ resources:
   est_infer_mem_gb: 0.2        # ≈ inference memory.
   min_ram_gb: 3                # informational minimum to run comfortably.
 
-# Graduation gate ENFORCED from level 1: quality/performance is the priority from the
-# very first level — a stage graduates only when it hits the quality bar (masked val
-# perplexity below the per-stage threshold), or ships its best model when training
-# plateaus (early_stop). Skip it manually only when needed with `--skip-gate`.
-skip_gate: false
-
-# ── Curriculum — which cognitive stages are active and their graded data. ────
-# A stage runs only if `entry_level` ≤ this level. Data complexity is graded per
-# level: `sources` lists where the data comes from, `filter` caps complexity
-# (null = no filter, used only at level 5). See scripts/prepare_data.py.
+# ── Curriculum — per-stage DATA only (stage name + entry_level come from _base.yaml;
+#    data_dir defaults to data/level{L}/stage{N}). `sources` = where the data comes from;
+#    `filter` caps complexity (null = none). See scripts/prepare_data.py. ───────────────
 curriculum:
   stage1:
-    name: "Language and communication"
-    entry_level: 1             # language is the foundation — present from level 1.
     n_tokens: 200_000_000      # ~19× tokens/params — the run plateaued at ~80M on the
                                # OLD narrow data; broader data + more tokens is what
                                # makes L1 actually usable (its whole purpose as a base).
@@ -146,106 +128,59 @@ curriculum:
         max_grade: 7
         max_word_len: 16
   stage2:
-    name: "Perception and pattern recognition"
-    entry_level: 1
     n_tokens: 20_000_000
     data_dir: "data/level1/stage2"
-    # NARROW synthetic stage: ppl→~1 here means MEMORIZED, not learned. Heavy rehearsal
-    # of earlier data (esp. conversation) keeps the shared core from collapsing onto the
-    # templated distribution. The retention gate (val folds in conversation) enforces it.
-    rehearsal_fraction: 0.35   # analogies — low-entropy, erodes conversation without this.
     data:
       sources: [analogies]       # synthetic simple analogies/sequences.
       filter: null               # already simple by construction.
   stage3:
-    name: "Abstraction and symbolic composition"
-    entry_level: 1             # basic arithmetic from the very start.
     n_tokens: 30_000_000
     data_dir: "data/level1/stage3"
-    rehearsal_fraction: 0.45   # arithmetic ("3 + 4 = 7") is the WORST eroder — extremely
-                               # low-entropy; without strong rehearsal the core answers
-                               # every prompt with a number ('hi'→'2'). 0.45 protects chat.
     data:
       sources: [arithmetic]
       filter:
         arithmetic_level: 1        # 1 = single-digit + / − only (e.g. "3 + 4 = 7").
   stage4:
-    name: "Causal and procedural reasoning"
-    entry_level: 1             # causal reasoning present from level 1 (graded small).
     n_tokens: 15_000_000
     data_dir: "data/level1/stage4"
-    rehearsal_fraction: 0.35   # synthetic cause→effect — narrow, protect conversation.
     data:
       sources: [causal_synth]  # synthetic cause→effect (e-CARE), simple by construction.
       filter: null
   stage8:
-    name: "Action and tool use"
-    entry_level: 0             # agentic from the start; improves as the model grows.
     n_tokens: 200_000_000         # was 20M — 1.9 tok/param was severely under-budgeted; 200M ≈ 19 tok/param
     data_dir: "data/level1/stage8"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null             # JSON tool transcripts — appropriate by construction.
   stage9:
-    name: "Model Context Protocol (MCP)"
-    entry_level: 0
     n_tokens: 15_000_000
     data_dir: "data/level1/stage9"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
   stage10:
-    name: "Skills"
-    entry_level: 0
     n_tokens: 15_000_000
     data_dir: "data/level1/stage10"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
   stage5:
-    name: "Reasoning"
-    entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 25_000_000
     data_dir: "data/level1/stage5"
-    rehearsal_fraction: 0.45   # CoT ("…<think>… The answer is N") strongly imprints a
-                               # math-answer FORMAT onto the core — at stage 7 every reply
-                               # became "The answer is N". Heavy rehearsal keeps general
-                               # conversation alive alongside the reasoning skill.
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
   stage6:
-    name: "Memory management"
-    entry_level: 1             # memory is a cognitive faculty: the frozen core learns
-                               # to recall and USE injected memory (LTSS + episodic).
     n_tokens: 15_000_000
     data_dir: "data/level1/stage6"
-    rehearsal_fraction: 0.35   # memory Q&A is uniformly short/factual — without heavy
-                               # rehearsal it shifts the output distribution and the
-                               # model stops conversing. 0.35 protects conversation.
     data:
       sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
       filter: null
   stage7:
-    name: "Cognitive ethics and BCF"
-    entry_level: 1             # ethics/BCF present from level 1 → core freezes after
-                               # stage 6 at EVERY level (uniform structure). Graded small.
     n_tokens: 10_000_000
     data_dir: "data/level1/stage7"
-    rehearsal_fraction: 0.35   # last cognitive stage before the freeze — the core's
-                               # FINAL conversational state ships here, so protect it.
     data:
       sources: [ethics]
       filter: null
 
-# ── Mixture-of-Experts sobre los sectores cognitivos (post-congelado) ─────────
-# Como el cerebro, no todos los sectores se activan por token: el gate elige los
-# top_k sectores más relevantes (S1..S6) y SOLO esos computan, así el cómputo
-# activo queda acotado aunque el pool de sectores crezca (equipos pequeños siguen
-# corriéndolo). S7 (Conductual/BCF) NO es experto: queda siempre activo y aislado.
-moe:
-  enabled: true            # enruta los sectores con MoE en consolidación/inferencia
-  experts: 6               # sectores expertos enrutados (S1..S6)
-  top_k: 2                 # sectores activados por token (sparsity tipo cerebro)
-  aux_loss_weight: 0.01    # peso del aux loss de balanceo de expertos
-  capacity_factor: 1.25    # slack de capacidad por experto (dispatch estático MLX)
+# moe + skip_gate + shared training/model knobs are inherited from _base.yaml.

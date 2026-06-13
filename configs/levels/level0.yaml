@@ -10,6 +10,9 @@
 
 level: 0
 name: "Pruebas (smoke)"
+inherit_base: false            # smoke tier is intentionally self-contained (own minimal
+                               # structure, skip_gate on, all entry_levels 0) — do NOT
+                               # inherit the production _base.yaml.
 backend: mlx                   # mlx | torch  (both supported)
 tier: edge
 

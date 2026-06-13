@@ -134,6 +134,28 @@ def test_gate_decision_any_gain_is_a_new_best():
     assert T.gate_decision(16.20, 16.14, 50.0)[1] is False
 
 
+def test_narrow_stages_have_gentler_lr_scale():
+    """Per-stage lr_scale/rehearsal are STAGE properties (apply at EVERY level) and live in
+    src/training/stages.py, NOT each level's yaml. The narrow eroders (3 arithmetic, 5 CoT)
+    train the SHARED core at a reduced LR so they nudge it instead of overwriting
+    conversation; stage 1 (conversation) trains at full LR. The schedule scales linearly."""
+    import train_stage as T
+    from src.training.stages import STAGE_LR_SCALE, STAGE_REHEARSAL, DEFAULT_LR_SCALE
+    assert STAGE_LR_SCALE.get(1, DEFAULT_LR_SCALE) == 1.0     # conversation: full LR
+    assert STAGE_LR_SCALE[3] <= 0.5                           # arithmetic: gentlest
+    assert STAGE_LR_SCALE[5] <= 0.5                           # CoT: gentlest
+    assert STAGE_LR_SCALE[3] < STAGE_LR_SCALE[2] <= 1.0
+    assert STAGE_REHEARSAL[3] >= 0.45 and STAGE_REHEARSAL[5] >= 0.45   # strongest rehearsal
+    # A level's yaml may still OVERRIDE per stage; absent that, the stage default applies.
+    from src.config import resolve_config_path, load_config
+    cfg = load_config(resolve_config_path(None, 1))
+    assert "lr_scale" not in cfg["curriculum"]["stage3"]      # inherited from code, not yaml
+    # cosine_lr scales linearly with the (already-scaled) base/min it is handed.
+    full = T.cosine_lr(300, 3e-4, 3e-5, 500, 5000)
+    half = T.cosine_lr(300, 1.5e-4, 1.5e-5, 500, 5000)
+    assert abs(half - full * 0.5) < 1e-9
+
+
 def test_evaluate_gate_respects_threshold_and_config_override():
     """evaluate_gate passes iff ppl ≤ threshold, and cfg.gate.max_perplexity overrides
     the default — so the bar is both meaningful and tunable per stage."""

@@ -45,3 +45,23 @@ STAGE_NAMES = {
     9: "Model Context Protocol (MCP)",
     10: "Skills",
 }
+
+# ── Per-stage anti-forgetting profile — a STAGE property, applies at EVERY level ──────
+# Levels differ only in data/params/context; a stage's NATURE does not. Stage 3 is
+# narrow low-entropy arithmetic at level 1 and at level 5 alike, so its tendency to
+# overwrite the shared conversational core (the observed 'hi'→'3' / 'The answer is N'
+# collapse) is the same everywhere. These defaults therefore live with the stage, not in
+# each level's yaml, and ALL levels inherit them. A level's yaml may still override per
+# stage (curriculum.stageN.rehearsal_fraction / .lr_scale) for a genuine exception.
+#
+# REHEARSAL: fraction of batches drawn from earlier stages (conversation-weighted) so a
+# new faculty doesn't erode prior ones. Higher for the narrowest/most-eroding stages.
+# Behavioral stages (>BCF) train LoRA sectors on the FROZEN core → no rehearsal needed.
+STAGE_REHEARSAL = {2: 0.35, 3: 0.45, 4: 0.35, 5: 0.45, 6: 0.35, 7: 0.35}
+DEFAULT_REHEARSAL = 0.15            # cognitive stage with no specific profile
+
+# LR_SCALE: multiplies the stage's peak/min LR. The narrow eroders nudge the shared core
+# (they learn their trivial skill fast even at half LR) instead of stamping their format
+# over conversation. Stage 1 (conversation) and behavioral stages train at full LR.
+STAGE_LR_SCALE = {2: 0.7, 3: 0.5, 4: 0.7, 5: 0.5, 6: 0.7, 7: 0.7}
+DEFAULT_LR_SCALE = 1.0

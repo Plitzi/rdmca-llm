@@ -1,0 +1,67 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  RDMCA · SHARED BASE CONFIG (inherited by every level)                     ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  Levels differ ONLY in data / params / context (see the project principle  ║
+# ║  "levels = identical structure"). Everything that is the SAME across       ║
+# ║  levels lives here ONCE; each configs/levels/levelN.yaml declares only      ║
+# ║  what it CHANGES, deep-merged OVER this base (the level always wins).       ║
+# ║  Add a new level → write only its diffs. Opt out with `inherit_base: false`║
+# ║  (the level-0 smoke tier does).                                            ║
+# ║                                                                            ║
+# ║  NOTE the per-stage anti-forgetting profile (rehearsal_fraction, lr_scale) ║
+# ║  is a STAGE property and lives in CODE (src/training/stages.py:            ║
+# ║  STAGE_REHEARSAL / STAGE_LR_SCALE), applied at every level; override per   ║
+# ║  stage in a level's yaml only for a genuine exception.                     ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+backend: mlx                   # mlx | torch — most levels run mlx; big levels override.
+
+# Graduation gate ENFORCED by default (quality/performance is the priority from level 1).
+# A stage graduates only on hitting the quality bar (masked retention perplexity) or when
+# training plateaus (early-stop ships the best). Override per run with `--skip-gate`.
+skip_gate: false
+
+# ── Training defaults — only the keys identical across levels. Each level sets the
+#    rest (lr, lr_min, weight_decay, batch_size, warmup_steps, save_every, eval_every,
+#    max_corpus_passes) to suit its size. ─────────────────────────────────────────────
+training:
+  precision: bf16              # fp32 | bf16 | fp16
+  grad_accumulation: 1         # effective batch = batch_size × this (loop sums grads)
+  clip_grad_norm: 1.0          # gradient-norm clip — caps the cold-start grad spikes
+
+# ── Model — only the architecture-wide KNOBS that are identical across levels. Each
+#    level sets its DIMENSIONS (d_model, n_layers, n_heads, n_kv_heads, ffn_dim,
+#    context_len, vocab_size, mrl_dims) and the size-scaling knobs (n_mtp_heads,
+#    mtp_hidden_dim, ple_dim, dropout, languages). ──────────────────────────────────
+model:
+  rope_theta: 10000.0          # RoPE base frequency
+  mtp_loss_weight: 0.3         # weight of each MTP head's CE in the composite loss
+  ple_gated: true              # sigmoid-gated identity↔context merge for PLE
+
+# ── Mixture-of-Experts over the cognitive sectors (post-freeze) — identical everywhere.
+#    Like the brain, not all sectors fire per token: the gate picks the top_k most
+#    relevant (S1..S6) and only those compute, so active compute stays bounded as the
+#    sector pool grows. S7 (Behavioral/BCF) is NOT an expert: always-on and isolated. ──
+moe:
+  enabled: true
+  experts: 6                   # routed expert sectors (S1..S6)
+  top_k: 2                     # sectors activated per token (brain-like sparsity)
+  aux_loss_weight: 0.01        # expert load-balancing aux-loss weight
+  capacity_factor: 1.25        # per-expert capacity slack (static MLX dispatch)
+
+# ── Curriculum STRUCTURE — which cognitive/behavioral stages exist, their canonical
+#    name and entry_level (the level at which a stage first becomes active). This is
+#    level-INDEPENDENT. Each level adds the per-stage DATA (n_tokens, sources, filter)
+#    and, optionally, data_dir (else it defaults to data/level{L}/stage{N}). Names
+#    mirror src/training/stages.py:STAGE_NAMES. ────────────────────────────────────────
+curriculum:
+  stage1:  {name: "Language and communication",            entry_level: 1}
+  stage2:  {name: "Perception and pattern recognition",    entry_level: 1}
+  stage3:  {name: "Abstraction and symbolic composition",  entry_level: 1}
+  stage4:  {name: "Causal and procedural reasoning",       entry_level: 1}
+  stage5:  {name: "Reasoning",                              entry_level: 0}
+  stage6:  {name: "Memory management",                     entry_level: 1}
+  stage7:  {name: "Cognitive ethics and BCF",              entry_level: 1}
+  stage8:  {name: "Action and tool use",                   entry_level: 0}
+  stage9:  {name: "Model Context Protocol (MCP)",          entry_level: 0}
+  stage10: {name: "Skills",                                entry_level: 0}

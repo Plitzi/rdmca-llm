@@ -123,7 +123,7 @@ class TrainingDashboard:
                 self._metrics = open(mpath, "a", encoding="utf-8")
                 if new:
                     self._metrics.write("kind,step,tokens_m,loss,ppl,lr,tps,grad_norm,"
-                                        "val_ppl,best_val_ppl,passed\n")
+                                        "val_ppl,best_val_ppl,passed,replay\n")
                     self._metrics.flush()
             except OSError as e:
                 self._console.print(f"[yellow][log] could not open {log_path}: {e}[/yellow]")
@@ -186,12 +186,20 @@ class TrainingDashboard:
         self._passes: Optional[int] = None
         self._best_loss = float("inf")
         self._t_start = time.time()
+        # With rehearsal the per-step loss is BIMODAL — narrow-skill batches sit near 0
+        # while interleaved conversation-replay batches are much higher. A single raw loss
+        # then looks like wild "spikes" (it's just alternating populations). Track a
+        # smoothed EMA per batch type so the trend is readable and forgetting is visible
+        # (the rehearsal EMA climbing = conversation being eroded).
+        self._ema_primary: Optional[float] = None
+        self._ema_replay:  Optional[float] = None
+        self._last_replay = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def update(self, step: int, tokens_seen: int, loss: float,
                lr: float, tps: float, grad_norm: float | None = None,
-               passes: int | None = None) -> None:
+               passes: int | None = None, replay: bool | None = None) -> None:
         self._step   = step
         self._tokens = tokens_seen
         self._loss   = loss
@@ -203,6 +211,15 @@ class TrainingDashboard:
             self._passes = passes
         if loss < self._best_loss:
             self._best_loss = loss
+        if replay is not None:
+            self._last_replay = bool(replay)
+            a = 0.1                                   # EMA smoothing factor
+            if replay:
+                self._ema_replay = loss if self._ema_replay is None \
+                    else (1 - a) * self._ema_replay + a * loss
+            else:
+                self._ema_primary = loss if self._ema_primary is None \
+                    else (1 - a) * self._ema_primary + a * loss
         self._loss_hist.append(loss)
         self._tps_hist.append(tps)
         self._progress.update(self._task, completed=tokens_seen)
@@ -215,9 +232,15 @@ class TrainingDashboard:
             self._plain_last = step
             ppl = math.exp(min(loss / self._loss_ce_weight, 20)) if loss > 0 else float("nan")
             gn  = f" | gnorm={self._grad_norm:.2f}" if self._grad_norm is not None else ""
+            # Smoothed per-type EMA so the bimodal rehearsal sawtooth reads as two stable
+            # trends, not "spikes". Only shown once both populations have been seen.
+            ema = ""
+            if self._ema_primary is not None and self._ema_replay is not None:
+                ema = (f" | ema[skill {self._ema_primary:.2f} · "
+                       f"rehearsal {self._ema_replay:.2f}]")
             line = (f"[step {step:>7,}] {tokens_seen/1e6:8.1f}M tok | loss={loss:.4f} "
                     f"| ppl~{ppl:6.2f} | lr={lr:.2e} | {tps:6.0f} tok/s "
-                    f"| best={self._best_loss:.4f}{gn}")
+                    f"| best={self._best_loss:.4f}{gn}{ema}")
             if self._plain:
                 # markup=False so the literal "[step N]" brackets aren't parsed as
                 # rich markup tags (which would silently drop them).
@@ -227,7 +250,8 @@ class TrainingDashboard:
                              loss=f"{loss:.4f}", ppl=f"{ppl:.4f}", lr=f"{lr:.3e}",
                              tps=f"{tps:.0f}",
                              grad_norm=("" if self._grad_norm is None
-                                        else f"{self._grad_norm:.3f}"))
+                                        else f"{self._grad_norm:.3f}"),
+                             replay=int(self._last_replay))
 
     def set_target(self, n_tokens_target: int) -> None:
         """Adjust the token target (and progress-bar total) mid-run — e.g. when the
@@ -258,13 +282,13 @@ class TrainingDashboard:
         self.last_ckpt_step = step
 
     def _metric_row(self, kind, *, step="", tokens_m="", loss="", ppl="", lr="", tps="",
-                    grad_norm="", val_ppl="", best_val_ppl="", passed="") -> None:
+                    grad_norm="", val_ppl="", best_val_ppl="", passed="", replay="") -> None:
         """Append one machine-readable row to metrics.csv (if any) — see plot_metrics.py."""
         if self._metrics is None:
             return
         try:
             self._metrics.write(f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
-                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed}\n")
+                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed},{replay}\n")
             self._metrics.flush()
         except (OSError, ValueError):
             self._metrics = None

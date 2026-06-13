@@ -52,7 +52,9 @@ from src.config import require_backend, get_precision, SUPPORTED_PRECISIONS
 # ---------------------------------------------------------------------------
 # Stage gates / names / freeze point — single source of truth (shared with the
 # dashboard) lives in src/training/stages.py so the two can't diverge.
-from src.training.stages import STAGE_GATES, STAGE_NAMES, BCF_STAGE
+from src.training.stages import (STAGE_GATES, STAGE_NAMES, BCF_STAGE,
+                                  STAGE_REHEARSAL, DEFAULT_REHEARSAL,
+                                  STAGE_LR_SCALE, DEFAULT_LR_SCALE)
 
 
 def last_cognitive_stage(cfg: dict) -> int | None:
@@ -93,8 +95,10 @@ def prev_active_stage(stage: int, cfg: dict) -> int | None:
 # Helpers
 # ---------------------------------------------------------------------------
 def load_config(path: str) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+    # Single implementation (deep-merges the shared configs/levels/_base.yaml so levels
+    # declare only their diffs) lives in src.config — delegate so the two never diverge.
+    from src.config import load_config as _load_config
+    return _load_config(path)
 
 
 def ckpt_root(cfg: dict) -> Path:
@@ -284,8 +288,11 @@ def build_data_loader(stage: int, cfg: dict):
         # memory, all short factual Q&A) can request MORE rehearsal so they don't
         # erode conversation; see curriculum.stageN.rehearsal_fraction.
         scfg = cfg.get("curriculum", {}).get(f"stage{stage}", {}) or {}
-        frac = float(scfg.get("rehearsal_fraction",
-                              cfg.get("training", {}).get("rehearsal_fraction", 0.15)))
+        # Per-stage anti-forgetting default (applies at EVERY level — see stages.py);
+        # the level's yaml may override, else the global training default, else 0.15.
+        _reh_default = STAGE_REHEARSAL.get(
+            stage, cfg.get("training", {}).get("rehearsal_fraction", DEFAULT_REHEARSAL))
+        frac = float(scfg.get("rehearsal_fraction", _reh_default))
         if frac > 0:
             cur = cfg.get("curriculum", {})
             earlier = sorted(s for s in (int(k.replace("stage", "")) for k in cur)
@@ -684,6 +691,14 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     # and make the schedule jump discontinuously (M3). The estimate is approximate
     # (bytes/≈chars-per-token); it only sets the LR horizon, not the stop point.
     stage_cfg = cfg["curriculum"][f"stage{stage}"]
+    # Per-stage LR scale: the narrow late cognitive stages (arithmetic/CoT) OVERWRITE the
+    # shared core at the full LR — even with heavy rehearsal, arithmetic leaked numbers
+    # into greetings ('hi'→'3'). A gentler LR makes them NUDGE the core (learn the skill)
+    # instead of stamping their low-entropy format over conversation. Default is a STAGE
+    # property (applies at every level — see stages.py); the yaml may override per stage.
+    lr_scale = float(stage_cfg.get("lr_scale", STAGE_LR_SCALE.get(stage, DEFAULT_LR_SCALE)))
+    base_lr  = tcfg["lr"] * lr_scale
+    min_lr   = tcfg.get("lr_min", 3e-5) * lr_scale
     _lvl  = cfg.get("level")
     _ddir = Path(stage_cfg.get("data_dir",
                  f"data/level{_lvl}/stage{stage}" if _lvl is not None
@@ -826,13 +841,14 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             dash.print(f"[rehearsal] {audit['rehearsal']['fraction']:.0%} replay over "
                        f"{len(audit['rehearsal']['dirs'])} stage(s), weights%="
                        f"{audit['rehearsal']['weights_pct']}")
-        dash.print(f"[hparams] lr={tcfg['lr']} bs={bs} warmup={warmup} "
+        _lrtag = f"lr={base_lr:.2e}" + (f" (×{lr_scale:g} stage scale)" if lr_scale != 1.0
+                                        else "")
+        dash.print(f"[hparams] {_lrtag} bs={bs} warmup={warmup} "
                    f"max_passes={max_passes} early_stop=patience{patience}/δ{min_delta}")
 
         while tokens_seen < target:
-            # Update learning rate
-            lr = cosine_lr(step, tcfg["lr"], tcfg.get("lr_min", 3e-5),
-                           warmup, total_steps)
+            # Update learning rate (per-stage scaled base/min — see lr_scale)
+            lr = cosine_lr(step, base_lr, min_lr, warmup, total_steps)
             B.engine.set_lr(optimizer, lr)
 
             # Gradient accumulation — TRUE accumulation: sum the per-micro-batch
@@ -915,7 +931,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                     last_tps = (dash_interval * toks_step) / elapsed
                 t_dash = time.time()
                 dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps,
-                            grad_norm=grad_norm_val, passes=data_loader.passes)
+                            grad_norm=grad_norm_val, passes=data_loader.passes,
+                            replay=getattr(data_loader, "last_was_replay", False))
 
             # Checkpoint. Route the [ckpt]/[gate] detail through dash.print so it
             # lands INSIDE the dashboard's log region (raw print() would draw over

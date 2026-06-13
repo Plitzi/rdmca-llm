@@ -49,7 +49,8 @@ def _read_metrics(csv_path: Path):
                 train.append({"step": num("step"), "tokens_m": num("tokens_m"),
                               "loss": num("loss"), "ppl": num("ppl"),
                               "lr": num("lr"), "tps": num("tps"),
-                              "grad_norm": num("grad_norm")})
+                              "grad_norm": num("grad_norm"),
+                              "replay": num("replay")})
             elif row.get("kind") == "gate":
                 gate.append({"step": num("step"), "val_ppl": num("val_ppl"),
                              "best": num("best_val_ppl"), "passed": num("passed")})
@@ -73,12 +74,32 @@ def plot_stage(csv_path: Path, out: Optional[Path], label: str, plt) -> Optional
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
     fig.suptitle(f"RDMCA training metrics — {label}", fontsize=13, fontweight="bold")
 
-    # (0,0) training loss vs tokens
+    # (0,0) training loss vs tokens — SPLIT by batch type. With rehearsal the per-step
+    # loss is bimodal (narrow-skill batches near 0, interleaved conversation-replay much
+    # higher); plotting them together looks like wild "spikes". Split into two clean
+    # curves: the skill loss should fall to ~0; the rehearsal (conversation) loss should
+    # stay flat/fall — if it CLIMBS, conversation is being forgotten.
     ax = axes[0][0]
-    xs, ys = _series(train, "tokens_m", "loss")
-    if xs:
-        ax.plot(xs, ys, color="#1f77b4", lw=1.3)
-    ax.set_title("Training loss"); ax.set_xlabel("tokens (M)"); ax.set_ylabel("loss")
+    has_replay = any(r.get("replay") is not None for r in train)
+    if has_replay:
+        skill   = [r for r in train if (r.get("replay") or 0) < 0.5]
+        rehears = [r for r in train if (r.get("replay") or 0) >= 0.5]
+        sx, sy = _series(skill, "tokens_m", "loss")
+        rx, ry = _series(rehears, "tokens_m", "loss")
+        if sx:
+            ax.plot(sx, sy, color="#1f77b4", lw=1.0, alpha=0.8, label="new-skill batches")
+        if rx:
+            ax.plot(rx, ry, color="#d62728", lw=1.0, alpha=0.8,
+                    label="conversation rehearsal")
+        if sx or rx:
+            ax.legend(fontsize=8)
+        ax.set_title("Training loss (split: skill vs rehearsal — the 'spikes')")
+    else:
+        xs, ys = _series(train, "tokens_m", "loss")
+        if xs:
+            ax.plot(xs, ys, color="#1f77b4", lw=1.3)
+        ax.set_title("Training loss")
+    ax.set_xlabel("tokens (M)"); ax.set_ylabel("loss")
     ax.grid(alpha=0.3)
 
     # (0,1) live per-token perplexity vs tokens (log scale — it spans orders of magnitude)
