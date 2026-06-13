@@ -32,6 +32,7 @@ sectors (loaded + frozen core), so they never overwrite language/reasoning.
 import os
 import sys
 import json
+import math
 import time
 import argparse
 import yaml
@@ -307,32 +308,56 @@ def validation_perplexity(model, val_batches) -> float:
 # (BLiMP / ARC / GSM8K / COPA / BCF probes) are wired in. Overridable via
 # cfg["gate"]["max_perplexity"][stage].
 #
-# Calibrated for COMPLETION-MASKED validation perplexity (validation_perplexity now
-# masks like training — measures the assistant tokens the model actually produces, not
-# the user/system context). The previous values (50/45/…) were from the UNMASKED era
-# and were ~3-7× looser, so a trained base passed them almost immediately — useless as a
-# quality bar. These are ambitious "genuinely good" targets; early_stop is the backstop
-# (ships the best model when training plateaus before the bar), so a too-tight threshold
-# never soft-locks a stage — it just defers completion to the plateau.
-DEFAULT_GATE_PPL = {1: 12.0, 2: 12.0, 3: 10.0, 4: 10.0, 5: 10.0,
-                    6: 10.0, 7: 10.0}   # 6 = memory, 7 = ethics/BCF
+# These are the STARTING POINTS (viability floors), not the quality target. The gate
+# RATCHETS: a checkpoint must beat the BEST seen so far to "pass", so once the model
+# first drops under the floor the bar tightens to each new best and worse checkpoints
+# are discarded. The floor only (a) gates the FIRST pass (a model still above it isn't
+# learning yet) and (b) is the minimum the best must clear to graduate. The ratchet —
+# not the floor — drives quality, so the floor stays lenient and never soft-locks a
+# working model (a working stage-1 sits ~15 masked, well under 50, then ratchets down).
+DEFAULT_GATE_PPL = {1: 50.0, 2: 45.0, 3: 40.0, 4: 38.0, 5: 36.0,
+                    6: 36.0, 7: 35.0}   # 6 = memory, 7 = ethics/BCF
+
+
+def gate_threshold(stage: int, cfg: dict = None) -> float:
+    """The stage's STARTING-POINT floor (cfg.gate.max_perplexity > default): the bar the
+    first pass must clear and the minimum the best must clear to graduate. The in-loop
+    gate then RATCHETS below it (beat-your-own-best); see gate_decision."""
+    gate_cfg = (cfg or {}).get("gate", {})
+    return gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL.get(stage, 40.0))
+
+
+def gate_decision(score: float, best_score: float, threshold: float,
+                  min_delta: float = 0.005) -> tuple:
+    """Ratcheting graduation gate. Returns (improved, passed):
+      • improved — `score` beats the running best by `min_delta` (→ it becomes the new
+        best, the moving bar; a non-improving checkpoint is discarded);
+      • passed   — improved AND clears the absolute floor (`threshold`, the starting
+        point). So the FIRST pass needs `score ≤ threshold`; after that each pass must
+        beat the prior best. Example (floor 50): 35→passed(bar 35), 39→not passed
+        (≥35, discarded), 30→passed(bar 30); a first 55→not passed (above the floor)."""
+    improved = math.isfinite(score) and score < best_score * (1.0 - min_delta)
+    return improved, (improved and score <= threshold)
 
 
 def evaluate_gate(model, stage: int,
                   val_batches=None, cfg: dict = None, log=print, step=None) -> tuple:
     """
-    Graduation gate. Operative metric is real validation perplexity (a proxy
-    that actually measures the model); task-specific benchmarks (BLiMP, ARC,
-    GSM8K, COPA, BCF probes) should replace the per-stage threshold as they
-    are wired in. The ethics/BCF stage additionally checks BCF probe accuracy when a probe
-    set is available. Returns (score, passed).
+    Absolute graduation check. Operative metric is real validation perplexity (a proxy
+    that actually measures the model); task-specific benchmarks (BLiMP, ARC, GSM8K,
+    COPA, BCF probes) should replace the per-stage threshold as they are wired in. The
+    ethics/BCF stage additionally checks BCF probe accuracy when a probe set is
+    available. Returns (score, meets_bar) where meets_bar = ppl ≤ the absolute minimum.
+
+    NB this is the ABSOLUTE check (good enough?). The training loop ALSO applies a
+    RATCHET each eval — a checkpoint "passes" only if it beats the best seen so far, so
+    a worse checkpoint is marked not-passed and discarded; the best is the moving bar.
     """
     # Post-base behavioral stages (tool use / MCP / skills / reasoning) have no
     # benchmark gate — fall back to the perplexity-only proxy with a generic label.
     gate = STAGE_GATES.get(stage)
     desc = gate[2] if gate else stage_name(stage, cfg)
-    gate_cfg = (cfg or {}).get("gate", {})
-    max_ppl  = gate_cfg.get("max_perplexity", {}).get(stage, DEFAULT_GATE_PPL.get(stage, 40.0))
+    max_ppl  = gate_threshold(stage, cfg)
 
     # Measure with dropout OFF (eval mode), then restore training mode — the gate
     # is called mid-training, so validation must not see dropout noise.
@@ -650,12 +675,37 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     patience    = int(tcfg.get("early_stop_patience", 4))
     min_delta   = float(tcfg.get("early_stop_min_delta", 0.005))   # 0.5% PPL improvement
     best_path   = ckpt_dir / "best.npz"
+    best_meta   = ckpt_dir / "best.json"
     best_score  = float("inf")
     best_step   = start_step
     best_tokens = tokens_seen
     best_loss   = 0.0
     stale       = 0
     restored_best = False        # set when the diverged tail is rolled back to best
+    # PERSISTENT monotonic best: the best checkpoint is the bar to beat ACROSS runs, not
+    # just within one. On --resume we load the historical best so a later run REPLACES it
+    # only on a genuine improvement — a worse checkpoint is discarded and never clobbers
+    # the best (the "a new checkpoint must beat the best, else it's dropped" rule). The
+    # absolute graduation gate is separate (it decides when the stage is good enough).
+    if resume and best_meta.exists() and best_path.exists():
+        try:
+            bm = json.loads(best_meta.read_text())
+            best_score, best_step = float(bm["score"]), int(bm["step"])
+            best_tokens, best_loss = int(bm["tokens"]), float(bm["loss"])
+            print(f"  [best] resuming against historical best val PPL {best_score:.2f} "
+                  f"(step {best_step:,}) — only an improvement replaces it")
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            pass
+
+    def _save_best(score: float, step: int, tokens: int, loss: float) -> None:
+        """Persist the new best weights + its metadata so the bar survives across runs."""
+        B.engine.save_weights(model, str(best_path))
+        try:
+            best_meta.write_text(json.dumps(
+                {"score": score, "step": step, "tokens": tokens,
+                 "loss": loss, "timestamp": time.time()}, indent=2))
+        except OSError:
+            pass
 
     # MoE load-balance aux loss: with routing active (behavioral stages) the gate
     # otherwise gets no gradient and experts collapse. aux_loss() is 0.0 when there
@@ -814,54 +864,65 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                 data_loader.save_skip_index(skip_index_path)
                 dash.set_checkpoint(step)
 
-            # Gate evaluation. On skip_gate levels (no graduation gate) the score
-            # is shown for information only — it must NOT end the stage early, or
-            # training stops at the first eval_every (e.g. step 1000) far short of
-            # the token budget. The stage then runs to its full budget.
+            # RATCHETING gate. Each eval the score must BEAT the best seen so far to
+            # "pass" — the best is the moving bar, so a worse checkpoint is marked
+            # not-passed and DISCARDED (the best.npz is never clobbered by it). The
+            # stage does NOT graduate on a single static-threshold crossing (that would
+            # ship the first mediocre checkpoint over 50); it keeps seeking a better
+            # best and GRADUATES when it plateaus (no new best for `patience` evals),
+            # shipping that best — but only if the best clears the absolute quality bar.
             if step % eval_every == 0:
-                score, passed = evaluate_gate(model, stage, val_batches, cfg,
-                                              log=dash.print, step=step)
-                dash.set_gate_result(score, passed)
+                # meets_bar = absolute quality floor; quiet log in-loop (we print the
+                # ratchet line below). skip_gate levels keep the plain informational line.
+                score, meets_bar = evaluate_gate(
+                    model, stage, val_batches, cfg,
+                    log=(dash.print if skip_gate else (lambda *a, **k: None)), step=step)
+                thr = gate_threshold(stage, cfg)
+                # Ratchet: improved = new best (the moving bar); passed = new best AND
+                # under the starting-point floor. The dash shows PASSED on a ratchet win.
+                improved, passed = gate_decision(score, best_score, thr, min_delta)
+                dash.set_gate_result(score, passed if not skip_gate else meets_bar)
 
-                # Track the best (lowest val PPL) point so the stage ships it, not a
-                # diverged tail. On `patience` consecutive non-improving evals, stop
-                # early and restore best (only when a finite score exists).
-                if math.isfinite(score) and score < best_score * (1.0 - min_delta):
+                if improved:
+                    if not skip_gate:
+                        prev = "∞" if best_score == float("inf") else f"{best_score:.2f}"
+                        tag = (f"PASSED, bar↓ {score:.2f}" if passed
+                               else f"new best, still above floor {thr:.1f} (not passed yet)")
+                        dash.print(f"[gate] step={step:,} | val ppl {score:.2f} < best {prev} "
+                                   f"→ {tag}")
                     best_score, best_step, best_tokens = score, step, tokens_seen
                     best_loss = acc_loss / grad_acc
-                    B.engine.save_weights(model, str(best_path))
+                    _save_best(best_score, best_step, best_tokens, best_loss)
                     stale = 0
                 elif math.isfinite(best_score):
                     stale += 1
+                    if not skip_gate:
+                        dash.print(f"[gate] step={step:,} | val ppl {score:.2f} ≥ best "
+                                   f"{best_score:.2f} → not passed, discarded "
+                                   f"({stale}/{patience})")
                     if patience and stale >= patience:
-                        dash.print(f"[early-stop] val PPL {score:.2f} has not beaten "
-                                   f"best {best_score:.2f} for {patience} evals — "
-                                   f"restoring best (step {best_step:,}) and finishing")
+                        # Plateaued at the best — ship it. Graduate only if the best
+                        # clears the absolute quality bar (or the gate is skipped).
                         B.engine.load_weights(model, str(best_path))
                         save_checkpoint(model, best_step, stage, best_tokens,
                                         best_loss, ckpt_dir, log=dash.print)
-                        with open(ckpt_dir / "stage_complete.json", "w") as f:
-                            json.dump({"stage": stage, "step": best_step,
-                                       "tokens_seen": best_tokens, "gate_score": best_score,
-                                       "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
-                                       "early_stopped": True, "timestamp": time.time()}, f, indent=2)
-                        dash.print(f"✓ Stage {stage} COMPLETE (early-stopped at best)")
-                        _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
-                        return True
-
-                if passed and not skip_gate:
-                    save_checkpoint(model, step, stage, tokens_seen,
-                                   acc_loss / grad_acc, ckpt_dir, optimizer, log=dash.print)
-                    B.engine.save_weights(model, str(ckpt_dir / "final.npz"))
-                    with open(ckpt_dir / "stage_complete.json", "w") as f:
-                        json.dump({
-                            "stage": stage, "step": step,
-                            "tokens_seen": tokens_seen, "gate_score": score,
-                            "timestamp": time.time(),
-                        }, f, indent=2)
-                    dash.print(f"✓ Stage {stage} COMPLETE — gate {score:.4f}")
-                    _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
-                    return True
+                        best_meets = best_score <= thr
+                        if best_meets or skip_gate:
+                            B.engine.save_weights(model, str(ckpt_dir / "final.npz"))   # graduated model
+                            with open(ckpt_dir / "stage_complete.json", "w") as f:
+                                json.dump({"stage": stage, "step": best_step,
+                                           "tokens_seen": best_tokens, "gate_score": best_score,
+                                           "gate_threshold": thr, "met_bar": bool(best_meets),
+                                           "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
+                                           "early_stopped": True, "timestamp": time.time()}, f, indent=2)
+                            dash.print(f"✓ Stage {stage} COMPLETE — best val ppl "
+                                       f"{best_score:.2f} (≤ bar {thr:.1f}), plateaued")
+                            _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
+                            return True
+                        dash.print(f"[gate] plateaued at best {best_score:.2f} > bar {thr:.1f} "
+                                   f"— NOT graduating. --resume to train more, lower "
+                                   f"gate.max_perplexity, or --skip-gate to accept the best.")
+                        return False
 
         # Final dashboard update so it shows 100%
         dash.update(step, tokens_seen, acc_loss / grad_acc, lr, last_tps)
@@ -882,6 +943,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
 
         if skip_gate:
             # Smoke-test run (e.g. profile=test) — graduation gate not required
+            B.engine.save_weights(model, str(ckpt_dir / "final.npz"))
             ckpt_file = str(ckpt_dir / f"step_{step:08d}.npz")
             with open(ckpt_dir / "stage_complete.json", "w") as f:
                 json.dump({"stage": stage, "step": step,
@@ -898,13 +960,19 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
         score, passed = evaluate_gate(model, stage, val_batches, cfg)
         dash.set_gate_result(score, passed)
         if passed:
-            dash.print(f"✓ Stage {stage} COMPLETE — gate {score:.4f}")
+            B.engine.save_weights(model, str(ckpt_dir / "final.npz"))   # graduated model
+            with open(ckpt_dir / "stage_complete.json", "w") as f:
+                json.dump({"stage": stage, "step": step, "tokens_seen": tokens_seen,
+                           "gate_score": score, "gate_threshold": gate_threshold(stage, cfg),
+                           "met_bar": True, "restored_best": restored_best,
+                           "checkpoint": str(ckpt_dir / f"step_{step:08d}.npz"),
+                           "timestamp": time.time()}, f, indent=2)
+            dash.print(f"✓ Stage {stage} COMPLETE — best val ppl {score:.4f} (budget reached)")
             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
         else:
-            need = STAGE_GATES[stage][1] if stage in STAGE_GATES else None
-            need_txt = f"(need {need:.2f}) " if need is not None else ""
-            dash.print(f"Budget exhausted. Gate: {score:.4f} "
-                       f"{need_txt}— run --resume to continue")
+            need = gate_threshold(stage, cfg)
+            dash.print(f"Budget exhausted. Best val ppl {score:.2f} (need ≤ {need:.1f}) "
+                       f"— run --resume to continue, or --skip-gate to accept the best")
     return passed
 
 

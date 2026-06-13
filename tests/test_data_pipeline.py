@@ -96,12 +96,28 @@ def test_level1_gate_enforced_by_default():
     assert cfg.get("skip_gate") is False
 
 
-def test_gate_thresholds_calibrated_for_masked_metric():
-    """Thresholds must reflect the MASKED metric, not the old unmasked era (~50).
-    A loose threshold would let a base pass at ppl ~20 immediately — no quality bar."""
+def test_gate_decision_ratchets_against_best():
+    """The graduation gate RATCHETS: a checkpoint passes only if it BEATS the best so
+    far (the moving bar) AND clears the starting-point floor. Worse checkpoints are
+    discarded. Mirrors the user's example with floor 50."""
     import train_stage as T
-    assert T.DEFAULT_GATE_PPL[1] <= 15.0
-    assert all(v <= 15.0 for v in T.DEFAULT_GATE_PPL.values())
+    # 35 (from ∞) → new best + under floor → passed; bar is now 35.
+    assert T.gate_decision(35.0, float("inf"), 50.0) == (True, True)
+    # 39 ≥ best 35 → not a new best → NOT passed (discarded), even though 39 ≤ 50.
+    assert T.gate_decision(39.0, 35.0, 50.0) == (False, False)
+    # 30 < best 35 → new best → passed; bar ratchets to 30.
+    assert T.gate_decision(30.0, 35.0, 50.0) == (True, True)
+    # A first checkpoint ABOVE the starting floor improves on ∞ but does NOT pass.
+    assert T.gate_decision(55.0, float("inf"), 50.0) == (True, False)
+
+
+def test_gate_decision_min_delta_requires_real_improvement():
+    """A negligible change (< min_delta) is not a new best — avoids ratchet churn."""
+    import train_stage as T
+    improved, _ = T.gate_decision(34.99, 35.0, 50.0, min_delta=0.005)
+    assert improved is False                              # 0.03% < 0.5% → not a new best
+    improved, _ = T.gate_decision(34.0, 35.0, 50.0, min_delta=0.005)
+    assert improved is True
 
 
 def test_evaluate_gate_respects_threshold_and_config_override():
