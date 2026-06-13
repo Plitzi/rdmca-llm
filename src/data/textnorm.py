@@ -90,3 +90,53 @@ def clean_record_text(text: str) -> str:
     The single call site is the JSONL write choke point (prepare_data.write_jsonl)."""
     t = normalize_text(text)
     return "" if is_garbage(t) else t
+
+
+# ── conversational quality (content gate for dialogue / instruct sources) ──────
+# Format/garbage filtering above is universal. This is a CONTENT gate applied only to
+# turn-structured conversational sources: the #1-priority register for L1 is the model
+# UNDERSTANDING and ANSWERING, so we keep clean, appropriately-short exchanges and drop
+# the long technical/monologue/markdown-dump records (the ones that spiked instruct ppl
+# to ~72) which a tiny base cannot learn to produce.
+_ROLE_RE = re.compile(r"^(User|Assistant|System|Tools|Action|Observation):", re.M)
+_RESPONSE_ROLES = {"Assistant", "Action"}
+_CONTEXT_ROLES = {"User", "System"}
+_URL_RE = re.compile(r"https?://|www\.")
+_CODE_FENCE = "```"
+
+
+def _role_turns(text: str):
+    """Split a `Role: …` transcript into [(role, body), …]; [] if not structured."""
+    marks = list(_ROLE_RE.finditer(text))
+    if not marks or marks[0].start() != 0:
+        return []
+    turns = []
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        role = m.group(1)
+        body = text[m.end():end].strip()
+        turns.append((role, body))
+    return turns
+
+
+def conversational_quality_ok(text: str, max_turn_chars: int = 700,
+                              max_total_chars: int = 1400, max_turns: int = 12) -> bool:
+    """True if a conversational record is clean enough for a tiny L1 base to learn to
+    ANSWER from. Requires a real exchange (≥1 context + ≥1 response turn), bounds turn
+    and total length, and rejects code dumps / link-heavy / empty-turn records. Lenient
+    by design — it trims the unlearnable tail, not the diversity. Non-structured text
+    (prose) returns True (this gate is only wired to conversational sources)."""
+    turns = _role_turns(text)
+    if not turns:
+        return True
+    if len(turns) > max_turns or len(text) > max_total_chars:
+        return False
+    roles = {r for r, _ in turns}
+    if not (roles & _RESPONSE_ROLES) or not (roles & _CONTEXT_ROLES):
+        return False                              # not a User↔Assistant exchange
+    if _CODE_FENCE in text or len(_URL_RE.findall(text)) > 2:
+        return False                              # code/link dumps aren't L1 conversation
+    for _role, body in turns:
+        if not body or len(body) > max_turn_chars:
+            return False                          # empty or unlearnably long turn
+    return True

@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.textnorm import normalize_text, is_garbage, clean_record_text
+from src.data.textnorm import (normalize_text, is_garbage, clean_record_text,
+                               conversational_quality_ok)
 from src.data.loader import _split_turns
 
 
@@ -72,3 +73,27 @@ def test_clean_record_text_normalizes_then_gates():
     assert clean_record_text("“Hello”   world") == '"Hello" world'
     assert clean_record_text("�" * 50) == ""       # garbage → dropped
     assert clean_record_text("") == ""
+
+
+# ── conversational quality gate ────────────────────────────────────────────────
+def test_conversational_quality_keeps_clean_exchange():
+    assert conversational_quality_ok("User: Hi there!\nAssistant: Hello! How can I help?")
+    assert conversational_quality_ok("System: Be kind.\nUser: hola\nAssistant: ¡Hola!")
+
+
+def test_conversational_quality_requires_real_exchange():
+    assert not conversational_quality_ok("User: hi\nUser: anyone?")      # no response role
+    assert not conversational_quality_ok("Assistant: hello\nAssistant: hi")  # no context role
+
+
+def test_conversational_quality_rejects_unlearnable():
+    assert not conversational_quality_ok("User: code?\nAssistant: ```py\nprint(1)\n```")
+    assert not conversational_quality_ok("User: hi\nAssistant: " + "word " * 200)  # too long
+    assert not conversational_quality_ok("User: \nAssistant: hi")          # empty turn
+    assert not conversational_quality_ok(
+        "User: links\nAssistant: http://a.com http://b.com http://c.com")  # link dump
+
+
+def test_conversational_quality_passes_prose_through():
+    # Non-structured text isn't this gate's job (only wired to conversational sources).
+    assert conversational_quality_ok("Once upon a time there was a small blue fox.")

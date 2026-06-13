@@ -44,7 +44,7 @@ from typing import Iterator, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.textnorm import clean_record_text   # ingestion normalization + garbage gate
+from src.data.textnorm import clean_record_text, conversational_quality_ok   # ingestion gates
 
 # HuggingFace token — optional but raises rate limits significantly.
 # Supplied via the HF_TOKEN environment variable (set it in .env — see
@@ -399,6 +399,12 @@ def _full_corpus_streamers(stage: int, langs: List[str],
 # (dialogue, tool/skill/MCP JSON, arithmetic, analogies, causal) is conversational
 # or structured and must NOT be grade-filtered — see the gate below.
 _READABILITY_FILTERED = {"tinystories", "simple_wikipedia", "wikipedia"}
+# Turn-structured conversational sources get the CONTENT quality gate
+# (conversational_quality_ok): keep clean, short exchanges; drop long technical /
+# monologue / code-dump records a tiny L1 base can't learn to answer. This is the
+# lever for the #1 goal — a model that understands and replies — and works for any
+# future conversational provider, not just today's.
+_CONVERSATIONAL_FILTERED = {"dialogue", "instruct", "basic_chat", "smalltalk"}
 
 
 def prepare_stage_for_level(level: int, stage: int, cfg: dict,
@@ -460,6 +466,8 @@ def prepare_stage_for_level(level: int, stage: int, cfg: dict,
         # graded; conversational/structured ones pass through.
         if flt and src in _READABILITY_FILTERED:       # None / non-prose ⇒ keep all
             it = (rec for rec in it if graded.passes_filter(rec.get("text", ""), flt))
+        elif src in _CONVERSATIONAL_FILTERED:           # content quality for conversation
+            it = (rec for rec in it if conversational_quality_ok(rec.get("text", "")))
         tokens, exhausted = write_jsonl(it, out_path, per_source_m)
         # Sidecar: records completeness so a re-run can tell "source exhausted"
         # (complete, smaller than budget) from "download interrupted" (partial).
