@@ -171,7 +171,7 @@ rdmca-llm/
 ├── src/resources.py            Memory estimate + OOM guard + level announce
 ├── src/core/data/graded.py          Graded sources, readability filter, synthetic generators
 ├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
-├── experiments/continual_learning.py   Hypothesis validation (no-forgetting)
+├── src/models/cognition/experiments/continual_learning.py   Hypothesis validation (no-forgetting)
 ├── scripts/train.py              Stage training + freeze + BCF
 ├── uses/                       Ways to consume a trained model
 │   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)

@@ -418,7 +418,7 @@ Shows in seconds that sectorized consolidation does not forget, vs. sequential
 fine-tuning and EWC:
 
 ```bash
-python experiments/continual_learning.py --domains 5 --steps 250
+python src/models/cognition/experiments/continual_learning.py --domains 5 --steps 250
 ```
 
 Expected ordering: `naive` worst → `ewc` middle → `rdmca` BWT≈0.

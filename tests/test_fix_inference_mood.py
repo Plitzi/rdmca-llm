@@ -132,7 +132,7 @@ def test_agent_prompt_prepends_system_persona():
 def test_data_enrichment_system_and_story():
     """instruct system injection yields a System line; story reframing is a NATURAL
     User→Assistant request with NO system prompt (telling a story needs no persona)."""
-    from src.plugins.sdk import STORY_PROMPTS, prepend_system
+    from src.models.sdk import STORY_PROMPTS, prepend_system
 
     sysd = prepend_system("User: q\nAssistant: a", "You are kind.", "happy")
     assert sysd.startswith("System: You are kind. (mood: happy)\nUser:")

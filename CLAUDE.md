@@ -23,79 +23,84 @@ Reglas:
 Las herramientas de desarrollo están en [requirements-dev.txt](requirements-dev.txt)
 (`pip install -r requirements-dev.txt`).
 
-## Arquitectura de carpetas: core · plugins · uses (OBLIGATORIO)
+## Arquitectura de carpetas: core · models · uses (OBLIGATORIO)
 
 Tres capas, separadas a propósito:
 
-- **`src/core/`** — el FRAMEWORK, **agnóstico al dominio**: todo lo general del modelo
+- **`src/core/`** — el FRAMEWORK, **agnóstico a la tarea**: todo lo general
   (`backend/`, `model/`, `modalities/`, `data/`, `training/`, `consolidation/`,
   `memory/`, `relevance/`, `routing/` + `config.py`, `env.py`, `resources.py`,
-  `observability.py`). El objetivo es que, cambiando los plugins, este mismo framework
-  pueda entrenar OTRO tipo de modelo (p. ej. reconocimiento de manos para VR). **El core
-  NUNCA importa un stage concreto** (solo descubre los plugins vía el registry) ni
-  importa de `uses/`.
-- **`src/plugins/`** — los plugins, organizados por **DOMINIO**, **100% aislados**: un
-  plugin solo se CONSUME, no depende de nada del framework salvo del **SDK de plugins**
-  ([src/plugins/sdk/](src/plugins/sdk/)) — un único import estable. NUNCA importa de
-  `src/core` directamente, ni de otros stages. Así borrar un plugin (`rm -rf` su
+  `observability.py`). El objetivo es que, cambiando los modelos/plugins, este mismo
+  framework pueda entrenar OTRO tipo de modelo (p. ej. reconocimiento de manos para VR).
+  **El core NUNCA importa un stage concreto** (solo descubre los plugins vía el registry)
+  ni importa de `uses/`.
+- **`src/models/`** — los modelos, cada uno un escenario de entrenamiento con sus stages,
+  **100% aislados**: un stage solo se CONSUME, no depende de nada del framework salvo del
+  **SDK de plugins** ([src/models/sdk/](src/models/sdk/)) — un único import estable. NUNCA
+  importa de `src/core` directamente, ni de otros stages. Así borrar un stage (`rm -rf` su
   carpeta) jamás rompe el framework ni otro stage, y añadir uno solo requiere el SDK.
   El propio sistema de plugins (`base.py`, `registry.py`, `sdk/`) vive aquí pero NO es
   un plugin.
 - **`uses/`** — los CONSUMIDORES del modelo (chat, agent, futura API). NO son parte del
   framework: son formas de consumir el modelo ya creado. Lo compartido entre
   consumidores va en `uses/common/` (`agent.py`, `generate.py`, `loading.py`,
-  `interaction.py`). `uses/` puede importar de `src/core` y `src/plugins`; el framework
+  `interaction.py`). `uses/` puede importar de `src/core` y `src/models`; el framework
   NUNCA importa de `uses/`.
 
-## Dominios: un framework, varios escenarios
+## Modelos: un framework, varios escenarios
 
-Cada **dominio** es un escenario de entrenamiento bajo `src/plugins/<dominio>/` y agrupa
-sus propios stages:
-- **`src/plugins/cognition/`** — el LLM conversacional/agéntico (los 10 stages actuales).
-  Es el dominio **por defecto** (`cfg["domain"]` ausente → `cognition`).
-- **`src/plugins/hands_recognition/`** — TODO (pose de manos para VR), el segundo dominio
+Un **modelo** es un escenario de entrenamiento bajo `src/models/<nombre>/` y agrupa sus
+propios stages (cada modelo internamente corre un grupo de stages):
+- **`src/models/cognition/`** — el LLM conversacional/agéntico (los 10 stages actuales).
+  Es el modelo **por defecto** (`cfg["model_name"]` ausente → `cognition`).
+- **`src/models/hands_recognition/`** — TODO (pose de manos para VR), el segundo modelo
   que demuestra que el framework es agnóstico: solo es un stub con instrucciones.
 
-El dominio activo se elige con `cfg["domain"]` (clave del YAML del nivel). `scripts/train.py`
-y `scripts/prepare_data.py` llaman `set_domain(cfg.get("domain"))` al arrancar, ANTES de
-tocar el registry, para que descubra los stages de ESE dominio.
+Cada modelo tiene además sus **experiments** propios (sondas de hipótesis) en
+`src/models/<nombre>/experiments/` — p. ej.
+[src/models/cognition/experiments/continual_learning.py](src/models/cognition/experiments/continual_learning.py).
 
-**`DomainSpec`** ([src/plugins/base.py](src/plugins/base.py)) es la costura que hace el
-motor agnóstico a la tarea/modalidad. El trainer NUNCA construye el modelo, el loader, la
-pérdida ni el gate directamente: se los pide al `DomainSpec` activo (resuelto en
-[src/core/training/domain.py](src/core/training/domain.py)). El spec por defecto (`text-lm`)
-cablea las piezas del LLM de texto (`setup.build_stage_model`, `dataload.build_data_loader`,
-la objetivo MRL+aux, `gates.evaluate_gate`), así `cognition` se comporta idéntico que antes.
-Un dominio sobreescribe cualquier pieza exponiendo `DOMAIN = DomainSpec(...)` (o
-`build_domain(cfg) -> DomainSpec`) en su paquete. Convención: en `evaluate`, **menor score
-es mejor** (una métrica higher-is-better devuelve p. ej. `1-accuracy`), para que el ratchet
-del trainer siga siendo agnóstico a la métrica.
+El modelo activo se elige con `cfg["model_name"]` (clave del YAML del nivel; OJO: distinta
+de `model:`, que es la ARQUITECTURA — d_model, n_layers — de ese modelo). `scripts/train.py`
+y `scripts/prepare_data.py` llaman `set_active_model(cfg.get("model_name"))` al arrancar,
+ANTES de tocar el registry, para que descubra los stages de ESE modelo.
+
+**`ModelSpec`** ([src/models/base.py](src/models/base.py)) es la costura que hace el motor
+agnóstico a la tarea/modalidad. El trainer NUNCA construye la red, el loader, la pérdida ni
+el gate directamente: se los pide al `ModelSpec` activo (resuelto en
+[src/core/training/model_spec.py](src/core/training/model_spec.py)). El spec por defecto
+(`text-lm`) cablea las piezas del LLM de texto (`setup.build_stage_model`,
+`dataload.build_data_loader`, la objetivo MRL+aux, `gates.evaluate_gate`), así `cognition`
+se comporta idéntico que antes. Un modelo sobreescribe cualquier pieza exponiendo
+`SPEC = ModelSpec(...)` (o `build_spec(cfg) -> ModelSpec`) en su paquete. Convención: en
+`evaluate`, **menor score es mejor** (una métrica higher-is-better devuelve p. ej.
+`1-accuracy`), para que el ratchet del trainer siga siendo agnóstico a la métrica.
 
 ## Estructura: stages como plugins
 
 Cada stage del currículo es un **plugin autónomo** bajo
-`src/plugins/<dominio>/stageNN_<slug>/`:
+`src/models/<modelo>/stageNN_<slug>/`:
 - `plugin.py` — metadata del stage (número, nombre, gate, rehearsal, lr_scale,
   `trains_mood`, freeze-point, `enabled`) en un `StagePlugin`.
 - `sources.py` — los generadores de datos PROPIOS del stage (un dict `SOURCES`:
   clave → builder).
 - `data/level{L}/` — el corpus generado del stage vive DENTRO de su paquete
-  (gitignored). Lo resuelve `src.plugins.stage_data_dir`.
+  (gitignored). Lo resuelve `src.models.stage_data_dir`.
 
-El **registry** ([src/plugins/registry.py](src/plugins/registry.py)) los descubre solos
-(escanea `stageNN_*` del dominio activo), valida y responde todo lo de stages (`get_stage`,
+El **registry** ([src/models/registry.py](src/models/registry.py)) los descubre solos
+(escanea `stageNN_*` del modelo activo), valida y responde todo lo de stages (`get_stage`,
 `active_stages`, `bcf_stage`, `is_behavioral`, `mood_stages`, `stream_source`,
-`stage_data_dir`). `bcf_stage()` devuelve `int | None` (un dominio puede NO tener punto de
+`stage_data_dir`). `bcf_stage()` devuelve `int | None` (un modelo puede NO tener punto de
 congelado → freeze opcional). Un stage es autónomo: su ÚNICO acoplamiento al framework es
-`from src.plugins.sdk import ...` (contrato + helpers: `StagePlugin`, `StageGate`,
+`from src.models.sdk import ...` (contrato + helpers: `StagePlugin`, `StageGate`,
 `blend`, `interleave`, `cycle_records`, `stable_hash`, `passes_filter`, `persona_for`,
 `prepend_system`, `hermes_events`, `emotion_to_mood`, …). Helpers usados solo por UN
 stage viven dentro de su propio paquete (p. ej.
-`src/plugins/cognition/stage01_language/dictionary.py`). El SDK es el puente al core; el
+`src/models/cognition/stage01_language/dictionary.py`). El SDK es el puente al core; el
 plugin nunca pasa de él.
 
 **Para añadir/quitar un stage:** suelta (o borra) un paquete
-`src/plugins/<dominio>/stage11_*/`; nada más se edita. Para desactivar uno: `enabled=False`
+`src/models/<modelo>/stage11_*/`; nada más se edita. Para desactivar uno: `enabled=False`
 en su plugin **o** `curriculum.stageN.enabled: false` en el YAML del nivel (lo respetan
 train y prepare).
 
@@ -105,10 +110,10 @@ dentro de la base; False = behavioral / entrena un sector LoRA sobre el core ya
 congelado). NO se decide por número de stage ni umbral — lo dice el propio stage.
 
 **Tests por plugin:** cada stage mantiene SUS tests en
-`src/plugins/<dominio>/stageNN_<slug>/tests/` (borrar el stage se lleva sus tests). Los
+`src/models/<modelo>/stageNN_<slug>/tests/` (borrar el stage se lleva sus tests). Los
 tests transversales (registry, pipeline, entrenamiento, y los del framework/SDK como
 loader y `blend`) viven en `tests/` y NO importan ningún stage concreto. `pytest.ini`
-colecciona ambos (`testpaths = tests src/plugins`); el `conftest.py` de la raíz pone el
+colecciona ambos (`testpaths = tests src/models`); el `conftest.py` de la raíz pone el
 repo en `sys.path`.
 
 Otros puntos clave del refactor:
@@ -137,7 +142,7 @@ empieces a sentir un archivo pesado o con responsabilidades mezcladas, pártelo.
 
 **Helpers reusables suben de nivel.** Si un helper lo usan ≥2 módulos, SÚBELO a una
 carpeta común en vez de duplicarlo:
-- compartido entre plugins/stages → el **SDK de plugins** (`src/plugins/sdk/`), que es el
+- compartido entre plugins/stages → el **SDK de plugins** (`src/models/sdk/`), que es el
   único contrato del que dependen los plugins; **nunca** un `_shared` dentro de `plugins/`
   ni un import directo de `src/core` desde un plugin;
 - compartido entre consumidores (chat/agent) → `uses/common/`;

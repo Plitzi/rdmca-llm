@@ -11,7 +11,7 @@ import numpy as np
 import src.core.backend as backend
 from src.core.training.checkpoint import freeze_model
 from src.core.training.curriculum import BCF_STAGE, is_behavioral_stage, last_cognitive_stage
-from src.plugins import get_stage
+from src.models import get_stage
 
 
 def train_bcf_head(

@@ -18,7 +18,7 @@ from rich.table import Table
 from rich.text import Text
 
 import src.core.backend as backend
-from src.plugins import all_stages
+from src.models import all_stages
 
 # Stage names come from the registry (each plugin's declared name).
 STAGE_NAMES = {p.number: p.name for p in all_stages()}

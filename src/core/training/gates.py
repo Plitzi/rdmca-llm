@@ -12,7 +12,7 @@ import numpy as np
 
 import src.core.backend as backend
 from src.core.training.curriculum import stage_name
-from src.plugins import bcf_stage, get_stage
+from src.models import bcf_stage, get_stage
 
 BCF_STAGE = bcf_stage()
 

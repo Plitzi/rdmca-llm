@@ -97,11 +97,11 @@ Examples:
 
     cfg_path = resolve_config_path(args.config, args.level)
     cfg = load_config(cfg_path)
-    # Select the training domain (registry default = cognition) before anything touches
-    # the stage registry, so it discovers THIS domain's stage plugins.
-    from src.plugins import set_domain
+    # Select the active model (registry default = cognition) before anything touches
+    # the stage registry, so it discovers THIS model's stage plugins.
+    from src.models import set_active_model
 
-    set_domain(cfg.get("domain"))
+    set_active_model(cfg.get("model_name"))
     # Precision override (CLI wins over config). Set before the guard/announce so the
     # precision-aware memory estimate reflects the chosen dtype.
     if args.precision:

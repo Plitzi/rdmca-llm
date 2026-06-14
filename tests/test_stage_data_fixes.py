@@ -7,7 +7,7 @@ Cross-cutting data-pipeline guards (framework + plugin SDK, no specific stage):
   - size-weighted rehearsal selection favouring the largest earlier stage.
 
 Per-stage source guards (arithmetic / causal / CoT / ethics / language) live with their
-stage under src/plugins/cognition/stageNN_*/tests/, so deleting a stage takes its tests.
+stage under src/models/cognition/stageNN_*/tests/, so deleting a stage takes its tests.
 """
 
 import sys
@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 
 from src.core.data.loader import DataLoader, TextDataset
-from src.plugins.sdk import blend, cycle_records
+from src.models.sdk import blend, cycle_records
 
 
 def _dummy_synth(n: int = 1000):

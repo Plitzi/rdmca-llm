@@ -2,7 +2,7 @@
 
 These read a level's `curriculum` config and the stage registry; they are the leaf
 utilities the trainer and its helper modules build on. Stage metadata (name, freeze
-point, behavioral kind) comes from `src.plugins`, the single source of truth.
+point, behavioral kind) comes from `src.models`, the single source of truth.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.plugins import bcf_stage, get_stage, has_stage, is_behavioral
+from src.models import bcf_stage, get_stage, has_stage, is_behavioral
 
 # The ethics/BCF stage — the stage that runs the BCF probe and at which the mood head
 # is retrained. It is the stage flagged `is_freeze_point` in the registry, NOT a
@@ -33,7 +33,7 @@ def is_behavioral_stage(stage: int) -> bool:
     """Behavioral stages (not part of the frozen base) train as LoRA sectors on the
     frozen core. Read from the stage's own `frozen_base` declaration (registry). For a
     stage not in the registry, fall back to the freeze-point threshold — and when the
-    domain declares NO freeze point (BCF_STAGE is None), nothing is behavioral."""
+    model declares NO freeze point (BCF_STAGE is None), nothing is behavioral."""
     if has_stage(stage):
         return is_behavioral(stage)
     return BCF_STAGE is not None and stage > BCF_STAGE
