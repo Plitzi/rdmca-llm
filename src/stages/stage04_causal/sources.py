@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator
 
-from src.stages._shared.blend import blend
+from src.core.data.blend import blend
 
 
 # ── real causal (e-CARE) ────────────────────────────────────────────────────────

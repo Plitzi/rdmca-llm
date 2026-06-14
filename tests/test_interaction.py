@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.agent import Tool, run_agent
+from uses.common.agent import Tool, run_agent
 from uses.common.interaction import InterruptGuard, SessionInput
 
 

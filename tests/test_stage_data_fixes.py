@@ -19,9 +19,9 @@ import itertools
 import numpy as np
 import pytest
 
-from src.agent import THINK_CLOSE, THINK_OPEN, visible_stream_text
-from src.data import graded as g
-from src.data.loader import DataLoader, TextDataset
+from src.core.data import graded as g
+from src.core.data.loader import DataLoader, TextDataset
+from uses.common.agent import THINK_CLOSE, THINK_OPEN, visible_stream_text
 
 
 # ── 1. empty-corpus loader must terminate, not hang ──────────────────────────
@@ -54,7 +54,7 @@ def test_dailydialog_extractor_builds_quality_transcript():
     """The DailyDialog corpus entry must turn alternating utterances into a clean
     User:/Assistant: exchange that passes the conversational-quality gate — and be
     exception-free on a missing/renamed schema (so a bad mirror is just empty)."""
-    from src.data.textnorm import conversational_quality_ok
+    from src.core.data.textnorm import conversational_quality_ok
 
     extractors = dict(g._DIALOGUE_CORPORA["en"])
     assert "roskoN/dailydialog" in extractors

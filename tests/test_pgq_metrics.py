@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np
 import pytest
 
-from src.consolidation import pipeline as P
-from src.consolidation.pgq import PGQ
-from src.consolidation.pipeline import ConsolidationPipeline
-from src.memory.episodic_buffer import Experience
+from src.core.consolidation import pipeline as P
+from src.core.consolidation.pgq import PGQ
+from src.core.consolidation.pipeline import ConsolidationPipeline
+from src.core.memory.episodic_buffer import Experience
 
 
 class _StubLTSS:

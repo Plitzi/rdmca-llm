@@ -96,7 +96,7 @@ def test_active_stages_respects_entry_level():
 
 def test_shim_parity_with_registry():
     """The deprecated src/training/stages.py shim must reproduce the old dicts."""
-    from src.training import stages as shim
+    from src.core.training import stages as shim
 
     assert shim.BCF_STAGE == 7
     assert shim.STAGE_NAMES == EXPECTED_NAMES

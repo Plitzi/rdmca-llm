@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.training.dashboard import TrainingDashboard
+from src.core.training.dashboard import TrainingDashboard
 
 
 def _dash(tmp_path, **kw):

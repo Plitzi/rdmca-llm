@@ -35,7 +35,7 @@ both ends.
 | S7 | Behavioral | Ethics, BCF — adversarial buffer only | r=4 |
 
 **Mixture-of-Experts (MoE) over sectors.** The sectors S1–S6 are **experts** routed
-**per token** by a learned gate (`src/model/moe.py` `SectorGate`): each token activates
+**per token** by a learned gate (`src/core/model/moe.py` `SectorGate`): each token activates
 only its **top-k** sectors (default k=2) — like the brain, not every expert fires. So the
 *active* sector compute stays bounded as the sector pool grows (PGQ), letting modest
 hardware keep running the model as it accumulates knowledge. The gate + experts train
@@ -70,7 +70,7 @@ output (new components are zero-output at first).
 
 - **Backend** (`backend:` top-level key, default `mlx`). Two backends are fully
   supported — **MLX** (Apple Silicon) and **PyTorch** (CUDA/MPS/CPU) — behind a single
-  facade in `src/backend/`. The model is written **once** against the active backend's
+  facade in `src/core/backend/`. The model is written **once** against the active backend's
   three namespaces:
   - `B.nn` — Module + layer factories (`Linear`, `Embedding`, `Conv*`, `Parameter`,
     `ModuleList`, …); convs use channels-first (NCHW/NCL), MLX wrappers permute internally.
@@ -81,7 +81,7 @@ output (new components are zero-output at first).
   `require_backend(cfg)` (`src/config.py`) calls `backend.select(name)` at startup, so
   model modules must be imported **after** selection — the entrypoints do this with
   function-local imports. Adding a third backend = one `Backend` subclass + a line in
-  `src/backend/registry.py`; no model code changes.
+  `src/core/backend/registry.py`; no model code changes.
 
   **Checkpoints** use a neutral `.npz` of float32 numpy arrays with identical parameter
   names, so the text foundational core is **cross-backend** (train on MLX, load on torch,
@@ -89,7 +89,7 @@ output (new components are zero-output at first).
   layouts differ). On Mac, `bf16` over torch **MPS** is slower/less precise than MLX —
   prefer MLX there.
 - **Precision** (`training.precision`, default `bf16`). `set_model_precision()`
-  (`src/model/transformer.py`, a thin shim over `engine.set_precision`) casts the float
+  (`src/core/model/transformer.py`, a thin shim over `engine.set_precision`) casts the float
   params to fp32/bf16/fp16 (and, for torch, moves the model to the selected device). RoPE
   and the causal mask are dtype-aware so low precision is not silently promoted to fp32.
   fp16 has no loss-scaling — use it for quick smoke tests, not for real runs.
@@ -112,7 +112,7 @@ vocab_size (model) = total
   (`<lang:xx>`) are user-defined symbols inside the text range.
 - Languages are **config-driven** (`model.languages`); the tokenizer bakes in the chosen
   `<lang:xx>` and stores `lang_token_ids` in `tokenizer_info.json`.
-- The **perception layer** (`src/modalities/perception.py`) detects modality, tokenizes
+- The **perception layer** (`src/core/modalities/perception.py`) detects modality, tokenizes
   with the matching tokenizer and assembles the interleaved sequence.
 - The `DataLoader` accepts `{"text": ...}` records or pre-tokenized `{"tokens": [...]}`
   (multimodal); the next-token LM objective is the same for every modality.
@@ -169,14 +169,14 @@ rdmca-llm/
 ├── configs/
 │   └── levels/                 level1..5 (preescolar..universidad) — size + data + resources
 ├── src/resources.py            Memory estimate + OOM guard + level announce
-├── src/data/graded.py          Graded sources, readability filter, synthetic generators
+├── src/core/data/graded.py          Graded sources, readability filter, synthetic generators
 ├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
 ├── experiments/continual_learning.py   Hypothesis validation (no-forgetting)
 ├── scripts/train.py              Stage training + freeze + BCF
 ├── uses/                       Ways to consume a trained model
 │   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)
 │   └── agent/run_agent.py      Agentic tool loop (Action/Observation)
-├── src/consolidation/daemon.py     Daily consolidation daemon (wired)
+├── src/core/consolidation/daemon.py     Daily consolidation daemon (wired)
 └── docs/
     ├── GUIDE.md                Single step-by-step guide
     ├── reference/architecture.md   This file
@@ -202,8 +202,8 @@ cognitive core** is seven developmental **stages** (1 Language · 2 Perception �
 (`entry_level ≤ 1`); the core **freezes after the ethics/BCF stage** (`BCF_STAGE = 7`),
 so neither competence nor values drift. Three **behavioral** stages (8 tool use · 9 MCP ·
 10 skills) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
-Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `src/agent.py`
-(see [uses/chat/](../../uses/chat/)). Data is graded per level via `src/data/graded.py`.
+Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `uses/common/agent.py`
+(see [uses/chat/](../../uses/chat/)). Data is graded per level via `src/core/data/graded.py`.
 
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
@@ -220,7 +220,7 @@ packed nibbles at 4-bit; the output head stays in float). Generation is bounded 
 
 ## Consolidation (daemon)
 
-`src/consolidation/daemon.py` loads the frozen core + sectors, drains
+`src/core/consolidation/daemon.py` loads the frozen core + sectors, drains
 `data/runtime/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
 filter (R⁺<0) → LTSS consistency → MRF → sector assignment (STR + SectorRouter) → masked
 per-sector update → PGQ → snapshot/rollback → audit log in `logs/cycle_*.json`. It saves

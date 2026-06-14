@@ -26,11 +26,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 
-import src.backend as backend
-from src.data.loader import DataLoader, TextDataset
-from src.model.config import ModelConfig
-from src.model.transformer import RDMCAFoundational
-from src.training.trainer import BCF_STAGE, is_behavioral_stage
+import src.core.backend as backend
+from src.core.data.loader import DataLoader, TextDataset
+from src.core.model.config import ModelConfig
+from src.core.model.transformer import RDMCAFoundational
+from src.core.training.trainer import BCF_STAGE, is_behavioral_stage
 
 
 # ── deterministic char tokenizer so corpora are token-distinguishable ──────────

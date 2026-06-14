@@ -27,11 +27,11 @@ from types import SimpleNamespace
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from src import agent
-from src.config import resolve_config_path
+from src.core.config import resolve_config_path
 from uses.agent.tools.current_time import TOOL as CURRENT_TIME
 from uses.agent.tools.todo import TOOL as TODO
 from uses.chat import run_chat as chat  # reuse model loading + generation
+from uses.common import agent
 from uses.common.interaction import InterruptGuard, SessionInput
 
 # Tools available to the agent (add your own here). Deliberately NOT a calculator
@@ -213,7 +213,7 @@ def main() -> None:
     )
     print("Loading model…")
     model, mcfg = chat.load_model(load_args)
-    from src.modalities.text import TextTokenizer
+    from src.core.modalities.text import TextTokenizer
 
     tokenizer = TextTokenizer()
 
@@ -243,8 +243,8 @@ def main() -> None:
 
     # Mood applies to EVERY surface, not just the chat: read the query's mood from
     # the shared mood head (neutral by default) and fold it into the system line.
-    from src.modalities.moods import MOODS, mood_system_phrase
-    from src.model.mood import classify_mood, load_mood_head
+    from src.core.modalities.moods import MOODS, mood_system_phrase
+    from src.core.model.mood import classify_mood, load_mood_head
 
     mood = "neutral"
     if not args.no_mood:
@@ -268,7 +268,7 @@ def main() -> None:
     memory = ""
     if tokenizer.ready:
         try:
-            from src.memory.recall import MemoryRecall
+            from src.core.memory.recall import MemoryRecall
 
             mems = MemoryRecall(model, tokenizer).recall(args.query)
             memory = "\n".join(f"- {m.text.strip()}" for m in mems)
@@ -284,7 +284,7 @@ def main() -> None:
     context_mgr = enc = dec = None
     if getattr(args, "context_slots", False) and tokenizer.ready:
         try:
-            from src.routing.context_manager import build_context_manager
+            from src.core.routing.context_manager import build_context_manager
 
             context_mgr = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
 
@@ -335,8 +335,8 @@ def main() -> None:
         print(f"\nAgent: (no final answer — {result.get('note', 'stopped')})")
 
     # ── Context & token accounting (same report every surface uses) ──────────
-    from src.memory.experience_log import load_experiences
-    from src.observability import ContextReport, count_tokens
+    from src.core.memory.experience_log import load_experiences
+    from src.core.observability import ContextReport, count_tokens
 
     header = agent.build_agent_prompt(TOOLS, args.query, skill_md, args.think, system=sys_persona)
     reasoning = " ".join(s.get("thinking", "") for s in result["steps"]) + (

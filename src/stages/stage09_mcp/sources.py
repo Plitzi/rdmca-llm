@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 
-from src.stages._shared.agentic import hermes_events
-from src.stages._shared.text import stable_hash
+from src.core.data.agentic import hermes_events
+from src.core.data.textfilter import stable_hash
 
 _MCP_SYS = (
     "You interact with tools over MCP (Model Context Protocol, JSON-RPC 2.0): "

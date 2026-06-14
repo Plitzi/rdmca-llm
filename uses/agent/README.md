@@ -3,7 +3,7 @@
 Drives the model through a Claude Code / Anthropic SDK-style loop: the model
 emits `Action: {"name","input"}`, the runner executes the matching tool, feeds
 back an `Observation`, and repeats until the model answers without an Action.
-The loop itself lives in [`src/agent.py`](../../src/agent.py) (`run_agent`) and
+The loop itself lives in [`uses/common/agent.py`](../common/agent.py) (`run_agent`) and
 runs several think→act→observe rounds (reasoning on by default) until it answers.
 
 ```bash
@@ -31,7 +31,7 @@ uses/agent/
 ```
 
 ## Add a tool
-Copy `tools/current_time.py`: expose a `TOOL` of type `src.agent.Tool` with a
+Copy `tools/current_time.py`: expose a `TOOL` of type `uses.common.agent.Tool` with a
 `name`, `description`, JSON `input_schema`, and a `run(input: dict)` function
 returning JSON-serializable output. Register it in `run_agent.py`'s `TOOLS` list.
 

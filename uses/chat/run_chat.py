@@ -51,14 +51,18 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root on path
 
-from src import agent
+from src.core.memory.experience_log import detect_correction, load_experiences, log_experience
+from src.core.modalities.moods import MOODS
+from src.core.modalities.text import BOS_ID
+from src.core.observability import ContextReport, count_tokens
+from uses.common import agent
 
 # Model/tokenizer modules are imported lazily inside load_model() — only AFTER
 # require_backend() has selected the backend — so model classes bind to it.
 # Generation core (sampling, KV-cached decode loop, two-phase <think>/answer)
 # lives in src/inference/generate.py so the chat and agent runtimes share it.
 # Re-exported here for backward compatibility (tests + run_agent import via run_chat).
-from src.inference.generate import (  # noqa: F401  (re-exported for tests + run_agent)
+from uses.common.generate import (  # noqa: F401  (re-exported for tests + run_agent)
     GEN_DEADLINE_S,
     IncrementalDecoder,
     _looping,
@@ -66,10 +70,11 @@ from src.inference.generate import (  # noqa: F401  (re-exported for tests + run
     generate_thinking,
     sample_top_p,
 )
+from uses.common.interaction import InterruptGuard, SessionInput
 
 # Model + checkpoint loading lives in src/inference/loading.py so chat and agent
 # load models identically. Re-exported here (tests + run_agent import via run_chat).
-from src.inference.loading import (  # noqa: F401  (re-exported for tests + run_agent)
+from uses.common.loading import (  # noqa: F401  (re-exported for tests + run_agent)
     _QUANT_MAX,
     _QUANT_MIN,
     describe_checkpoint_meta,
@@ -77,12 +82,7 @@ from src.inference.loading import (  # noqa: F401  (re-exported for tests + run_
     parse_quant,
     resolve_stage_checkpoint,
 )
-from src.inference.loading import load_mood_head as _load_mood_head
-from src.memory.experience_log import detect_correction, load_experiences, log_experience
-from src.modalities.moods import MOODS
-from src.modalities.text import BOS_ID
-from src.observability import ContextReport, count_tokens
-from uses.common.interaction import InterruptGuard, SessionInput
+from uses.common.loading import load_mood_head as _load_mood_head
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Chat loop
@@ -116,7 +116,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     # answering "hi" with a broken scratchpad), so default think OFF there.
     _think_arg = getattr(args, "think", "auto")
     if _think_arg == "auto":
-        from src.training.stages import STAGE_NAMES
+        from src.core.training.stages import STAGE_NAMES
 
         # The <think>/CoT stage is the one named exactly "Reasoning" (stage 5) — NOT
         # stage 4 "Causal and procedural reasoning", which also contains the substring.
@@ -153,7 +153,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     current_mood = mood_pin if (mood_pin in MOODS and not mood_off) else "neutral"
     mood_auto = (not mood_off) and (mood_pin not in MOODS) and (mood_head is not None)
     # Conversation-aware running mood (memory across turns), neutral by default.
-    from src.model.mood import MoodTracker
+    from src.core.model.mood import MoodTracker
 
     mood_tracker = MoodTracker(mood_head)
     if mood_off:
@@ -192,7 +192,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     recall = None
     if tok_ready:
         try:
-            from src.memory.recall import MemoryRecall
+            from src.core.memory.recall import MemoryRecall
 
             recall = MemoryRecall(model, tokenizer)
             print("  Memory recall: on (LTSS + experiences, injected as <mem>).")
@@ -206,7 +206,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     cm = None
     if getattr(args, "context_slots", False) and tok_ready:
         try:
-            from src.routing.context_manager import build_context_manager
+            from src.core.routing.context_manager import build_context_manager
 
             cm = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
             gate_on = getattr(model, "gate", None) is not None
@@ -667,7 +667,7 @@ Examples:
     if args.seed is not None:  # reproducible sampling across runs
         np.random.seed(args.seed)
 
-    from src.config import resolve_config_path
+    from src.core.config import resolve_config_path
 
     args.config = resolve_config_path(args.config, args.level)
 
@@ -678,7 +678,7 @@ Examples:
 
     print("Loading model…")
     model, mcfg = load_model(args)
-    from src.modalities.text import TextTokenizer
+    from src.core.modalities.text import TextTokenizer
 
     tokenizer = TextTokenizer()
 
@@ -691,7 +691,7 @@ Examples:
     # Optional multimodal grounding prefix (image/audio) via the perception layer.
     args.mm_prefix = []
     if args.image or args.audio:
-        from src.modalities.perception import MultimodalPerception
+        from src.core.modalities.perception import MultimodalPerception
 
         mpl = MultimodalPerception(text_tok=tokenizer)
         segments = []

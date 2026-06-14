@@ -23,7 +23,7 @@ import pytest
 
 spm = pytest.importorskip("sentencepiece")
 
-from src.modalities.vocab import CONTROL_SPECIALS, tokenizer_symbols
+from src.core.modalities.vocab import CONTROL_SPECIALS, tokenizer_symbols
 
 
 def _train_tiny(tmp_path) -> "spm.SentencePieceProcessor":

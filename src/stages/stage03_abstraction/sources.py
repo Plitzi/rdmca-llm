@@ -12,7 +12,7 @@ import random
 import re
 from collections.abc import Iterator
 
-from src.stages._shared.blend import blend
+from src.core.data.blend import blend
 
 # ── real arithmetic (atlas-math-sets) ──────────────────────────────────────────
 _ARITH_RE = re.compile(r"\s*(\d+)\s*([+\-x×*/])\s*(\d+)\s*=")

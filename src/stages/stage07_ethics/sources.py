@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator
 
-from src.stages._shared.blend import blend
+from src.core.data.blend import blend
 
 # Preschool right/wrong scenarios. Phrased to slot into "It is good/wrong to {act}"
 # and "Is it okay to {act}?" — kept concrete and simple (level-1 ethics/BCF seed).

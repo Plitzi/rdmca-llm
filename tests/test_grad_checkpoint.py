@@ -14,7 +14,7 @@ import mlx.nn as nn
 import numpy as np
 import pytest
 
-from src.model.transformer import ModelConfig, RDMCAFoundational
+from src.core.model.transformer import ModelConfig, RDMCAFoundational
 
 
 def _cfg(ckpt):

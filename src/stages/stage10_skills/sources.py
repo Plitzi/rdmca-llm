@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 
-from src.stages._shared.text import stable_hash
+from src.core.data.textfilter import stable_hash
 
 _SKILL_SYS = (
     "You have Skills — reusable procedures defined with YAML frontmatter "

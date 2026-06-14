@@ -6,7 +6,7 @@ learns in stage 3 and should do itself). This keeps tool-use testing separate
 from arithmetic testing.
 
 Self-contained (no network). To add your own tool, copy this file: expose a
-`TOOL` of type `src.agent.Tool` with a name, description, JSON input_schema and a
+`TOOL` of type `uses.common.agent.Tool` with a name, description, JSON input_schema and a
 `run(input: dict)` function returning a JSON-serializable result.
 """
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from src.agent import Tool
+from uses.common.agent import Tool
 
 
 def _get_current_time(inp: dict) -> dict:

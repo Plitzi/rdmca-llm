@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from src.stages._shared.agentic import hermes_to_transcript
-from src.stages._shared.text import stable_hash
+from src.core.data.agentic import hermes_to_transcript
+from src.core.data.textfilter import stable_hash
 
 
 def stream_agentic(langs: list[str], limit_mb: int | None = None) -> Iterator[dict]:

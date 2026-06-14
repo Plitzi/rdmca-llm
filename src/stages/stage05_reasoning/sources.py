@@ -12,10 +12,10 @@ import random
 import re
 from collections.abc import Iterator
 
-from src.modalities.vocab import REASONING_SPECIALS
-from src.stages._shared.agentic import AGENTIC_SYSTEM_PROMPT, hermes_events
-from src.stages._shared.blend import blend
-from src.stages._shared.text import stable_hash
+from src.core.data.agentic import AGENTIC_SYSTEM_PROMPT, hermes_events
+from src.core.data.blend import blend
+from src.core.data.textfilter import stable_hash
+from src.core.modalities.vocab import REASONING_SPECIALS
 
 # Single source of truth: the tokenizer registers these via vocab.CONTROL_SPECIALS,
 # and agent.THINK_OPEN/CLOSE use the same list — keep all three in sync through it.

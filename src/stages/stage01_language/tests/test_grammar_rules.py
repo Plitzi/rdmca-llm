@@ -68,7 +68,7 @@ def test_many_rule_types_and_completion_form():
 def test_vocab_scales_with_level():
     """Higher level draws part-of-speech vocab from more dictionary tiers → a richer word
     set, while teaching the SAME rules (the per-level enrichment the design relies on)."""
-    from src.stages._shared.dictionary import _DICT_TIERS
+    from src.stages.stage01_language.dictionary import _DICT_TIERS
 
     if len(_DICT_TIERS) < 2:
         return  # only one tier defined; nothing to compare

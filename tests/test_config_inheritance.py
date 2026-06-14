@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yaml
 
-from src.config import _deep_merge, level_config_path, load_config
+from src.core.config import _deep_merge, level_config_path, load_config
 
 SNAP = json.loads((Path(__file__).parent / "fixtures" / "level_configs_snapshot.json").read_text())
 

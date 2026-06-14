@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.agent import Tool
+from uses.common.agent import Tool
 
 _VALID = ("pending", "in_progress", "done")
 

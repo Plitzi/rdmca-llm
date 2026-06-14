@@ -22,7 +22,7 @@ import random
 
 import numpy as np
 
-from src.data.loader import DataLoader, TextDataset
+from src.core.data.loader import DataLoader, TextDataset
 
 
 class _VarTok:

@@ -16,8 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-from src import agent
-from src.modalities.text import BOS_ID
+from src.core.modalities.text import BOS_ID
+from uses.common import agent
 
 
 def _resolve_config(level):
@@ -104,7 +104,7 @@ def main():
 
     print("Loading model…")
     model, mcfg = load_model(args)
-    from src.modalities.text import TextTokenizer
+    from src.core.modalities.text import TextTokenizer
 
     tokenizer = TextTokenizer()
     if not tokenizer.ready:

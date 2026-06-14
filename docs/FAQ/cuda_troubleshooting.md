@@ -23,7 +23,7 @@ Tell-tale signs it ran on CPU anyway:
   **system RAM**, not VRAM) and a tiny `est. train memory`.
 - `tokens/sec` is very low and the GPU sits at 0% utilization (`nvidia-smi`).
 
-The backend itself is correct — `src/backend/torch_backend.py` picks the device in
+The backend itself is correct — `src/core/backend/torch_backend.py` picks the device in
 the order **CUDA → MPS → CPU**. When `torch.cuda.is_available()` returns `False`,
 it just lands on CPU.
 

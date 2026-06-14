@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import mlx.core as mx
 import numpy as np
 
-from src.modalities.vq import VectorQuantizer
+from src.core.modalities.vq import VectorQuantizer
 
 
 def test_default_behavior_unchanged():

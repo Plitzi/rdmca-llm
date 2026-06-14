@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 
-import src.backend as backend
-from src.model.config import ModelConfig
-from src.model.transformer import RDMCAFoundational
+import src.core.backend as backend
+from src.core.model.config import ModelConfig
+from src.core.model.transformer import RDMCAFoundational
 
 
 def _load_prepare_data():
@@ -67,7 +67,7 @@ def _tiny_model():
 
 
 def test_validation_perplexity_routes_mask_and_bare(tmp_path):
-    from src.training import trainer as T
+    from src.core.training import trainer as T
 
     m = _tiny_model()
     rng = np.random.RandomState(0)
@@ -89,7 +89,7 @@ def test_validation_perplexity_routes_mask_and_bare(tmp_path):
 
 
 def test_validation_perplexity_averages_over_batches():
-    from src.training import trainer as T
+    from src.core.training import trainer as T
 
     m = _tiny_model()
     rng = np.random.RandomState(1)
@@ -103,7 +103,7 @@ def test_validation_perplexity_averages_over_batches():
 # ── graduation gate enforced from level 1 ──────────────────────────────────────
 def test_level1_gate_enforced_by_default():
     """Quality-first: level 1 must NOT skip the graduation gate (skip_gate False)."""
-    from src.config import load_config, resolve_config_path
+    from src.core.config import load_config, resolve_config_path
 
     cfg = load_config(resolve_config_path(None, 1))
     assert cfg.get("skip_gate") is False
@@ -116,7 +116,7 @@ def test_gate_decision_ratchets_against_best():
     exceeds min_delta (plateau accounting only). An above-floor point is never a best, no
     matter how much it improves on a worse above-floor attempt. Mirrors the user's
     example with floor 50."""
-    from src.training import trainer as T
+    from src.core.training import trainer as T
 
     # 35 (from ∞) → candidate, new best, meaningful → PASSED; bar is now 35.
     assert T.gate_decision(35.0, float("inf"), 50.0) == (True, True, True)
@@ -135,7 +135,7 @@ def test_gate_decision_any_gain_is_a_new_best():
     """A strictly-better checkpoint is ALWAYS a new best (saved) — the user's confusion
     ('16.11 ≥ best 16.14 → discarded' was wrong). min_delta NO LONGER gates saving; it
     only flags whether the gain is 'meaningful' (for plateau/early-stop)."""
-    from src.training import trainer as T
+    from src.core.training import trainer as T
 
     # 16.11 vs 16.14 (a 0.2% gain): a NEW BEST (saved), but below the 0.5% min_delta so
     # not 'meaningful' — it ratchets the bar yet counts toward the plateau.
@@ -154,8 +154,8 @@ def test_narrow_stages_have_gentler_lr_scale():
     src/training/stages.py, NOT each level's yaml. The narrow eroders (3 arithmetic, 5 CoT)
     train the SHARED core at a reduced LR so they nudge it instead of overwriting
     conversation; stage 1 (conversation) trains at full LR. The schedule scales linearly."""
-    from src.training import trainer as T
-    from src.training.stages import DEFAULT_LR_SCALE, STAGE_LR_SCALE, STAGE_REHEARSAL
+    from src.core.training import trainer as T
+    from src.core.training.stages import DEFAULT_LR_SCALE, STAGE_LR_SCALE, STAGE_REHEARSAL
 
     assert STAGE_LR_SCALE.get(1, DEFAULT_LR_SCALE) == 1.0  # conversation: full LR
     assert STAGE_LR_SCALE[3] <= 0.5  # arithmetic: gentlest
@@ -163,7 +163,7 @@ def test_narrow_stages_have_gentler_lr_scale():
     assert STAGE_LR_SCALE[3] < STAGE_LR_SCALE[2] <= 1.0
     assert STAGE_REHEARSAL[3] >= 0.45 and STAGE_REHEARSAL[5] >= 0.45  # strongest rehearsal
     # A level's yaml may still OVERRIDE per stage; absent that, the stage default applies.
-    from src.config import load_config, resolve_config_path
+    from src.core.config import load_config, resolve_config_path
 
     cfg = load_config(resolve_config_path(None, 1))
     assert "lr_scale" not in cfg["curriculum"]["stage3"]  # inherited from code, not yaml
@@ -176,7 +176,7 @@ def test_narrow_stages_have_gentler_lr_scale():
 def test_evaluate_gate_respects_threshold_and_config_override():
     """evaluate_gate passes iff ppl ≤ threshold, and cfg.gate.max_perplexity overrides
     the default — so the bar is both meaningful and tunable per stage."""
-    from src.training import trainer as T
+    from src.core.training import trainer as T
 
     m = _tiny_model()
     rng = np.random.RandomState(2)

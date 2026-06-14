@@ -26,7 +26,7 @@ it behind the backend facade so MLX (L0-L3, Apple Silicon) is untouched.
 The training loop (`train_stage.py`) and backend engine are already the only seams
 that need to change — the model code stays backend-neutral.
 
-1. **Process group / launch.** New `src/backend/distributed.py` (torch-only):
+1. **Process group / launch.** New `src/core/backend/distributed.py` (torch-only):
    `init_distributed()` reads `RANK`/`WORLD_SIZE`/`LOCAL_RANK` (set by `torchrun`),
    calls `dist.init_process_group("nccl")`, pins `torch.cuda.set_device(local_rank)`.
    `is_main()` / `barrier()` / `rank()` helpers. No-op when `WORLD_SIZE==1` (so the
