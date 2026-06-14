@@ -75,15 +75,20 @@ def test_gen_arithmetic_level1_single_digit_nonneg():
     import re
     eq = re.compile(r"^(\d+) ([+\-]) (\d+) = (-?\d+)$")
     seen_eq = 0
-    for rec in itertools.islice(g.gen_arithmetic(500, level=1, seed=3), 500):
-        m = eq.match(rec["text"])
+    for rec in itertools.islice(g.gen_arithmetic(2000, level=1, seed=3), 2000):
+        t = rec["text"]
+        m = eq.match(t)
         if not m:                                   # counting / comparison / worded / Q&A
             continue
-        seen_eq += 1
         a, op, b, c = int(m[1]), m[2], int(m[3]), int(m[4])
-        assert a < 10 and b < 10                    # single-digit operands
-        assert c >= 0                               # subtraction never negative
+        assert c >= 0                               # never negative
         assert (a + b if op == "+" else a - b) == c # arithmetic is correct
+        # Atomic BORROW primitive '(d+10) - d = …' (the worked subtraction step) is an
+        # intentional exception with a 10–18 minuend; graded equations stay single-digit.
+        if op == "-" and 10 <= a <= 19 and b < 10:
+            continue
+        seen_eq += 1
+        assert a < 10 and b < 10                    # single-digit operands
     assert seen_eq > 0
 
 

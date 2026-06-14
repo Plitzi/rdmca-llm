@@ -212,6 +212,54 @@ shallowly. `train_stage.py` suggests the next stage and enforces prerequisites.
 Checkpoints live in `dist/checkpoints/level<N>/stage<N>/` (`step_*.npz`, `latest.json`,
 `final.npz`, `stage_complete.json`).
 
+### 7.1 Monitoring the run (graphs)
+
+Every stage writes a machine-readable `metrics.csv` next to its `train.log` (loss,
+per-token perplexity, lr, tps, grad-norm per step; gate val-ppl + running best per
+eval). Chart it any time — during or after training — with `scripts/plot_metrics.py`
+(needs `matplotlib`; the CSV is always written, so you can re-plot later):
+
+```bash
+python scripts/plot_metrics.py --level 1                # every trained stage → stageN/metrics.png
+python scripts/plot_metrics.py --level 1 --stage 3      # one stage
+python scripts/plot_metrics.py --level 1 --overview     # WHOLE-curriculum panorama → level1/overview.png
+python scripts/plot_metrics.py --csv path/to/metrics.csv --out chart.png
+```
+
+Per-stage charts show the training loss **split by skill vs rehearsal batches** (the
+bimodal "spikes" are just the interleaved conversation-replay, not instability), the
+live perplexity, the gate val-ppl with the ratchet bar, and the learning rate. The
+`--overview` panorama shows, across all stages, each stage's **entry vs final PP**
+(with Δ%) and the gate val-ppl timeline end-to-end.
+
+**Starting ppl (↓/↑).** Each stage starts from the previous stage's checkpoint, so its
+absolute gate perplexity carries an inherited offset (plus the rehearsal-mix). The
+trainer measures the **starting ppl** once before training (saved to `entry.json`) and
+the gate shows it next to the current ppl with a direction arrow — `start 50.0 ↓92%`
+means the ppl dropped 92% below where this stage began (**↓ = improved, ↑ = got
+worse**). It's also drawn as a reference line on the plots. This tells you whether a
+stage actually improved *its own* starting point rather than just inheriting a number.
+
+### 7.2 Standard benchmarks (evolution tracking)
+
+To measure the model on the yardsticks the field uses — and watch them climb across
+levels — run `scripts/run_benchmarks.py`:
+
+```bash
+python scripts/run_benchmarks.py --level 1 --stage 5                 # all benchmarks
+python scripts/run_benchmarks.py --level 1 --stage 5 --benchmarks wikitext lambada mmlu
+python scripts/run_benchmarks.py --checkpoint dist/checkpoints/level1/stage5/best.npz --level 1
+```
+
+Covers **wikitext** (LM perplexity), **lambada** (last-word accuracy), **mmlu**
+(4-way multiple choice, chance 0.25), **gsm8k** (math exact-match), and **mt_bench**
+(needs an external judge — pass `--judge-cmd`, otherwise skipped). Each benchmark is
+best-effort and skips cleanly if its dataset is offline. Results land in
+`dist/benchmarks/level<L>_stage<N>.json` and are appended to
+`dist/benchmarks/history.csv` for tracking the trend. A ~11M level-1 base scores near
+chance on most of these by design — the **trend** L1→L5 is the signal, not the
+absolute. Use `--limit N` to cap examples per benchmark for a quick read.
+
 ## 8. Freeze + BCF
 
 When the **Ethics + BCF stage (stage 7)** completes, the foundational core (stages 1-7:
@@ -243,6 +291,15 @@ that sets how big a token budget the scratchpad gets; the chat shows the
 scratchpad above the answer. Tokens **stream live by default** (`--no-stream` to
 batch). The agent (`uses/agent/run_agent.py`) runs several think→act→observe
 rounds until it answers, surfacing each round. See [uses/chat/](../uses/chat/).
+
+**Mood** — the assistant tracks a conversational mood that defaults to **neutral**
+and only shifts on a clear emotional cue (it rides the system channel as plain text,
+`(mood: happy)`). Detection is driven by a reliable **lexicon** (a learned mood head
+is an optional refinement only — at ~11M its features aren't emotionally separable, so
+it alone was near-random). Mood is a *conversational* faculty, so the head is only
+(re)trained at conversational stages (**stage 1** and the frozen-core **BCF stage**);
+chatting at a narrow stage falls back to the nearest earlier head plus the lexicon.
+`--no-mood` keeps it neutral throughout.
 
 With `--image`/`--audio`, the **perception layer** converts the file to unified-vocab
 tokens and prepends them to the context (text output, Era 3a). It requires the matching

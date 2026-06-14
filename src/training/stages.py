@@ -65,3 +65,19 @@ DEFAULT_REHEARSAL = 0.15            # cognitive stage with no specific profile
 # over conversation. Stage 1 (conversation) and behavioral stages train at full LR.
 STAGE_LR_SCALE = {2: 0.7, 3: 0.5, 4: 0.7, 5: 0.5, 6: 0.7, 7: 0.7}
 DEFAULT_LR_SCALE = 1.0
+
+# ── Mood is a CONVERSATIONAL faculty ──────────────────────────────────────────────
+# Mood tracks the emotional tone of human/user interaction, so the mood head is only
+# meaningful — and only has the (neutral + emotional) data to train on — at stages
+# that are conversational. The narrow cognitive stages (patterns/arithmetic/causal/
+# reasoning/memory) carry NO conversational signal: training a mood head there had no
+# neutral data and produced a near-random classifier (the 'im good'→angry bug). So we
+# train it ONLY at stage 1 (where conversation is learned) and again at the BCF stage
+# (the core's final frozen state, what the shipped model and behavioral stages use).
+# Inference at any other stage falls back to the nearest earlier head (see load_mood_head).
+MOOD_TRAIN_STAGES = {1, BCF_STAGE}
+
+
+def is_mood_stage(stage: int) -> bool:
+    """Whether the mood head should be (re)trained at this stage's completion."""
+    return stage in MOOD_TRAIN_STAGES

@@ -52,3 +52,31 @@ def test_gen_arithmetic_emits_correct_worked_examples_at_level1():
         assert r == (a + b if op == "+" else a - b), f"wrong worked result: {w}"
         checked += 1
     assert checked > 50
+
+
+def test_question_prompt_never_maps_to_a_bare_pm_result():
+    """REGRESSION: the 'User: What is a OP b?' QUESTION prompt must, for + and -, ALWAYS
+    resolve to the WORKED step-by-step answer — never a bare number. Otherwise the same
+    prompt has two targets (steps vs bare) and greedy decoding collapses to the memorized
+    bare result that fails OOD (the observed 12+7→'14'). +/- bare facts stay declarative
+    ('5 + 9 = 14'); only ×/÷ (no worked form) may use the Q&A surface."""
+    rows = [r["text"] for r in gen_arithmetic(20000, level=1, seed=11)]
+    worked = lambda t: "Assistant:" in t and ". So " in t
+    bad = [t for t in rows
+           if re.search(r"What is \d+ [+-] \d+\?", t) and not worked(t)]
+    assert not bad, f"+/- question prompt mapped to a bare answer (collision): {bad[:3]}"
+    # and worked is a major share (the stage's core faculty gets a lot of gradient)
+    n_worked = sum(1 for t in rows if worked(t))
+    assert n_worked > len(rows) * 0.30, f"worked share too low: {n_worked}/{len(rows)}"
+
+
+def test_atomic_carry_primitives_are_present_and_correct():
+    """The column algorithm invokes single-digit sums step by step; the THREE-TERM carry
+    form `a + b + 1` was the measured weak spot (e.g. '2 + 1 + 1 = 3'). The generator must
+    ground these primitives (a meaningful share) and every stated fact must be correct."""
+    rows = [r["text"] for r in gen_arithmetic(20000, level=1, seed=5)]
+    carry = [t for t in rows if re.fullmatch(r"\d \+ \d \+ 1 = \d+", t)]
+    assert len(carry) > len(rows) * 0.03, f"too few carry primitives: {len(carry)}"
+    for t in carry:
+        a, b, _, r = re.findall(r"\d+", t)
+        assert int(r) == int(a) + int(b) + 1, f"wrong carry fact: {t}"

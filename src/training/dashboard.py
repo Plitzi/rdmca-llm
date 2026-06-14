@@ -86,8 +86,14 @@ class TrainingDashboard:
                  plain: bool = False,
                  log_path=None,
                  loss_ce_weight: float = 1.0,
-                 append: bool = True):
+                 append: bool = True,
+                 gate_baseline: float = None):
         self.stage           = stage
+        # Per-stage ENTRY perplexity (the inherited checkpoint's val PP before this
+        # stage trains). The gate's absolute PP carries an offset from the previous
+        # stage + the rehearsal mix, so the meaningful signal is the DELTA from entry:
+        # how much THIS stage moved its own starting point. Shown next to the gate.
+        self.gate_baseline = gate_baseline
         self.n_tokens_target = n_tokens_target
         self.stage_name      = STAGE_NAMES.get(stage, f"Stage {stage}")
         # The training `loss` is a COMPOSITE: the MRL head mean (1 CE-unit) plus
@@ -127,7 +133,7 @@ class TrainingDashboard:
                 self._metrics = open(mpath, _mode, encoding="utf-8")
                 if new:
                     self._metrics.write("kind,step,tokens_m,loss,ppl,lr,tps,grad_norm,"
-                                        "val_ppl,best_val_ppl,passed,replay\n")
+                                        "val_ppl,best_val_ppl,passed,replay,entry_ppl\n")
                     self._metrics.flush()
             except OSError as e:
                 self._console.print(f"[yellow][log] could not open {log_path}: {e}[/yellow]")
@@ -278,7 +284,9 @@ class TrainingDashboard:
         self._metric_row("gate", step=self._step, tokens_m=f"{self._tokens/1e6:.3f}",
                          val_ppl=f"{score:.4f}",
                          best_val_ppl=("" if self.gate_best is None else f"{self.gate_best:.4f}"),
-                         passed=int(bool(passed)))
+                         passed=int(bool(passed)),
+                         entry_ppl=("" if self.gate_baseline is None
+                                    else f"{self.gate_baseline:.4f}"))
         if self._live:
             self._live.update(self._build_layout())
 
@@ -286,13 +294,15 @@ class TrainingDashboard:
         self.last_ckpt_step = step
 
     def _metric_row(self, kind, *, step="", tokens_m="", loss="", ppl="", lr="", tps="",
-                    grad_norm="", val_ppl="", best_val_ppl="", passed="", replay="") -> None:
+                    grad_norm="", val_ppl="", best_val_ppl="", passed="", replay="",
+                    entry_ppl="") -> None:
         """Append one machine-readable row to metrics.csv (if any) — see plot_metrics.py."""
         if self._metrics is None:
             return
         try:
             self._metrics.write(f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
-                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed},{replay}\n")
+                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed},{replay},"
+                                f"{entry_ppl}\n")
             self._metrics.flush()
         except (OSError, ValueError):
             self._metrics = None
@@ -438,11 +448,19 @@ class TrainingDashboard:
         else:
             best_s  = f"  ·  best {self.gate_best:.2f}" if self.gate_best is not None else ""
             floor_s = f"  ·  floor ≤ {self.gate_floor:.1f}" if self.gate_floor is not None else ""
+            # Compared to the stage's STARTING ppl (the inherited baseline): show the
+            # start value + an arrow so direction is unambiguous — ↓ = improved (ppl
+            # dropped), ↑ = got worse. Corrects for the inherited offset + rehearsal mix.
+            entry_s = ""
+            if self.gate_baseline and math.isfinite(self.gate_baseline) and self.gate_baseline > 0:
+                d = (self.gate_score - self.gate_baseline) / self.gate_baseline * 100
+                arrow = "↓" if d < 0 else ("↑" if d > 0 else "=")
+                entry_s = f"  ·  start {self.gate_baseline:.1f} {arrow}{abs(d):.0f}%"
             if self.gate_passed:
-                gate_val = Text(f"ppl {self.gate_score:.2f}  ✓  new best{best_s}{floor_s}",
+                gate_val = Text(f"ppl {self.gate_score:.2f}  ✓  new best{best_s}{entry_s}{floor_s}",
                                 style="bold green")
             else:
-                gate_val = Text(f"ppl {self.gate_score:.2f}  ·  not a new best{best_s}{floor_s}",
+                gate_val = Text(f"ppl {self.gate_score:.2f}  ·  not a new best{best_s}{entry_s}{floor_s}",
                                 style="yellow")
         stats.add_row(f"Gate ({gate_name})", gate_val)
 

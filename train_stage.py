@@ -339,6 +339,33 @@ def validation_perplexity(model, val_batches) -> float:
     return float(np.exp(np.mean(losses)))
 
 
+def stage_entry_ppl(model, ckpt_dir: Path, val_batches, resume: bool, log=print) -> float:
+    """The stage's ENTRY perplexity: the inherited checkpoint's val PP on THIS stage's
+    gate set, measured ONCE before any training. The gate's absolute PP carries an
+    offset from the previous stage plus the rehearsal mix, so on its own it can't say
+    whether THIS stage improved or regressed — the meaningful, offset-corrected signal
+    is the delta from this baseline. Persisted to entry.json and reused on --resume so
+    the baseline is the original stage start, not a mid-run point."""
+    path = Path(ckpt_dir) / "entry.json"
+    if resume and path.exists():
+        try:
+            return float(json.loads(path.read_text())["entry_ppl"])
+        except Exception:
+            pass
+    B = backend.current()
+    B.engine.set_eval(model)
+    ppl = validation_perplexity(model, val_batches)
+    B.engine.set_train(model)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"entry_ppl": ppl, "timestamp": time.time()}, indent=2))
+    except OSError:
+        pass
+    log(f"[gate] starting ppl = {ppl:.2f} (inherited from the previous stage) — the gate "
+        f"shows ↓/↑ % vs this, so you see if THIS stage improved its own starting point")
+    return ppl
+
+
 # Proxy perplexity gates per stage until task-specific benchmarks
 # (BLiMP / ARC / GSM8K / COPA / BCF probes) are wired in. Overridable via
 # cfg["gate"]["max_perplexity"][stage].
@@ -527,6 +554,14 @@ def _maybe_train_mood_head(model, stage: int, cfg: dict, ckpt_dir: Path,
     silently skipped if the labeled data is unavailable (e.g. offline) — it must never
     fail a finished stage."""
     if not cfg.get("training", {}).get("mood_head", True):
+        return
+    from src.training.stages import is_mood_stage
+    # Mood is a CONVERSATIONAL faculty — only (re)train it on conversational stages
+    # (stage 1 + the frozen-core BCF stage). Narrow cognitive stages carry no mood
+    # signal; chat there falls back to the nearest earlier mood head + the lexicon.
+    if not is_mood_stage(stage):
+        print(f"  [mood] stage {stage} is not conversational — keeping the existing "
+              "head (chat falls back to the nearest earlier head + lexicon)")
         return
     try:
         from src.model.mood import train_mood_head as _train_mood
@@ -803,6 +838,11 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     # generalization; fall back to the training stream when no split was prepared.
     val_batches = _make_val_batches(stage, cfg, data_loader, n=8)
 
+    # Inherited-baseline (entry) PP — measured once on the loaded checkpoint before
+    # training, so stage progress can be read as the offset-corrected Δ from here.
+    entry_ppl = stage_entry_ppl(model, ckpt_dir, val_batches, resume,
+                                log=lambda m: print(m) if plain else None)
+
     # Persist the full training CONTEXT (config, data provenance, rehearsal mix,
     # model geometry, env/git) for post-hoc audits — see write_stage_audit.
     audit = write_stage_audit(
@@ -828,7 +868,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                              plain=plain,
                              log_path=ckpt_dir / "train.log",
                              loss_ce_weight=loss_ce_weight,
-                             append=resume)   # fresh run truncates log+metrics; --resume appends
+                             append=resume,   # fresh run truncates log+metrics; --resume appends
+                             gate_baseline=entry_ppl)
 
     with dash:
         dash.print(f"Stage {stage} | {model.count_params()/1e6:.1f}M params | real data")
@@ -966,6 +1007,13 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                 # floor-clearing checkpoint can be the best — an above-floor point is not
                 # viable yet and is never saved/labelled "best".
                 is_candidate, is_new_best, _ = gate_decision(score, best_score, thr, min_delta)
+                # Progress vs the STARTING ppl (inherited baseline): arrow = direction
+                # (↓ improved, ↑ worse), so there is no +/- sign to second-guess.
+                if math.isfinite(entry_ppl) and entry_ppl > 0:
+                    _d = (score - entry_ppl) / entry_ppl * 100
+                    dentry = f" · start {entry_ppl:.1f} {'↓' if _d < 0 else '↑'}{abs(_d):.0f}%"
+                else:
+                    dentry = ""
                 dash.set_gate_result(score, is_new_best if not skip_gate else meets_bar,
                                      threshold=thr, best=best_score)
                 # Plateau is measured against the cumulative reference (only moves on a
@@ -988,7 +1036,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                         prev = "∞" if best_score == float("inf") else f"{best_score:.2f}"
                         if meaningful:
                             dash.print(f"[gate] step={step:,} | val ppl {score:.2f} < best "
-                                       f"{prev} → PASSED, new best (bar↓)")
+                                       f"{prev}{dentry} → PASSED, new best (bar↓)")
                         else:
                             ref = "∞" if plateau_ref == float("inf") else f"{plateau_ref:.2f}"
                             dash.print(f"[gate] step={step:,} | val ppl {score:.2f} < best "
@@ -1029,6 +1077,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                         json.dump({"stage": stage, "step": best_step,
                                    "tokens_seen": best_tokens, "gate_score": best_score,
                                    "gate_threshold": thr, "met_bar": True,
+                                   "entry_ppl": entry_ppl,
                                    "checkpoint": str(ckpt_dir / f"step_{best_step:08d}.npz"),
                                    "early_stopped": True, "timestamp": time.time()}, f, indent=2)
                     dash.print(f"✓ Stage {stage} COMPLETE — best val ppl "
@@ -1072,7 +1121,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                            "checkpoint": ckpt_file,
                            "best_val_ppl": (best_score if best_score < float("inf") else None),
                            "best_step": (best_step if best_score < float("inf") else None),
-                           "restored_best": restored_best,
+                           "restored_best": restored_best, "entry_ppl": entry_ppl,
                            "skip_gate": True, "timestamp": time.time()}, f, indent=2)
             dash.print(f"✓ Stage {stage} COMPLETE (gate skipped)")
             _on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
@@ -1086,6 +1135,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                 json.dump({"stage": stage, "step": step, "tokens_seen": tokens_seen,
                            "gate_score": score, "gate_threshold": gate_threshold(stage, cfg),
                            "met_bar": True, "restored_best": restored_best,
+                           "entry_ppl": entry_ppl,
                            "checkpoint": str(ckpt_dir / f"step_{step:08d}.npz"),
                            "timestamp": time.time()}, f, indent=2)
             dash.print(f"✓ Stage {stage} COMPLETE — best val ppl {score:.4f} (budget reached)")

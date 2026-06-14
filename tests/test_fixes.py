@@ -628,7 +628,38 @@ def test_classify_mood_defaults_neutral_without_head():
 def test_mood_tracker_neutral_without_head():
     from src.model.mood import MoodTracker
     t = MoodTracker(None)
-    assert t.update(None, None, "I am so happy!") == "neutral"   # no head ⇒ neutral
+    assert t.update(None, None, "I am so happy!") == "neutral"   # one msg ⇒ inertia
+
+
+def test_lexicon_mood_fixes_broken_classifications():
+    """The learned 11M head was near-random ('im good'→angry, 'my dog died'→caring,
+    requests→emotion). The lexicon is the reliable floor: clear cues map correctly,
+    requests/questions stay neutral, and negation flips a positive cue to sad."""
+    from src.modalities.moods import lexicon_mood
+    cases = {
+        "im good": "happy", "i am so happy today": "happy", "thanks for your help": "happy",
+        "my dog died": "sad", "i feel terrible": "sad", "i am not good": "sad",
+        "i hate this": "angry", "im scared of the dark": "afraid",
+        "tell me a story": "neutral", "what is 2+2": "neutral",
+        "can you help me with math": "neutral", "how are you": "neutral",
+    }
+    for text, want in cases.items():
+        got, _ = lexicon_mood(text)
+        assert got == want, f"{text!r}: got {got}, want {want}"
+
+
+def test_mood_tracker_lexicon_drives_mood_without_a_head():
+    """No learned head needed: a sustained emotional tone is detected by the lexicon
+    alone (the head is only an optional refinement)."""
+    from src.model.mood import MoodTracker
+    t = MoodTracker(None, alpha=0.5)
+    last = "neutral"
+    for _ in range(5):
+        last = t.update(None, None, "i am so happy and grateful")
+    assert last == "happy"
+    for _ in range(8):
+        last = t.update(None, None, "tell me about cats")     # neutral request
+    assert last == "neutral"                                   # decays back
 
 def test_mood_tracker_builds_and_decays_over_conversation(monkeypatch):
     """Conversation-aware mood: one message isn't enough (inertia), a sustained tone

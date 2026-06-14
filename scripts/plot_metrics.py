@@ -7,16 +7,21 @@ stage's train.log by the dashboard): training loss + per-token perplexity over
 tokens, and the gate's validation perplexity + running best over steps.
 
 The CSV has two row kinds:
-  train,step,tokens_m,loss,ppl,lr,tps,grad_norm,,,
-  gate,step,tokens_m,,,,,,val_ppl,best_val_ppl,passed
+  train,step,tokens_m,loss,ppl,lr,tps,grad_norm,,,replay,
+  gate,step,tokens_m,,,,,,val_ppl,best_val_ppl,passed,,entry_ppl
+
+`entry_ppl` is the stage's inherited-baseline perplexity (measured before training):
+the gate plot draws it as a reference line so improvement reads as the gap below it.
 
 Usage:
   python scripts/plot_metrics.py --level 1                # every stage with metrics
   python scripts/plot_metrics.py --level 1 --stage 1      # one stage
   python scripts/plot_metrics.py --level 1 --stage 1 3 5  # a few
+  python scripts/plot_metrics.py --level 1 --overview     # whole-curriculum panorama
   python scripts/plot_metrics.py --csv path/to/metrics.csv
 
-Output: a PNG next to each metrics.csv (stageN/metrics.png), or --out PATH.
+Output: a PNG next to each metrics.csv (stageN/metrics.png), the overview at
+level{L}/overview.png, or --out PATH.
 Needs matplotlib (`pip install matplotlib`); without it the script explains how
 to install and exits cleanly.
 """
@@ -53,8 +58,17 @@ def _read_metrics(csv_path: Path):
                               "replay": num("replay")})
             elif row.get("kind") == "gate":
                 gate.append({"step": num("step"), "val_ppl": num("val_ppl"),
-                             "best": num("best_val_ppl"), "passed": num("passed")})
+                             "best": num("best_val_ppl"), "passed": num("passed"),
+                             "entry_ppl": num("entry_ppl")})
     return train, gate
+
+
+def _entry_ppl(gate) -> Optional[float]:
+    """The stage ENTRY (inherited-baseline) perplexity, if recorded on any gate row."""
+    for r in gate:
+        if r.get("entry_ppl") is not None:
+            return r["entry_ppl"]
+    return None
 
 
 def _series(rows, x, y):
@@ -119,6 +133,11 @@ def plot_stage(csv_path: Path, out: Optional[Path], label: str, plt) -> Optional
     bxs, bys = _series(gate, "step", "best")
     if bxs:
         ax.plot(bxs, bys, color="#d62728", lw=1.5, ls="--", label="best (ratchet bar)")
+    # Entry baseline (inherited PP): progress is the gap BELOW this line. Above it the
+    # stage has regressed its own starting point (offset-corrected reading).
+    entry = _entry_ppl(gate)
+    if entry is not None:
+        ax.axhline(entry, color="#7f7f7f", lw=1.2, ls=":", label=f"entry PP {entry:.1f}")
     # mark the checkpoints the gate accepted as a new best
     pxs, pys = [], []
     for r in gate:
@@ -147,6 +166,81 @@ def plot_stage(csv_path: Path, out: Optional[Path], label: str, plt) -> Optional
     return out
 
 
+def plot_overview(level: int, out: Optional[Path], plt) -> Optional[Path]:
+    """The WHOLE-CURRICULUM panorama: one figure across every trained stage so you
+    can see the model's evolution end-to-end. Top — each stage's ENTRY PP vs its final
+    best PP (grouped bars + Δ%), the offset-corrected 'did this stage improve its own
+    starting point?' view. Bottom — the gate validation-PP timeline concatenated across
+    stages on a global step axis, with stage boundaries marked."""
+    import json
+    base = ROOT / "dist" / "checkpoints" / f"level{level}"
+    stages = sorted(int(p.name.replace("stage", "")) for p in base.glob("stage*")
+                    if (p / "metrics.csv").exists())
+    if not stages:
+        print("No trained stages found for an overview.")
+        return None
+
+    per = []                                   # (stage, entry, best, gate_rows)
+    for s in stages:
+        _, gate = _read_metrics(base / f"stage{s}" / "metrics.csv")
+        entry = _entry_ppl(gate)
+        best = None
+        sc = base / f"stage{s}" / "stage_complete.json"
+        if sc.exists():
+            try:
+                d = json.loads(sc.read_text())
+                best = d.get("gate_score") or d.get("best_val_ppl")
+                entry = d.get("entry_ppl", entry)
+            except (OSError, ValueError):
+                pass
+        if best is None:
+            bxs, bys = _series(gate, "step", "best")
+            best = bys[-1] if bys else None
+        per.append((s, entry, best, gate))
+
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(13, 9))
+    fig.suptitle(f"RDMCA — full curriculum panorama (level {level})",
+                 fontsize=14, fontweight="bold")
+
+    # ── Top: entry vs best PP per stage (offset-corrected improvement) ──
+    xs = list(range(len(per)))
+    entries = [(e if e is not None else float("nan")) for _, e, _, _ in per]
+    bests   = [(b if b is not None else float("nan")) for _, _, b, _ in per]
+    w = 0.38
+    ax0.bar([x - w/2 for x in xs], entries, width=w, color="#7f7f7f", label="entry PP (inherited)")
+    ax0.bar([x + w/2 for x in xs], bests,   width=w, color="#2ca02c", label="best PP (stage end)")
+    for x, (s, e, b, _) in zip(xs, per):
+        if e and b and e > 0:
+            ax0.annotate(f"{(b-e)/e*100:+.0f}%", (x, max(e, b)),
+                         ha="center", va="bottom", fontsize=8,
+                         color=("#2ca02c" if b <= e else "#d62728"))
+    ax0.set_xticks(xs); ax0.set_xticklabels([f"S{s}" for s, *_ in per])
+    ax0.set_ylabel("val perplexity"); ax0.set_title("Per-stage entry vs final best PP (Δ% = offset-corrected change)")
+    ax0.legend(fontsize=8); ax0.grid(alpha=0.3, axis="y")
+
+    # ── Bottom: gate val-PP timeline concatenated across stages ──
+    offset, ticks, tlabels = 0, [], []
+    for s, _, _, gate in per:
+        gx, gy = _series(gate, "step", "val_ppl")
+        if not gx:
+            continue
+        xx = [offset + g for g in gx]
+        ax1.plot(xx, gy, lw=1.2, marker="o", ms=2, label=f"S{s}")
+        ax1.axvline(offset, color="#cccccc", lw=0.8, ls=":")
+        ticks.append(offset + (gx[-1] / 2 if gx else 0)); tlabels.append(f"S{s}")
+        offset += (gx[-1] if gx else 0) + max(1, (gx[-1] if gx else 0) * 0.04)
+    ax1.set_xticks(ticks); ax1.set_xticklabels(tlabels)
+    ax1.set_ylabel("gate val ppl"); ax1.set_title("Gate validation perplexity across the curriculum")
+    ax1.grid(alpha=0.3)
+
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    out = out or (base / "overview.png")
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"  ✓ overview: {out}")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="Plot RDMCA training metrics.")
     ap.add_argument("--level", type=int, default=1, help="level (default 1)")
@@ -154,6 +248,8 @@ def main():
                     help="stage(s) to plot; omit for every stage with a metrics.csv")
     ap.add_argument("--csv", type=str, default=None, help="plot a specific metrics.csv")
     ap.add_argument("--out", type=str, default=None, help="output PNG (single-target only)")
+    ap.add_argument("--overview", action="store_true",
+                    help="one whole-curriculum panorama across all trained stages")
     args = ap.parse_args()
 
     try:
@@ -165,6 +261,10 @@ def main():
               "  .venv/bin/python -m pip install matplotlib\n"
               "(metrics.csv is still written every run, so you can re-plot any time.)")
         sys.exit(1)
+
+    if args.overview:
+        plot_overview(args.level, Path(args.out) if args.out else None, plt)
+        return
 
     targets: list[tuple[Path, str]] = []
     if args.csv:

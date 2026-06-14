@@ -1107,6 +1107,14 @@ def _worked_operands(rng: random.Random, level: int):
     hi = 10 ** d - 1
     a, b = rng.randint(0, hi), rng.randint(0, hi)
     op = rng.choice(["+", "-"])
+    # Bias ADDITION toward a units CARRY (the measured weak spot: the three-term column
+    # sum 'x+y+1'). Uniform operands carry only ~⅓ of the time — too little to build a
+    # confident margin, so temperature sampling flips the carried digit. Nudging the
+    # units to overflow drills the carry path far more often. Multi-digit only.
+    if op == "+" and d >= 2 and rng.random() < 0.6:
+        ua, ub = a % 10, b % 10
+        if ua + ub < 10:
+            b = min(b + (10 - ua - ub), hi)          # push units to overflow → carry
     if op == "-" and b > a:
         a, b = b, a
     return a, b, op
@@ -1144,6 +1152,52 @@ def _sub_worked(a: int, b: int) -> str:
     return "; ".join(parts) + f". So {a} - {b} = {a - b}."
 
 
+# Varied ways a user ASKS for a calculation — so the worked compute is triggered by
+# the PRESENCE of an arithmetic question, not one rigid template. Real chat embeds math
+# in conversation ("hi, i need the answer for 5 - 3"), and at inference you can't
+# classify the turn — so the model must learn to compute whenever an expression is asked,
+# at any phrasing. ALL of these map to the worked step-by-step answer (never a bare number).
+_ARITH_Q_TEMPLATES = (
+    "What is {a} {op} {b}?", "what's {a} {op} {b}?", "How much is {a} {op} {b}?",
+    "Can you calculate {a} {op} {b}?", "Please solve {a} {op} {b}.",
+    "I need the answer for {a} {op} {b}.", "Compute {a} {op} {b}.",
+    "{a} {op} {b} = ?", "Could you work out {a} {op} {b}?",
+)
+_ARITH_PREFIXES = ("", "", "", "", "Hi, ", "Hello! ", "Hey, ",
+                   "I have a question: ", "Quick one — ", "Can you help me? ")
+
+
+def _worked_question(rng: random.Random, a: int, b: int, op: str) -> str:
+    """A user turn asking for `a op b`, with varied phrasing + optional conversational
+    lead-in, so the trigger to COMPUTE generalizes beyond a single template."""
+    q = rng.choice(_ARITH_Q_TEMPLATES).format(a=a, op=op, b=b)
+    return rng.choice(_ARITH_PREFIXES) + q
+
+
+def _atomic_fact(rng: random.Random) -> str:
+    """An ATOMIC single-digit operation — the primitives the column algorithm invokes
+    step by step. The worked steps were learned (correct structure) but the per-column
+    single-digit sums, ESPECIALLY the three-term carry form `a + b + 1`, were unreliable
+    (~70%: e.g. '2 + 1 + 1 = 3'). These are the 'addition table' — primitives that SHOULD
+    be grounded by memorization (like times tables); the ALGORITHM is what generalizes.
+    Surfaces match the worked-step text exactly so the grounding transfers in-place."""
+    k = rng.random()
+    if k < 0.60:                                   # three-term carry add (the weak spot)
+        a, b = rng.randint(0, 9), rng.randint(0, 9)
+        return f"{a} + {b} + 1 = {a + b + 1}"
+    if k < 0.82:                                   # two-term single-digit add
+        a, b = rng.randint(0, 9), rng.randint(0, 9)
+        return f"{a} + {b} = {a + b}"
+    if k < 0.90:                                   # two-term single-digit sub
+        a, b = rng.randint(0, 9), rng.randint(0, 9)
+        if b > a:
+            a, b = b, a
+        return f"{a} - {b} = {a - b}"
+    # borrow primitive: (units+10) - b, as it appears in the worked subtraction steps
+    a, b = rng.randint(0, 9), rng.randint(0, 9)
+    return f"{a + 10} - {b} = {a + 10 - b}"
+
+
 def gen_arithmetic(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
     """Synthetic graded arithmetic with VARIED surface forms — symbolic, worded, Q&A
     (teaches ANSWERING, not just echoing), counting, comparisons, and WORKED step-by-step
@@ -1154,27 +1208,48 @@ def gen_arithmetic(n: int, level: int = 1, seed: int = 1) -> Iterator[dict]:
     rng = random.Random(seed)
     for _ in range(n):
         r = rng.random()
-        if r < 0.12:                              # counting sequence
+        if r < 0.08:                              # counting sequence
             start, step = rng.randint(0, 5), rng.choice([1, 1, 1, 2])
             seq = [start + step * i for i in range(rng.randint(4, 6))]
             yield {"text": "Counting: " + " ".join(map(str, seq)), "lang": "en"}
             continue
-        if r < 0.42:                              # WORKED step-by-step (+/-) → generalizes
+        if r < 0.34:                              # ATOMIC single-digit primitives (incl. carry)
+            # Grounds the per-column operations the worked algorithm depends on — the
+            # measured failure was the three-term carry sum, not the column structure.
+            # A LARGE share so P(correct carry digit) gets a wide margin → temp-robust.
+            yield {"text": _atomic_fact(rng), "lang": "en"}
+            continue
+        if r < 0.68:                              # WORKED step-by-step (+/-) → generalizes
+            # The MAJORITY share: computing the column algorithm IS this stage's faculty,
+            # so it gets the most gradient (a tiny model needs heavy exposure to learn
+            # carry/borrow rather than memorize). Every "What is a+b?" question resolves
+            # here → the prompt deterministically teaches COMPUTE, not lookup.
             a, b, op = _worked_operands(rng, level)
             steps = _add_worked(a, b) if op == "+" else _sub_worked(a, b)
-            yield {"text": f"User: What is {a} {op} {b}?\nAssistant: {steps}", "lang": "en"}
+            q = _worked_question(rng, a, b, op)
+            yield {"text": f"User: {q}\nAssistant: {steps}", "lang": "en"}
             continue
         a, b, op, res = _grade_arith(rng, level)
-        if r < 0.52 and level <= 1:               # comparison
+        if r < 0.70 and level <= 1:               # comparison
             sign = ">" if a > b else ("<" if a < b else "=")
             yield {"text": f"{a} {sign} {b}", "lang": "en"}
             continue
         form = rng.random()
-        if form < 0.40:                           # symbolic equation
+        # The "What is a OP b?" QUESTION prompt is reserved for the WORKED solution
+        # above — for +/- it must ALWAYS map to the step-by-step answer, never a bare
+        # number, or the two collide on the same prompt and greedy collapses to the
+        # (memorized, wrong-on-OOD) bare result. So +/- bare facts stay DECLARATIVE
+        # (symbolic / worded), and only ×/÷ (which have no worked form) use the Q&A.
+        if op in ("+", "-"):
+            if form < 0.5:                        # symbolic equation
+                yield {"text": f"{a} {op} {b} = {res}", "lang": "en"}
+            else:                                 # worded statement
+                yield {"text": f"{a} {_OP_WORD[op]} {b} equals {res}.", "lang": "en"}
+        elif form < 0.40:                         # symbolic equation
             yield {"text": f"{a} {op} {b} = {res}", "lang": "en"}
         elif form < 0.70:                         # worded statement
             yield {"text": f"{a} {_OP_WORD[op]} {b} equals {res}.", "lang": "en"}
-        else:                                     # Q&A (User/Assistant → answer-masked)
+        else:                                     # Q&A (×/÷ only → answer-masked)
             yield {"text": f"User: What is {a} {op} {b}?\nAssistant: {res}", "lang": "en"}
 
 

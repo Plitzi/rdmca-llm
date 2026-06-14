@@ -16,6 +16,8 @@ dist/checkpoints/**/*.opt
 dist/checkpoints/**/*.json
 dist/checkpoints/**/*.csv
 dist/checkpoints/**/*.png
+dist/benchmarks/*.json
+dist/benchmarks/*.csv
 dist/tokenizer/*.model
 dist/tokenizer/*.vocab
 dist/tokenizer/tokenizer_info.json

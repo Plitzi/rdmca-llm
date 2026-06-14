@@ -23,6 +23,7 @@ import src.backend as backend
 from src.modalities.moods import (              # shared light taxonomy (no backend)
     MOODS, MOOD_INDEX, NEUTRAL, MOOD_MARGIN,
     emotion_to_mood, mood_system_phrase,        # noqa: F401  (re-exported for callers)
+    lexicon_mood,
 )
 
 B = backend.current()
@@ -62,21 +63,27 @@ def load_mood_head(d_model: int, level=None, stage=None, checkpoint=None):
     everywhere — it is trained automatically at each cognitive stage's completion
     by train_stage (via `train_mood_head` below)."""
     from pathlib import Path
+    candidates = []
     if checkpoint:
-        path = Path(checkpoint).parent / "mood_head.npz"
+        candidates.append(Path(checkpoint).parent / "mood_head.npz")
     elif stage is not None:
         root = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
-        path = root / f"stage{stage}" / "mood_head.npz"
+        # Mood is only trained at conversational stages (1 + BCF). At any other stage
+        # fall back to the NEAREST earlier head (stage, stage-1, …, 1) so chat still
+        # has a mood head; the lexicon works regardless.
+        candidates += [root / f"stage{s}" / "mood_head.npz" for s in range(stage, 0, -1)]
     else:
         return None
-    if not path.exists():
-        return None
-    head = MoodHead(d_model)
-    try:
-        B.engine.load_weights(head, str(path))
-        return head
-    except Exception:
-        return None
+    for path in candidates:
+        if not path.exists():
+            continue
+        head = MoodHead(d_model)
+        try:
+            B.engine.load_weights(head, str(path))
+            return head
+        except Exception:
+            continue
+    return None
 
 
 def _pooled_states(model, tokenizer, texts, seq_len: int = 128):
@@ -139,11 +146,16 @@ def mood_probs(model, tokenizer, head: MoodHead, text: str, seq_len: int = 128):
 # stage's completion — no separate manual step (or script) needed.
 
 def _neutral_examples(level, stage, n: int, log=print) -> list:
-    """Sample NEUTRAL (text, "neutral") pairs from the already-prepared factual /
-    narrative files for the stage — factual/narrative carries no active mood."""
+    """Sample NEUTRAL (text, "neutral") pairs from the conversational corpus. These
+    live in STAGE 1 (the conversational stage) — factual/narrative/chit-chat carries
+    no active mood — so we always read from there regardless of the current stage
+    (a narrow stage like arithmetic has no neutral conversational data of its own,
+    which is exactly what made its mood head near-random)."""
     import json
     from pathlib import Path
-    base = Path("data") / f"level{level}" / f"stage{stage}"
+    base = Path("data") / f"level{level}" / "stage1"
+    if not base.exists():
+        base = Path("data") / f"level{level}" / f"stage{stage}"
     out: list = []
     for stem in ("instruct", "simple_wikipedia", "tinystories", "basic_chat", "definitions"):
         f = base / f"{stem}.jsonl"
@@ -285,13 +297,42 @@ def _pick_mood(state) -> Tuple[str, float]:
     return MOODS[top], state[top]
 
 
+def _lexicon_distribution(text: str) -> list:
+    """A mood distribution from the reliable lexicon detector. Concentrates mass on
+    the detected mood (scaled by confidence); neutral otherwise. This is the floor
+    signal that behaves correctly at any model size (the learned head is near-chance
+    on the 11M core), used by both the stateless and the running classifiers."""
+    mood, conf = lexicon_mood(text)
+    dist = [0.0] * len(MOODS)
+    if mood == "neutral":
+        dist[NEUTRAL] = 1.0
+    else:
+        dist[MOOD_INDEX[mood]] = conf
+        dist[NEUTRAL] = 1.0 - conf
+    return dist
+
+
+# Only let the LEARNED head override a lexicon-neutral reading when it is THIS
+# confident — the 11M head is weak, so it must clear a high bar to speak up.
+_HEAD_OVERRIDE_MIN = 0.55
+
+
 def classify_mood(model, tokenizer, head: MoodHead, text: str,
                   seq_len: int = 128) -> Tuple[str, float]:
-    """Stateless single-text mood (neutral default). For a running, conversation-
-    aware mood use MoodTracker — emotions build over the whole exchange, not one line."""
-    if head is None or not text.strip():
+    """Stateless single-text mood (neutral default). The LEXICON is the primary,
+    reliable signal; the learned head only refines when the lexicon finds nothing
+    AND the head is highly confident. For a running, conversation-aware mood use
+    MoodTracker — emotions build over the whole exchange, not one line."""
+    if not text.strip():
         return "neutral", 1.0
-    return _pick_mood(mood_probs(model, tokenizer, head, text, seq_len=seq_len))
+    mood, conf = lexicon_mood(text)
+    if mood != "neutral":
+        return mood, conf
+    if head is None:
+        return "neutral", 1.0
+    hmood, hconf = _pick_mood(mood_probs(model, tokenizer, head, text, seq_len=seq_len))
+    return (hmood, hconf) if (hmood != "neutral" and hconf >= _HEAD_OVERRIDE_MIN) \
+        else ("neutral", 1.0)
 
 
 class MoodTracker:
@@ -317,13 +358,23 @@ class MoodTracker:
         self.state[NEUTRAL] = 1.0
 
     def update(self, model, tokenizer, message: str, context: str = "") -> str:
-        """Fold one new user message (optionally with a little recent context, so a
-        short/ambiguous line is read in light of the conversation) into the running
-        mood, and return the current mood name."""
-        if self.head is None or not message.strip():
+        """Fold one new user message into the running mood and return the current
+        mood. The LEXICON is the signal that moves the state (reliable at any model
+        size); the learned head only nudges when the lexicon is neutral AND the head
+        is confident. Works with head=None (lexicon-only)."""
+        if not message.strip():
             return self.current()
-        text = (context[-self.context_chars:] + "\n" + message) if context else message
-        p = mood_probs(model, tokenizer, self.head, text)
+        lex_mood, _ = lexicon_mood(message)
+        if lex_mood != "neutral" or self.head is None:
+            p = _lexicon_distribution(message)
+        else:
+            # lexicon found nothing emotional → consult the head, but only let a
+            # confident non-neutral reading move the state; otherwise decay to neutral.
+            text = (context[-self.context_chars:] + "\n" + message) if context else message
+            hp = mood_probs(model, tokenizer, self.head, text)
+            hmood, hconf = _pick_mood(hp)
+            p = hp if (hmood != "neutral" and hconf >= _HEAD_OVERRIDE_MIN) \
+                else _lexicon_distribution("")          # neutral one-hot
         self.state = [self.alpha * p[i] + (1 - self.alpha) * self.state[i]
                       for i in range(len(MOODS))]
         return self.current()
