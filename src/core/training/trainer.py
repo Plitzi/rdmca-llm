@@ -37,9 +37,8 @@ from src.core.training.curriculum import (
     prev_active_stage,  # noqa: F401  (re-exported for tests)
     stage_name,
 )
-from src.core.training.dataload import build_data_loader
 from src.core.training.gates import (
-    evaluate_gate,
+    evaluate_gate,  # noqa: F401  (re-exported for tests; the loop calls domain.evaluate)
     gate_decision,
     gate_threshold,
     stage_entry_ppl,
@@ -47,7 +46,7 @@ from src.core.training.gates import (
 )
 from src.core.training.heads import on_stage_complete
 from src.core.training.valdata import make_val_batches
-from src.stages import get_stage, stage_data_dir
+from src.plugins import get_stage, stage_data_dir
 
 
 def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False) -> bool:
@@ -69,13 +68,18 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     print(f"  Target: {_fmt_tokens(n_tokens_target)} tokens")
     print(f"{'=' * 60}")
 
-    # Build the model at the trained-tokenizer vocab and load its starting weights
-    # (cognitive: prev stage; behavioral: frozen core + LoRA sector). See setup.py.
+    # Resolve the ACTIVE domain (text-LM by default). Every task-specific piece —
+    # how to build the model, the loader, the loss and the gate — comes from this
+    # spec, so the same loop trains a different kind of model when the domain changes.
     from src.core.model.transformer import set_model_precision
     from src.core.training.dashboard import TrainingDashboard
-    from src.core.training.setup import build_stage_model
+    from src.core.training.domain import active_domain_spec
 
-    model, model_cfg, adapter, precision, seed = build_stage_model(stage, cfg, root)
+    domain = active_domain_spec(cfg)
+
+    # Build the model at the trained-tokenizer vocab and load its starting weights
+    # (cognitive: prev stage; behavioral: frozen core + LoRA sector). See setup.py.
+    model, model_cfg, adapter, precision, seed = domain.build_model(stage, cfg, root)
     B = backend.current()
 
     # optimizer_states: bf16 (default — already in effect since the model is bf16)
@@ -94,8 +98,8 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     # saved dtype, so cast once more before training in the configured precision.
     set_model_precision(model, precision)
 
-    # Real data loader
-    data_loader = build_data_loader(stage, cfg)
+    # Real data loader (from the active domain — TextDataset for the text-LM domain)
+    data_loader = domain.build_loader(stage, cfg)
 
     # Derived constants
     bs = tcfg["batch_size"]
@@ -238,16 +242,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
                 )
             )
 
-    # MoE load-balance aux loss: with routing active (behavioral stages) the gate
-    # otherwise gets no gradient and experts collapse. aux_loss() is 0.0 when there
-    # is no routing (cognitive stages), so this is a no-op there.
-    aux_w = float((cfg.get("moe", {}) or {}).get("aux_loss_weight", 0.01))
-
-    def loss_fn(mdl, batch):
-        toks, mask = batch  # (tokens, loss_mask) — completion-only CE
-        return mdl.mrl_loss(toks, mask) + aux_w * mdl.aux_loss()
-
-    loss_and_grad_fn = B.engine.value_and_grad(model, loss_fn)
+    # Training objective from the active domain. For the text-LM domain this is the
+    # MRL completion-only CE plus the MoE load-balance aux term (aux_loss() is 0.0 with
+    # no routing, so it's a no-op on cognitive stages); other domains supply their own.
+    loss_and_grad_fn = B.engine.value_and_grad(model, domain.objective)
 
     # Fixed validation batches, sampled ONCE up front and reused for every gate eval (a
     # frozen set keeps the metric stable/comparable). Prefer a true HELD-OUT split
@@ -255,10 +253,15 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
     val_batches = make_val_batches(stage, cfg, data_loader, n=8)
 
     # Inherited-baseline (entry) PP — measured once on the loaded checkpoint before
-    # training, so stage progress can be read as the offset-corrected Δ from here.
-    entry_ppl = stage_entry_ppl(
-        model, ckpt_dir, val_batches, resume, log=lambda m: print(m) if plain else None
-    )
+    # training, so stage progress can be read as the offset-corrected Δ from here. This
+    # is perplexity telemetry (it calls model.eval_ce); a domain whose model has no such
+    # head simply reports no baseline (the Δ display is then skipped downstream).
+    if domain.gate_metric == "perplexity" and hasattr(model, "eval_ce"):
+        entry_ppl = stage_entry_ppl(
+            model, ckpt_dir, val_batches, resume, log=lambda m: print(m) if plain else None
+        )
+    else:
+        entry_ppl = float("inf")
 
     # Persist the full training CONTEXT (config, data provenance, rehearsal mix,
     # model geometry, env/git) for post-hoc audits — see write_stage_audit.
@@ -457,7 +460,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             if step % eval_every == 0:
                 # meets_bar = absolute quality floor; quiet log in-loop (we print the
                 # ratchet line below). skip_gate levels keep the plain informational line.
-                score, meets_bar = evaluate_gate(
+                score, meets_bar = domain.evaluate(
                     model,
                     stage,
                     val_batches,
@@ -640,7 +643,7 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             on_stage_complete(model, stage, cfg, root, ckpt_dir, precision, adapter)
             return True
 
-        score, passed = evaluate_gate(model, stage, val_batches, cfg)
+        score, passed = domain.evaluate(model, stage, val_batches, cfg)
         dash.set_gate_result(score, passed)
         if passed:
             B.engine.save_weights(model, str(ckpt_dir / "final.npz"))  # graduated model

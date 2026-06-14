@@ -1,7 +1,7 @@
 """
 Mood taxonomy — the single source of truth for the conversational mood palette,
 the emotion→mood mapping and the SYSTEM-channel annotation. Kept here (no heavy
-imports, like vocab.py) so BOTH the data pipeline (scripts/prepare_data, graded.py
+imports, like vocab.py) so BOTH the data pipeline (scripts/prepare_data and the stage sources
 — no MLX) and the runtime mood head (src/model/mood.py — MLX) share one definition.
 
 The mood rides on the SYSTEM prompt as plain text (`System: … (mood: happy)`), so

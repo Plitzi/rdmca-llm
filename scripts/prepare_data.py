@@ -5,14 +5,14 @@ RDMCA Data Preparation Script — config-driven, per level + stage
 Writes the training corpus for each curriculum stage of a LEVEL, using the
 sources, complexity filter and token budget declared in that level's config
 (`configs/levels/levelN.yaml`). Output:
-  src/stages/stage{N}_<slug>/data/level{L}/{source}.jsonl   {"text": "...", "lang": "<code>"}
+  src/plugins/<domain>/stage{N}_<slug>/data/level{L}/{source}.jsonl   {"text": "...", "lang": "<code>"}
 plus a {source}.meta.json sidecar recording token count + whether the source
 was exhausted (used to decide if a re-run can skip it).
 
 Where the data comes from is per-source:
   - Lower levels use each stage plugin's OWN simple/graded sources (tinystories,
     dialogue, arithmetic, analogies, agentic/MCP/skills, reasoning) — small,
-    conversational/structured (see src/stages/stageNN_*/sources.py).
+    conversational/structured (see src/plugins/<domain>/stageNN_*/sources.py).
   - Higher levels add the FULL external corpora (src/data/corpora.py: Wikipedia per
     language, ARC, GSM8K, MATH, ethics), with Wikipedia routed to a stage by category
     keywords (STAGE_KEYWORDS) and prose readability-graded (Flesch-Kincaid).
@@ -71,9 +71,9 @@ def prepare_stage_for_level(
     """Prepare graded data for one (level, stage), reading the level config's
     curriculum entry: which sources, the complexity filter, the token budget and
     the output dir. Skips stages whose entry_level is above this level."""
-    from src.core.data.textfilter import passes_filter
     from src.core.training.curriculum import stage_enabled
-    from src.stages import stage_data_dir, stream_source
+    from src.plugins import stage_data_dir, stream_source
+    from src.plugins.sdk import passes_filter
 
     curriculum = cfg.get("curriculum", {}) or {}
     stage_key = f"stage{stage}"
@@ -179,6 +179,11 @@ def main():
 
     cfg_path = resolve_config_path(args.config, args.level)
     cfg = load_config(cfg_path)
+    # Select the training domain (registry default = cognition) before touching the
+    # stage registry, so it discovers THIS domain's stage plugins and data dirs.
+    from src.plugins import set_domain
+
+    set_domain(cfg.get("domain"))
     level = get_level(cfg)  # NB: level 0 is valid → use `is None`
     if level is None:  # custom config w/o a level → least filtering
         level = args.level if args.level is not None else MAX_LEVEL

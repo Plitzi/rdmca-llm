@@ -1,16 +1,16 @@
 """
 DEPRECATED compatibility shim — the single source of truth for stage metadata is
-now the per-stage plugins under `src/stages/` (discovered by `src.stages.registry`).
+now the per-stage plugins under `src/plugins/` (discovered by `src.plugins.registry`).
 
 This module rebuilds the old constants (`STAGE_GATES`, `STAGE_NAMES`,
 `STAGE_REHEARSAL`, `STAGE_LR_SCALE`, `MOOD_TRAIN_STAGES`, `BCF_STAGE`) FROM the
 registry so existing importers keep working unchanged. New code should import from
-`src.stages` directly (e.g. `from src.stages import get_stage, bcf_stage`).
+`src.plugins` directly (e.g. `from src.plugins import get_stage, bcf_stage`).
 """
 
 from __future__ import annotations
 
-from src.stages import all_stages, bcf_stage, mood_stages
+from src.plugins import all_stages, bcf_stage, mood_stages
 
 # Latest possible freeze point (= the BCF/ethics stage).
 BCF_STAGE = bcf_stage()

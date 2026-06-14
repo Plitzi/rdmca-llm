@@ -53,8 +53,8 @@ moe:
 #    name and entry_level (the level at which a stage first becomes active). This is
 #    level-INDEPENDENT. Each level adds the per-stage DATA (n_tokens, sources, filter).
 #    Each stage OWNS its data folder inside its plugin package
-#    (src/stages/stageNN_<slug>/data/level{L}/); override per stage with `data_dir`.
-#    Stage names/metadata live in the stage plugins (src/stages/, the registry). ────────
+#    (src/plugins/<domain>/stageNN_<slug>/data/level{L}/); override per stage with `data_dir`.
+#    Stage names/metadata live in the stage plugins (src/plugins/, the registry). ────────
 curriculum:
   stage1:  {name: "Language and communication",            entry_level: 1}
   stage2:  {name: "Perception and pattern recognition",    entry_level: 1}

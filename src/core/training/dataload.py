@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from src.core.training.curriculum import is_behavioral_stage
-from src.stages import get_stage, stage_data_dir
+from src.plugins import get_stage, stage_data_dir
 
 # A stage with this rehearsal fraction has "no specific profile" — it then defers to
 # the level's training.rehearsal_fraction (matching the old STAGE_REHEARSAL.get default).

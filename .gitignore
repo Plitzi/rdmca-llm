@@ -34,9 +34,9 @@ dist/tokenizer/*.json
 # data/ layout is kept ignored too for older checkouts.
 data/**/*.jsonl
 data/**/*.meta.json
-src/stages/**/data/**/*.jsonl
-src/stages/**/data/**/*.meta.json
-src/stages/**/data/**/*.val.jsonl
+src/plugins/**/data/**/*.jsonl
+src/plugins/**/data/**/*.meta.json
+src/plugins/**/data/**/*.val.jsonl
 
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log

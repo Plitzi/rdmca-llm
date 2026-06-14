@@ -55,14 +55,15 @@ def test_relevance_feedback_overrides_utility():
 def test_dialogue_interleave_and_emotion_balance():
     """Dialogue mixing: _interleave round-robins all sources (no front-loaded block),
     and empathetic streaming caps per emotion so moods stay balanced."""
-    import src.core.data.graded as g
+    from src.plugins.cognition.stage01_language.sources import _stream_empathetic_balanced
+    from src.plugins.sdk import interleave
 
     # round-robin: drains every source, no loss, interleaved order
     def gen(tag, n):
         for i in range(n):
             yield {"text": f"{tag}{i}"}
 
-    out = [r["text"] for r in g._interleave(gen("A", 3), gen("B", 1), gen("C", 2))]
+    out = [r["text"] for r in interleave(gen("A", 3), gen("B", 1), gen("C", 2))]
     assert out[:3] == ["A0", "B0", "C0"]  # round-robin, not blocks
     assert sorted(out) == ["A0", "A1", "A2", "B0", "C0", "C1"]  # nothing dropped
 
@@ -86,7 +87,7 @@ def test_dialogue_interleave_and_emotion_balance():
 
     _d.load_dataset = lambda *a, **k: _Fake()
     try:
-        n = sum(1 for _ in g._stream_empathetic_balanced(per_emotion_cap=5))
+        n = sum(1 for _ in _stream_empathetic_balanced(per_emotion_cap=5))
     finally:
         _d.load_dataset = orig
     assert n == 8, f"emotion cap not balancing: got {n}, expected 8 (5 sad + 3 joyful)"

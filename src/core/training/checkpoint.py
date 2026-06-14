@@ -88,7 +88,7 @@ def write_stage_audit(
     early-stop, COMPLETE) lives in train.log; the OUTCOME in stage_complete.json."""
     from datetime import datetime
 
-    from src.stages import stage_data_dir
+    from src.plugins import stage_data_dir
 
     data_dir = Path(stage_data_dir(stage, cfg))
     sources = []
