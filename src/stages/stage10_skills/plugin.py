@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.stages.base import StageKind, StagePlugin
+from src.stages.base import StagePlugin
 from src.stages.stage10_skills.sources import SOURCES
 
 PLUGIN = StagePlugin(
@@ -10,6 +10,6 @@ PLUGIN = StagePlugin(
     slug="skills",
     name="Skills",
     entry_level=0,
-    kind=StageKind.BEHAVIORAL,
+    frozen_base=False,
     sources=SOURCES,
 )

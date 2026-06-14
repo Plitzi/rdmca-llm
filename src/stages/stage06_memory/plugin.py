@@ -4,7 +4,7 @@ right before ethics/BCF."""
 
 from __future__ import annotations
 
-from src.stages.base import StageGate, StageKind, StagePlugin
+from src.stages.base import StageGate, StagePlugin
 from src.stages.stage06_memory.sources import SOURCES
 
 PLUGIN = StagePlugin(
@@ -12,7 +12,7 @@ PLUGIN = StagePlugin(
     slug="memory",
     name="Memory management",
     entry_level=1,
-    kind=StageKind.COGNITIVE,
+    frozen_base=True,
     rehearsal_fraction=0.35,
     lr_scale=0.7,
     gate=StageGate("memory_accuracy", 0.50, "Memory — recall and use of injected memory"),

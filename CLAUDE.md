@@ -43,12 +43,47 @@ El **registry** ([src/stages/registry.py](src/stages/registry.py)) los descubre 
 nada más se edita. Para desactivar uno: `enabled=False` en su plugin **o**
 `curriculum.stageN.enabled: false` en el YAML del nivel (lo respetan train y prepare).
 
+**Base a congelar:** cada stage DECLARA explícitamente si pertenece a la base
+cognitiva que se congela, con `frozen_base: bool` en su `plugin.py` (True = cognitivo /
+dentro de la base; False = behavioral / entrena un sector LoRA sobre el core ya
+congelado). NO se decide por número de stage ni umbral — lo dice el propio stage.
+
+**Tests por plugin:** cada stage mantiene SUS tests en
+`src/stages/stageNN_<slug>/tests/`. Los tests transversales (registry, pipeline,
+entrenamiento) viven en `tests/`. `pytest.ini` colecciona ambos (`testpaths =
+tests src/stages`); el `conftest.py` de la raíz pone el repo en `sys.path`.
+
 Otros puntos clave del refactor:
 - Entrenador descompuesto en [src/training/](src/training/) (`trainer`, `gates`,
   `checkpoint`, `dataload`, `valdata`, `heads`, `curriculum`); CLI en
   [scripts/train.py](scripts/train.py). El daemon en
-  [scripts/consolidation_daemon.py](scripts/consolidation_daemon.py).
+  `python -m src.consolidation.daemon` (src/consolidation/daemon.py).
 - Núcleo de generación en [src/inference/generate.py](src/inference/generate.py)
   (lo reusan chat y agent).
 - `src/training/stages.py` y `src/data/graded.py` quedan como **shims deprecados**
   que re-exportan desde las nuevas ubicaciones — no añadas código nuevo ahí.
+
+## Convenciones de código (OBLIGATORIO)
+
+**Nombres legibles.** Las variables deben referenciar su PROPÓSITO y leerse claras —
+nada de una sola letra ni abreviaturas crípticas. Prefiere `stage_key` sobre `skey`,
+`curriculum` sobre `cur`, `replay_weights` sobre `w`, `loader` sobre `ld`. Excepción:
+índices triviales de loop (`i`) y convenciones matemáticas locales muy acotadas.
+
+**Archivos pequeños, descompuestos.** Ningún archivo debe volverse "muy grande":
+descompón en sub-archivos por responsabilidad (p. ej. el entrenador → `trainer` +
+`gates` + `checkpoint` + `dataload` + `valdata` + `heads` + `curriculum`). Cuando
+empieces a sentir un archivo pesado o con responsabilidades mezcladas, pártelo.
+
+**Helpers reusables suben de nivel.** Si un helper lo usan ≥2 módulos, SÚBELO a una
+carpeta común en vez de duplicarlo:
+- compartido entre stages → `src/stages/_shared/`;
+- compartido entre runtimes (chat/agent) → `src/inference/`;
+- compartido en entrenamiento → un módulo en `src/training/`.
+Nunca copies un helper en dos sitios — muévelo arriba y que ambos lo importen.
+
+**Scripts vs internos.** En [scripts/](scripts/) van SOLO los CLIs accesibles para el
+developer (train, prepare_data, train_tokenizer, run_benchmarks, plot_metrics, purge,
+ood_probe, prepare_multimodal). Los componentes de runtime/internos NO van en scripts:
+viven en su subsistema (p. ej. el daemon de consolidación en
+`src/consolidation/daemon.py`, ejecutable con `python -m src.consolidation.daemon`).

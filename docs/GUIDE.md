@@ -50,7 +50,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_
 ```
 
 `pillow`/`soundfile` are only needed for the multimodal parts (loading images/audio).
-The main scripts (`scripts/train.py`, `uses/chat/run_chat.py`, `scripts/consolidation_daemon.py`) re-exec
+The main scripts (`scripts/train.py`, `uses/chat/run_chat.py`, `src/consolidation/daemon.py`) re-exec
 themselves with the venv's Python if you run them without activating it.
 
 ## 3. Backend & precision
@@ -320,8 +320,8 @@ experience updates several sectors (multi-sectorial), while **S7 (safety) stays 
 `aux_loss_weight`).
 
 ```bash
-python scripts/consolidation_daemon.py --level 3 --once    # one cycle, then exit
-python scripts/consolidation_daemon.py --level 3           # daemon (waits for idle)
+python -m src.consolidation.daemon --level 3 --once    # one cycle, then exit
+python -m src.consolidation.daemon --level 3           # daemon (waits for idle)
 ```
 
 Updated sectors are saved to `dist/checkpoints/level<N>/sectors.npz`; long-term memory
@@ -369,7 +369,7 @@ them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a 
 *sectors*, the MoE gate and daily consolidation activate at the **freeze point**
 (ethics+BCF, **stage 7**), so they're available once you train through stage 7 even at L1
 (they just have little to route at this scale). To exercise MoE routing + consolidation,
-train through stage 7+ and run `scripts/consolidation_daemon.py --level N --once`.
+train through stage 7+ and run `src/consolidation/daemon.py --level N --once`.
 
 ## 12. Cleanup / fresh start
 

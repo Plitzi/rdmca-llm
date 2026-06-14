@@ -11,24 +11,28 @@ from pathlib import Path
 
 import numpy as np
 
-from src.stages import bcf_stage, get_stage, has_stage
+from src.stages import bcf_stage, get_stage, has_stage, is_behavioral
 
-# Latest possible freeze point (= the ethics/BCF stage), from the registry.
+# The ethics/BCF stage — the stage that runs the BCF probe and at which the mood head
+# is retrained. It is the stage flagged `is_freeze_point` in the registry, NOT a
+# number threshold. Base membership is decided per stage by `frozen_base` (below).
 BCF_STAGE = bcf_stage()
 
 
 def last_cognitive_stage(cfg: dict) -> int | None:
-    """Highest ACTIVE stage that is part of the frozen cognitive base (≤ BCF_STAGE).
-    The core is frozen right after this stage; behavioral stages then add LoRA sectors."""
+    """Highest ACTIVE stage that is part of the frozen cognitive base — i.e. the last
+    stage that declares `frozen_base=True`. The core is frozen right after it;
+    behavioral stages then add LoRA sectors. Decided by the stages' own declarations,
+    not a stage-number threshold."""
     active = [int(k.replace("stage", "")) for k in (cfg.get("curriculum") or {})]
-    base = [s for s in active if s <= BCF_STAGE]
+    base = [s for s in active if has_stage(s) and not is_behavioral(s)]
     return max(base) if base else None
 
 
 def is_behavioral_stage(stage: int) -> bool:
-    """Behavioral stages (tool/MCP/skills, > BCF_STAGE) train as LoRA sectors on the
-    frozen core so they never overwrite language/reasoning."""
-    return stage > BCF_STAGE
+    """Behavioral stages (not part of the frozen base) train as LoRA sectors on the
+    frozen core. Read from the stage's own `frozen_base` declaration (registry)."""
+    return is_behavioral(stage) if has_stage(stage) else stage > BCF_STAGE
 
 
 def stage_name(stage: int, cfg: dict | None = None) -> str:

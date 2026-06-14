@@ -72,9 +72,12 @@ def test_entry_levels_match():
 def test_freeze_point_and_kinds():
     assert stages.bcf_stage() == 7
     for n in range(1, 8):
+        # Each stage DECLARES base membership via frozen_base; kind/behavioral derive.
+        assert stages.get_stage(n).frozen_base is True
         assert stages.get_stage(n).kind is StageKind.COGNITIVE
         assert not stages.is_behavioral(n)
     for n in (8, 9, 10):
+        assert stages.get_stage(n).frozen_base is False
         assert stages.get_stage(n).kind is StageKind.BEHAVIORAL
         assert stages.is_behavioral(n)
 

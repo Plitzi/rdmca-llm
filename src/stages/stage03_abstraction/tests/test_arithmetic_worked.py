@@ -9,12 +9,8 @@ meaningful fraction of generated examples are worked.
 """
 
 import re
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.data.graded import _add_worked, _sub_worked, gen_arithmetic
+from src.stages.stage03_abstraction.sources import _add_worked, _sub_worked, gen_arithmetic
 
 
 def test_add_worked_correct_with_and_without_carry():

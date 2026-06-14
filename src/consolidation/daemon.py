@@ -5,7 +5,7 @@ import sys
 try:
     import numpy  # noqa: F401
 except ModuleNotFoundError:
-    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     venv_py = os.path.join(_repo, ".venv", "bin", "python")
     if os.path.exists(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
         os.execv(venv_py, [venv_py, *sys.argv])
@@ -17,9 +17,12 @@ Consolidation Daemon — Phase 2+
 Runs during system idle time (CPU < 20% for 5+ minutes).
 Executes the full consolidation pipeline on accumulated experiences.
 
+An internal runtime component (not a developer build/inspect utility), so it lives in
+the consolidation subsystem and is launched as a module:
+
 Usage:
-  python scripts/consolidation_daemon.py --level 5
-  python scripts/consolidation_daemon.py --level 5 --once
+  python -m src.consolidation.daemon --level 5
+  python -m src.consolidation.daemon --level 5 --once
 """
 import argparse
 import logging
@@ -27,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root on path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root on path
 
 logging.basicConfig(
     level=logging.INFO,

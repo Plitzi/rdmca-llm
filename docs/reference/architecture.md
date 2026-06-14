@@ -176,7 +176,7 @@ rdmca-llm/
 ├── uses/                       Ways to consume a trained model
 │   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)
 │   └── agent/run_agent.py      Agentic tool loop (Action/Observation)
-├── scripts/consolidation_daemon.py     Daily consolidation daemon (wired)
+├── src/consolidation/daemon.py     Daily consolidation daemon (wired)
 └── docs/
     ├── GUIDE.md                Single step-by-step guide
     ├── reference/architecture.md   This file
@@ -220,7 +220,7 @@ packed nibbles at 4-bit; the output head stays in float). Generation is bounded 
 
 ## Consolidation (daemon)
 
-`scripts/consolidation_daemon.py` loads the frozen core + sectors, drains
+`src/consolidation/daemon.py` loads the frozen core + sectors, drains
 `data/runtime/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
 filter (R⁺<0) → LTSS consistency → MRF → sector assignment (STR + SectorRouter) → masked
 per-sector update → PGQ → snapshot/rollback → audit log in `logs/cycle_*.json`. It saves

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from src.stages import get_stage, stage_data_dir
-from src.training.curriculum import BCF_STAGE, is_behavioral_stage
+from src.training.curriculum import is_behavioral_stage
 
 # A stage with this rehearsal fraction has "no specific profile" — it then defers to
 # the level's training.rehearsal_fraction (matching the old STAGE_REHEARSAL.get default).
@@ -47,7 +47,7 @@ def build_data_loader(stage: int, cfg: dict):
             earlier = sorted(
                 s
                 for s in (int(k.replace("stage", "")) for k in curriculum)
-                if s < stage and s <= BCF_STAGE
+                if s < stage and not is_behavioral_stage(s)  # only replay frozen-base stages
             )
             for earlier_stage in earlier:
                 data_dir = stage_data_dir(earlier_stage, cfg)

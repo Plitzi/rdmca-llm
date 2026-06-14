@@ -8,12 +8,7 @@ Guards: morphology is CORRECT (curated, never naive +s/+ed), the article a/an ru
 many distinct rule types appear, and level widens the part-of-speech vocabulary.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.data.graded import _COMPARATIVE, _PAST_IRREG, _PLURAL_IRREG, gen_grammar
+from src.stages.stage01_language.sources import _PAST_IRREG, _PLURAL_IRREG, gen_grammar
 
 
 def test_no_naive_morphology_errors():
@@ -73,7 +68,7 @@ def test_many_rule_types_and_completion_form():
 def test_vocab_scales_with_level():
     """Higher level draws part-of-speech vocab from more dictionary tiers → a richer word
     set, while teaching the SAME rules (the per-level enrichment the design relies on)."""
-    from src.data.graded import _DICT_TIERS
+    from src.stages._shared.dictionary import _DICT_TIERS
 
     if len(_DICT_TIERS) < 2:
         return  # only one tier defined; nothing to compare

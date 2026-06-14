@@ -3,7 +3,7 @@ MCP / JSON-RPC."""
 
 from __future__ import annotations
 
-from src.stages.base import StageKind, StagePlugin
+from src.stages.base import StagePlugin
 from src.stages.stage09_mcp.sources import SOURCES
 
 PLUGIN = StagePlugin(
@@ -11,6 +11,6 @@ PLUGIN = StagePlugin(
     slug="mcp",
     name="Model Context Protocol (MCP)",
     entry_level=0,
-    kind=StageKind.BEHAVIORAL,
+    frozen_base=False,
     sources=SOURCES,
 )

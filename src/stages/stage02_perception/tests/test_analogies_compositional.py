@@ -8,12 +8,8 @@ varied than a fixed tuple list, and the completion Q&A form teaches the analogy 
 """
 
 import re
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.data.graded import _ANALOGY_RELATIONS, gen_analogies
+from src.stages.stage02_perception.sources import _ANALOGY_RELATIONS, gen_analogies
 
 
 def _pair_to_relation():

@@ -3,7 +3,7 @@ core (real tool-use loop, Claude-style JSON), so it never overwrites the base.""
 
 from __future__ import annotations
 
-from src.stages.base import StageKind, StagePlugin
+from src.stages.base import StagePlugin
 from src.stages.stage08_tools.sources import SOURCES
 
 PLUGIN = StagePlugin(
@@ -11,6 +11,6 @@ PLUGIN = StagePlugin(
     slug="tools",
     name="Action and tool use",
     entry_level=0,
-    kind=StageKind.BEHAVIORAL,
+    frozen_base=False,
     sources=SOURCES,
 )

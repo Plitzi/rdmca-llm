@@ -55,7 +55,11 @@ class StagePlugin:
     slug: str
     name: str
     entry_level: int
-    kind: StageKind
+    # Does this stage train the SHARED cognitive core that is frozen once the base
+    # curriculum completes? Each stage declares this EXPLICITLY (no number/threshold
+    # rule). True → cognitive (part of the frozen base); False → behavioral, i.e. it
+    # trains a LoRA sector on top of the already-frozen core (tool/MCP/skills).
+    frozen_base: bool
     # Anti-forgetting profile (fraction of replayed batches; LR multiplier).
     rehearsal_fraction: float = 0.15
     lr_scale: float = 1.0
@@ -75,7 +79,13 @@ class StagePlugin:
 
     @property
     def is_behavioral(self) -> bool:
-        return self.kind is StageKind.BEHAVIORAL
+        """A stage that is NOT part of the frozen base trains a LoRA sector on it."""
+        return not self.frozen_base
+
+    @property
+    def kind(self) -> StageKind:
+        """Human-readable kind, derived from the stage's `frozen_base` declaration."""
+        return StageKind.COGNITIVE if self.frozen_base else StageKind.BEHAVIORAL
 
     @property
     def package(self) -> str:

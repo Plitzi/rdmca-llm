@@ -4,7 +4,7 @@ lowest-entropy stage: strongest rehearsal and gentlest LR so it can't stamp
 
 from __future__ import annotations
 
-from src.stages.base import StageGate, StageKind, StagePlugin
+from src.stages.base import StageGate, StagePlugin
 from src.stages.stage03_abstraction.sources import SOURCES
 
 PLUGIN = StagePlugin(
@@ -12,7 +12,7 @@ PLUGIN = StagePlugin(
     slug="abstraction",
     name="Abstraction and symbolic composition",
     entry_level=1,
-    kind=StageKind.COGNITIVE,
+    frozen_base=True,
     rehearsal_fraction=0.45,
     lr_scale=0.5,
     gate=StageGate("gsm8k_accuracy", 0.15, "Abstraction — GSM8K"),

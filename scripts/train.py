@@ -171,7 +171,7 @@ Examples:
             print(f"\nNext: python scripts/train.py{lvl_flag} --stage {later[0]}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
-            print(f"Next: python scripts/consolidation_daemon.py{lvl_flag} --once")
+            print(f"Next: python -m src.consolidation.daemon{lvl_flag} --once")
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print("  Options: extend corpus, adjust thresholds, or --resume")
