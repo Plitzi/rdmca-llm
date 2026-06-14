@@ -9,36 +9,56 @@ it needs NO new tokenizer symbols and works with the existing checkpoint. NEUTRA
 is the default and adds nothing to the prompt: a calm assistant stays neutral
 until the conversation clearly carries an emotion.
 """
+
 from __future__ import annotations
-from typing import Dict, List, Optional
 
 # NEUTRAL is index 0 and the fallback. Every non-neutral class has training data
 # (EmpatheticDialogues' 32 emotions collapse onto it below).
-MOODS: List[str] = ["neutral", "happy", "sad", "angry", "afraid", "surprised", "caring"]
+MOODS: list[str] = ["neutral", "happy", "sad", "angry", "afraid", "surprised", "caring"]
 NEUTRAL = 0
-MOOD_INDEX: Dict[str, int] = {m: i for i, m in enumerate(MOODS)}
+MOOD_INDEX: dict[str, int] = {m: i for i, m in enumerate(MOODS)}
 
 # Only switch away from neutral when the top mood beats neutral by this margin.
 MOOD_MARGIN = 0.15
 
-EMOTION_TO_MOOD: Dict[str, str] = {
-    "joyful": "happy", "excited": "happy", "proud": "happy", "grateful": "happy",
-    "hopeful": "happy", "content": "happy", "impressed": "happy",
-    "confident": "happy", "anticipating": "happy", "prepared": "happy",
-    "sad": "sad", "lonely": "sad", "disappointed": "sad", "devastated": "sad",
-    "nostalgic": "sad", "sentimental": "sad", "guilty": "sad", "ashamed": "sad",
+EMOTION_TO_MOOD: dict[str, str] = {
+    "joyful": "happy",
+    "excited": "happy",
+    "proud": "happy",
+    "grateful": "happy",
+    "hopeful": "happy",
+    "content": "happy",
+    "impressed": "happy",
+    "confident": "happy",
+    "anticipating": "happy",
+    "prepared": "happy",
+    "sad": "sad",
+    "lonely": "sad",
+    "disappointed": "sad",
+    "devastated": "sad",
+    "nostalgic": "sad",
+    "sentimental": "sad",
+    "guilty": "sad",
+    "ashamed": "sad",
     "embarrassed": "sad",
-    "angry": "angry", "furious": "angry", "annoyed": "angry", "jealous": "angry",
+    "angry": "angry",
+    "furious": "angry",
+    "annoyed": "angry",
+    "jealous": "angry",
     "disgusted": "angry",
-    "afraid": "afraid", "terrified": "afraid", "anxious": "afraid",
+    "afraid": "afraid",
+    "terrified": "afraid",
+    "anxious": "afraid",
     "apprehensive": "afraid",
     "surprised": "surprised",
-    "caring": "caring", "faithful": "caring", "trusting": "caring",
+    "caring": "caring",
+    "faithful": "caring",
+    "trusting": "caring",
     "sympathetic": "caring",
 }
 
 
-def emotion_to_mood(emotion: Optional[str]) -> str:
+def emotion_to_mood(emotion: str | None) -> str:
     """Map a fine-grained emotion label onto a palette mood (neutral if unknown)."""
     return EMOTION_TO_MOOD.get((emotion or "").strip().lower(), "neutral")
 
@@ -51,33 +71,148 @@ def emotion_to_mood(emotion: Optional[str]) -> str:
 # model-size independent. The learned head stays available as an optional refinement
 # (it can take over once a larger level has separable features), but the lexicon is
 # the floor that makes mood behave correctly today. NEUTRAL unless a clear cue fires.
-_MOOD_LEXICON: Dict[str, tuple] = {
-    "happy": ("happy", "glad", "great", "good", "awesome", "wonderful", "excited",
-              "love", "yay", "fun", "amazing", "fantastic", "joy", "joyful",
-              "cheerful", "delighted", "pleased", "thrilled", "nice", "cool",
-              "congrats", "congratulations", "celebrate", "proud", "grateful",
-              "thank", "thanks", "excellent", "perfect", "enjoy", "wonderful"),
-    "sad": ("sad", "unhappy", "depressed", "down", "cry", "crying", "tears",
-            "lonely", "alone", "miss", "lost", "died", "death", "dead",
-            "heartbroken", "disappointed", "grief", "upset", "terrible", "awful",
-            "worst", "unfortunately", "sorry", "sick", "ill", "tired", "hurts"),
-    "angry": ("angry", "mad", "furious", "annoyed", "hate", "rage", "pissed",
-              "frustrated", "irritated", "unfair", "stupid", "ridiculous",
-              "disgusted", "outrageous", "fed up"),
-    "afraid": ("afraid", "scared", "fear", "fearful", "terrified", "worried",
-               "anxious", "nervous", "panic", "frightened", "dread", "scary"),
-    "surprised": ("surprised", "wow", "whoa", "unexpected", "shocked", "shocking",
-                  "unbelievable", "incredible", "omg", "no way", "suddenly"),
-    "caring": ("here for you", "hug", "hugs", "comfort", "take care", "get well",
-               "feel better", "thinking of you", "i care", "be okay", "be ok",
-               "support you", "help you"),
+_MOOD_LEXICON: dict[str, tuple] = {
+    "happy": (
+        "happy",
+        "glad",
+        "great",
+        "good",
+        "awesome",
+        "wonderful",
+        "excited",
+        "love",
+        "yay",
+        "fun",
+        "amazing",
+        "fantastic",
+        "joy",
+        "joyful",
+        "cheerful",
+        "delighted",
+        "pleased",
+        "thrilled",
+        "nice",
+        "cool",
+        "congrats",
+        "congratulations",
+        "celebrate",
+        "proud",
+        "grateful",
+        "thank",
+        "thanks",
+        "excellent",
+        "perfect",
+        "enjoy",
+        "wonderful",
+    ),
+    "sad": (
+        "sad",
+        "unhappy",
+        "depressed",
+        "down",
+        "cry",
+        "crying",
+        "tears",
+        "lonely",
+        "alone",
+        "miss",
+        "lost",
+        "died",
+        "death",
+        "dead",
+        "heartbroken",
+        "disappointed",
+        "grief",
+        "upset",
+        "terrible",
+        "awful",
+        "worst",
+        "unfortunately",
+        "sorry",
+        "sick",
+        "ill",
+        "tired",
+        "hurts",
+    ),
+    "angry": (
+        "angry",
+        "mad",
+        "furious",
+        "annoyed",
+        "hate",
+        "rage",
+        "pissed",
+        "frustrated",
+        "irritated",
+        "unfair",
+        "stupid",
+        "ridiculous",
+        "disgusted",
+        "outrageous",
+        "fed up",
+    ),
+    "afraid": (
+        "afraid",
+        "scared",
+        "fear",
+        "fearful",
+        "terrified",
+        "worried",
+        "anxious",
+        "nervous",
+        "panic",
+        "frightened",
+        "dread",
+        "scary",
+    ),
+    "surprised": (
+        "surprised",
+        "wow",
+        "whoa",
+        "unexpected",
+        "shocked",
+        "shocking",
+        "unbelievable",
+        "incredible",
+        "omg",
+        "no way",
+        "suddenly",
+    ),
+    "caring": (
+        "here for you",
+        "hug",
+        "hugs",
+        "comfort",
+        "take care",
+        "get well",
+        "feel better",
+        "thinking of you",
+        "i care",
+        "be okay",
+        "be ok",
+        "support you",
+        "help you",
+    ),
 }
 # Words that flip a positive cue to a negative one ("not good", "don't feel great").
-_NEGATORS = ("not", "no", "never", "dont", "don't", "cant", "can't", "isnt",
-             "isn't", "wasnt", "wasn't", "aint", "ain't")
+_NEGATORS = (
+    "not",
+    "no",
+    "never",
+    "dont",
+    "don't",
+    "cant",
+    "can't",
+    "isnt",
+    "isn't",
+    "wasnt",
+    "wasn't",
+    "aint",
+    "ain't",
+)
 
 
-def lexicon_mood(text: str) -> "tuple[str, float]":
+def lexicon_mood(text: str) -> tuple[str, float]:
     """Detect mood from explicit lexical cues. Returns (mood, confidence in 0..1).
     NEUTRAL with confidence 1.0 when nothing emotional is present. A simple negation
     rule flips a positive cue ('not good') into a sad signal so it isn't read as happy.
@@ -86,18 +221,18 @@ def lexicon_mood(text: str) -> "tuple[str, float]":
         return "neutral", 1.0
     low = " " + text.lower().replace("’", "'") + " "
     toks = [t.strip(".,!?;:\"'()") for t in low.split()]
-    scores: Dict[str, float] = {m: 0.0 for m in MOODS if m != "neutral"}
+    scores: dict[str, float] = {m: 0.0 for m in MOODS if m != "neutral"}
     for mood, cues in _MOOD_LEXICON.items():
         for cue in cues:
-            if " " in cue:                                  # phrase → substring match
+            if " " in cue:  # phrase → substring match
                 if cue in low:
                     scores[mood] += 1.0
                 continue
-            if cue in toks:                                 # word → token match
+            if cue in toks:  # word → token match
                 i = toks.index(cue)
-                negated = any(n in toks[max(0, i - 2):i] for n in _NEGATORS)
+                negated = any(n in toks[max(0, i - 2) : i] for n in _NEGATORS)
                 if negated and mood == "happy":
-                    scores["sad"] += 1.0                    # 'not good' → sad, not happy
+                    scores["sad"] += 1.0  # 'not good' → sad, not happy
                 elif not negated:
                     scores[mood] += 1.0
     top = max(scores, key=scores.get)

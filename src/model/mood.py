@@ -16,13 +16,16 @@ Two pieces:
 
 Backend-neutral (written against `src.backend.current()`).
 """
+
 from __future__ import annotations
-from typing import Optional, Tuple
 
 import src.backend as backend
-from src.modalities.moods import (              # shared light taxonomy (no backend)
-    MOODS, MOOD_INDEX, NEUTRAL, MOOD_MARGIN,
-    emotion_to_mood, mood_system_phrase,        # noqa: F401  (re-exported for callers)
+from src.modalities.moods import (  # shared light taxonomy (no backend)
+    MOOD_INDEX,
+    MOOD_MARGIN,
+    MOODS,
+    NEUTRAL,
+    emotion_to_mood,
     lexicon_mood,
 )
 
@@ -32,6 +35,7 @@ ops = B.ops
 
 
 # ── Mood head ────────────────────────────────────────────────────────────────
+
 
 class MoodHead(nn.Module):
     """Multiclass mood classifier over the mean-pooled foundational hidden state.
@@ -63,11 +67,16 @@ def load_mood_head(d_model: int, level=None, stage=None, checkpoint=None):
     everywhere — it is trained automatically at each cognitive stage's completion
     by train_stage (via `train_mood_head` below)."""
     from pathlib import Path
+
     candidates = []
     if checkpoint:
         candidates.append(Path(checkpoint).parent / "mood_head.npz")
     elif stage is not None:
-        root = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
+        root = (
+            Path("dist/checkpoints")
+            if level is None
+            else Path("dist/checkpoints") / f"level{level}"
+        )
         # Mood is only trained at conversational stages (1 + BCF). At any other stage
         # fall back to the NEAREST earlier head (stage, stage-1, …, 1) so chat still
         # has a mood head; the lexicon works regardless.
@@ -89,7 +98,7 @@ def load_mood_head(d_model: int, level=None, stage=None, checkpoint=None):
 def _pooled_states(model, tokenizer, texts, seq_len: int = 128):
     """Mean-pooled foundational hidden state for each text (frozen core only)."""
     if hasattr(model, "set_active_sectors"):
-        model.set_active_sectors([])              # read the frozen core, no sectors
+        model.set_active_sectors([])  # read the frozen core, no sectors
     rows = []
     for t in texts:
         try:
@@ -98,18 +107,19 @@ def _pooled_states(model, tokenizer, texts, seq_len: int = 128):
             ids = tokenizer.encode(t)
         ids = (ids or [0])[:seq_len]
         toks = ops.array(ids)[None]
-        h = model(toks)                            # [1, S, d_model]
-        rows.append(ops.mean(h, axis=1))           # [1, d_model] mean over sequence
-    return ops.concatenate(rows, axis=0)           # [N, d_model]
+        h = model(toks)  # [1, S, d_model]
+        rows.append(ops.mean(h, axis=1))  # [1, d_model] mean over sequence
+    return ops.concatenate(rows, axis=0)  # [N, d_model]
 
 
 def mood_train_step(model, tokenizer, head: MoodHead, batch, optimizer) -> float:
     """One supervised step on the mood head over a batch of (text, mood_label).
     Only the head trains — the foundational features are read frozen (stop_gradient).
     `batch` items: (text, mood_name | mood_index)."""
-    texts  = [b[0] for b in batch]
-    labels = ops.array([float(MOOD_INDEX.get(b[1], b[1]) if isinstance(b[1], str) else b[1])
-                        for b in batch])
+    texts = [b[0] for b in batch]
+    labels = ops.array(
+        [float(MOOD_INDEX.get(b[1], b[1]) if isinstance(b[1], str) else b[1]) for b in batch]
+    )
     h = ops.stop_gradient(_pooled_states(model, tokenizer, texts))
 
     def loss_fn(hd):
@@ -125,10 +135,10 @@ def mood_accuracy(model, tokenizer, head: MoodHead, probes) -> float:
     """Classification accuracy on a (text, mood) probe set."""
     if not probes:
         return 1.0
-    texts  = [p[0] for p in probes]
+    texts = [p[0] for p in probes]
     labels = [MOOD_INDEX.get(p[1], p[1]) if isinstance(p[1], str) else p[1] for p in probes]
-    h      = _pooled_states(model, tokenizer, texts)
-    preds  = ops.argmax(head(h), axis=-1)
+    h = _pooled_states(model, tokenizer, texts)
+    preds = ops.argmax(head(h), axis=-1)
     correct = sum(int(int(B.engine.item(preds[i])) == labels[i]) for i in range(len(labels)))
     return correct / len(labels)
 
@@ -136,7 +146,7 @@ def mood_accuracy(model, tokenizer, head: MoodHead, probes) -> float:
 def mood_probs(model, tokenizer, head: MoodHead, text: str, seq_len: int = 128):
     """Raw per-text mood distribution as a plain list[float] over MOODS."""
     h = _pooled_states(model, tokenizer, [text], seq_len=seq_len)
-    p = head.probs(h)[0]                              # [n_moods]
+    p = head.probs(h)[0]  # [n_moods]
     return [float(B.engine.item(p[i])) for i in range(len(MOODS))]
 
 
@@ -144,6 +154,7 @@ def mood_probs(model, tokenizer, head: MoodHead, text: str, seq_len: int = 128):
 # Used by the normal training pipeline (train_stage._on_stage_complete). The mood
 # head is a cheap probe over the frozen core, so it is trained at each cognitive
 # stage's completion — no separate manual step (or script) needed.
+
 
 def _neutral_examples(level, stage, n: int, log=print) -> list:
     """Sample NEUTRAL (text, "neutral") pairs from the conversational corpus. These
@@ -153,6 +164,7 @@ def _neutral_examples(level, stage, n: int, log=print) -> list:
     which is exactly what made its mood head near-random)."""
     import json
     from pathlib import Path
+
     base = Path("data") / f"level{level}" / "stage1"
     if not base.exists():
         base = Path("data") / f"level{level}" / f"stage{stage}"
@@ -185,9 +197,10 @@ def _emotional_examples(per_mood: int, log=print) -> list:
     the speaker's RAW first utterance (matching what the chat classifies). Best-effort:
     returns [] if the dataset can't be loaded (offline) instead of raising."""
     from collections import Counter
+
     try:
         from datasets import load_dataset
-    except Exception as e:                       # datasets not installed
+    except Exception as e:  # datasets not installed
         log(f"  [mood] datasets unavailable: {e}")
         return []
     out, counts = [], Counter()
@@ -203,8 +216,10 @@ def _emotional_examples(per_mood: int, log=print) -> list:
         if mood == "neutral" or counts[mood] >= per_mood:
             continue
         turns = [(c.get("role"), c.get("content")) for c in (ex.get("conversations") or [])]
-        utt = next((c for r, c in turns if c and (r or "").lower() in
-                    ("user", "human", "speaker", "0")), None)
+        utt = next(
+            (c for r, c in turns if c and (r or "").lower() in ("user", "human", "speaker", "0")),
+            None,
+        )
         if not utt and turns:
             utt = turns[0][1]
         if utt and utt.strip():
@@ -215,50 +230,69 @@ def _emotional_examples(per_mood: int, log=print) -> list:
     return out
 
 
-def build_mood_examples(level, stage, per_mood: int = 300, neutral: int = 1500,
-                        seed: int = 0, log=print) -> list:
+def build_mood_examples(
+    level, stage, per_mood: int = 300, neutral: int = 1500, seed: int = 0, log=print
+) -> list:
     """Assemble the labeled (text, mood) set: emotional turns (EmpatheticDialogues)
     + neutral turns (local factual/narrative files), shuffled. May be empty/small
     when offline — callers decide whether that is enough to train."""
     import random
-    data = _emotional_examples(per_mood, log=log) + _neutral_examples(level, stage, neutral, log=log)
+
+    data = _emotional_examples(per_mood, log=log) + _neutral_examples(
+        level, stage, neutral, log=log
+    )
     random.Random(seed).shuffle(data)
     return data
 
 
-def train_mood_head(model, tokenizer, ckpt_dir, *, level, stage, per_mood: int = 300,
-                    neutral: int = 1500, epochs: int = 8, batch: int = 32,
-                    lr: float = 2e-3, seed: int = 0, precision: str = "fp32",
-                    min_examples: int = 50, log=print):
+def train_mood_head(
+    model,
+    tokenizer,
+    ckpt_dir,
+    *,
+    level,
+    stage,
+    per_mood: int = 300,
+    neutral: int = 1500,
+    epochs: int = 8,
+    batch: int = 32,
+    lr: float = 2e-3,
+    seed: int = 0,
+    precision: str = "fp32",
+    min_examples: int = 50,
+    log=print,
+):
     """Train the MoodHead on the frozen core and save it to `<ckpt_dir>/mood_head.npz`.
 
     Cheap (head-only over precomputed frozen features). Returns a metrics dict on
     success, or None when there is too little labeled data (e.g. EmpatheticDialogues
     is offline) — in which case nothing is written and the caller carries on. This is
     the single implementation behind both the training pipeline and the CLI script."""
-    import numpy as np
     from collections import Counter
     from pathlib import Path
 
-    data = build_mood_examples(level, stage, per_mood=per_mood, neutral=neutral,
-                               seed=seed, log=log)
+    import numpy as np
+
+    data = build_mood_examples(level, stage, per_mood=per_mood, neutral=neutral, seed=seed, log=log)
     if len(data) < min_examples:
-        log(f"  [mood] only {len(data)} labeled examples (< {min_examples}) — skipping "
-            "(need HF EmpatheticDialogues; offline?)")
+        log(
+            f"  [mood] only {len(data)} labeled examples (< {min_examples}) — skipping "
+            "(need HF EmpatheticDialogues; offline?)"
+        )
         return None
     log(f"  [mood] {len(data)} examples · per-mood: {dict(Counter(m for _, m in data))}")
 
     # Precompute frozen pooled features ONCE (the LM does not change), then train the
     # small head directly on them — fast, no model forward pass in the training loop.
-    feats  = np.array(_pooled_states(model, tokenizer, [t for t, _ in data]))   # [N, d]
+    feats = np.array(_pooled_states(model, tokenizer, [t for t, _ in data]))  # [N, d]
     labels = np.array([MOOD_INDEX[m] for _, m in data], dtype=np.float32)
-    n_val  = max(8, len(data) // 10)
+    n_val = max(8, len(data) // 10)
     Xv, yv = feats[:n_val], labels[:n_val]
     Xt, yt = feats[n_val:], labels[n_val:]
 
     head = MoodHead(model.cfg.d_model if hasattr(model, "cfg") else feats.shape[1])
     B.engine.set_precision(head, precision)
-    opt  = B.engine.make_optimizer(head, lr, 0.0)
+    opt = B.engine.make_optimizer(head, lr, 0.0)
 
     def _acc(X, y) -> float:
         preds = np.array(ops.argmax(head(ops.array(X)), axis=-1))
@@ -270,17 +304,24 @@ def train_mood_head(model, tokenizer, ckpt_dir, *, level, stage, per_mood: int =
         np.random.shuffle(idx)
         losses = []
         for i in range(0, len(idx), batch):
-            j = idx[i:i + batch]
+            j = idx[i : i + batch]
             Hb, yb = ops.array(Xt[j]), ops.array(yt[j])
+
             def loss_fn(hd, H=Hb, Y=yb):
                 return mood_loss(hd(H), Y)
+
             loss, grads = B.engine.value_and_grad(head, loss_fn)(head)
             B.engine.optimizer_step(opt, head, grads)
             losses.append(float(B.engine.item(loss)))
-        last = {"loss": float(np.mean(losses)) if losses else 0.0,
-                "train_acc": _acc(Xt, yt), "val_acc": _acc(Xv, yv)}
-        log(f"  [mood] epoch {ep+1}/{epochs}: loss={last['loss']:.3f} "
-            f"train_acc={last['train_acc']:.2f} val_acc={last['val_acc']:.2f}")
+        last = {
+            "loss": float(np.mean(losses)) if losses else 0.0,
+            "train_acc": _acc(Xt, yt),
+            "val_acc": _acc(Xv, yv),
+        }
+        log(
+            f"  [mood] epoch {ep + 1}/{epochs}: loss={last['loss']:.3f} "
+            f"train_acc={last['train_acc']:.2f} val_acc={last['val_acc']:.2f}"
+        )
 
     out = Path(ckpt_dir) / "mood_head.npz"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -289,7 +330,7 @@ def train_mood_head(model, tokenizer, ckpt_dir, *, level, stage, per_mood: int =
     return {"examples": len(data), "path": str(out), **last}
 
 
-def _pick_mood(state) -> Tuple[str, float]:
+def _pick_mood(state) -> tuple[str, float]:
     """NEUTRAL unless another mood beats it by MOOD_MARGIN (keeps the default calm)."""
     top = max(range(len(MOODS)), key=lambda i: state[i])
     if top == NEUTRAL or (state[top] - state[NEUTRAL]) < MOOD_MARGIN:
@@ -317,8 +358,9 @@ def _lexicon_distribution(text: str) -> list:
 _HEAD_OVERRIDE_MIN = 0.55
 
 
-def classify_mood(model, tokenizer, head: MoodHead, text: str,
-                  seq_len: int = 128) -> Tuple[str, float]:
+def classify_mood(
+    model, tokenizer, head: MoodHead, text: str, seq_len: int = 128
+) -> tuple[str, float]:
     """Stateless single-text mood (neutral default). The LEXICON is the primary,
     reliable signal; the learned head only refines when the lexicon finds nothing
     AND the head is highly confident. For a running, conversation-aware mood use
@@ -331,8 +373,9 @@ def classify_mood(model, tokenizer, head: MoodHead, text: str,
     if head is None:
         return "neutral", 1.0
     hmood, hconf = _pick_mood(mood_probs(model, tokenizer, head, text, seq_len=seq_len))
-    return (hmood, hconf) if (hmood != "neutral" and hconf >= _HEAD_OVERRIDE_MIN) \
-        else ("neutral", 1.0)
+    return (
+        (hmood, hconf) if (hmood != "neutral" and hconf >= _HEAD_OVERRIDE_MIN) else ("neutral", 1.0)
+    )
 
 
 class MoodTracker:
@@ -345,8 +388,13 @@ class MoodTracker:
       state ← alpha · P(current message) + (1 − alpha) · state
     """
 
-    def __init__(self, head: Optional[MoodHead], alpha: float = 0.4,
-                 margin: float = MOOD_MARGIN, context_chars: int = 240):
+    def __init__(
+        self,
+        head: MoodHead | None,
+        alpha: float = 0.4,
+        margin: float = MOOD_MARGIN,
+        context_chars: int = 240,
+    ):
         self.head = head
         self.alpha = alpha
         self.margin = margin
@@ -370,13 +418,17 @@ class MoodTracker:
         else:
             # lexicon found nothing emotional → consult the head, but only let a
             # confident non-neutral reading move the state; otherwise decay to neutral.
-            text = (context[-self.context_chars:] + "\n" + message) if context else message
+            text = (context[-self.context_chars :] + "\n" + message) if context else message
             hp = mood_probs(model, tokenizer, self.head, text)
             hmood, hconf = _pick_mood(hp)
-            p = hp if (hmood != "neutral" and hconf >= _HEAD_OVERRIDE_MIN) \
-                else _lexicon_distribution("")          # neutral one-hot
-        self.state = [self.alpha * p[i] + (1 - self.alpha) * self.state[i]
-                      for i in range(len(MOODS))]
+            p = (
+                hp
+                if (hmood != "neutral" and hconf >= _HEAD_OVERRIDE_MIN)
+                else _lexicon_distribution("")
+            )  # neutral one-hot
+        self.state = [
+            self.alpha * p[i] + (1 - self.alpha) * self.state[i] for i in range(len(MOODS))
+        ]
         return self.current()
 
     def current(self) -> str:

@@ -82,32 +82,27 @@ curriculum:
     name: "Language and communication"
     entry_level: 1
     n_tokens: 1_500_000_000
-    data_dir: "data/level5/stage1"
     data: {sources: [wikipedia], filter: null}        # null filter = everything.
   stage2:
     name: "Perception and pattern recognition"
     entry_level: 1
     n_tokens: 500_000_000
-    data_dir: "data/level5/stage2"
     data: {sources: [wikipedia, arc_easy, arc_challenge], filter: null}
   stage3:
     name: "Abstraction and symbolic composition"
     entry_level: 1
     n_tokens: 1_000_000_000
-    data_dir: "data/level5/stage3"
     data: {sources: [wikipedia, arithmetic, gsm8k, math], filter: null}
   stage4:
     name: "Causal and procedural reasoning"
     entry_level: 1                     # present from L1 (uniform structure); graded by level.
     n_tokens: 1_000_000_000
-    data_dir: "data/level5/stage4"
     data: {sources: [wikipedia, causal_synth], filter: null}
   stage6:
     name: "Memory management"
     entry_level: 1             # memory is a cognitive faculty: the frozen core learns
                                # to recall and USE injected memory (LTSS + episodic).
     n_tokens: 1_000_000_000
-    data_dir: "data/level5/stage6"
     data:
       sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
       filter: null
@@ -115,29 +110,24 @@ curriculum:
     name: "Cognitive ethics and BCF"
     entry_level: 1                     # core freezes after stage 7 (BCF) at every level (uniform).
     n_tokens: 500_000_000
-    data_dir: "data/level5/stage7"
     data: {sources: [wikipedia, ethics], filter: null}
   stage8:
     name: "Action and tool use"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage8"
     data: {sources: [agentic], filter: null}   # real tool-use loop (Claude-style JSON)
   stage9:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage9"
     data: {sources: [mcp], filter: null}       # real tool use over MCP (JSON-RPC 2.0)
   stage10:
     name: "Skills"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage10"
     data: {sources: [skills], filter: null}    # real procedures as Claude-style SKILL.md
   stage5:
     name: "Reasoning"
     entry_level: 0
     n_tokens: 100_000_000
-    data_dir: "data/level5/stage5"
     data: {sources: [reasoning], filter: null}  # CoT (GSM8K) + planning & tool use (multi-step) in <think>…</think>

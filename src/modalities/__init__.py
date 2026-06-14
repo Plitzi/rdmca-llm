@@ -1,7 +1,10 @@
-from .text import TextTokenizer
-from .image import ImageVQVAE
 from .audio import AudioVQVAE
+from .image import ImageVQVAE
 from .perception import MultimodalPerception
+from .text import TextTokenizer
 from .vocab import (
-    IMAGE_VOCAB_SIZE, AUDIO_VOCAB_SIZE, MODALITY_SPECIALS, build_modality_layout,
+    AUDIO_VOCAB_SIZE,
+    IMAGE_VOCAB_SIZE,
+    MODALITY_SPECIALS,
+    build_modality_layout,
 )

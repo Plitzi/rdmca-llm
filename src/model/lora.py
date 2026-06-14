@@ -7,8 +7,8 @@ Gradient masking ensures only the target sector receives updates per cycle.
 
 Backend-neutral (written against `src.backend.current()`).
 """
+
 from __future__ import annotations
-from typing import Dict, List
 
 import src.backend as backend
 from src.model.config import LoRAConfig
@@ -19,14 +19,18 @@ ops = B.ops
 
 
 # Sector registry — matches Implementation Guide §1.6
-SECTORS: Dict[int, Dict] = {
-    1: {"name": "Linguistic",    "trigger": "conversational, stylistic, discourse",       "rank": 16},
-    2: {"name": "Formal",        "trigger": "mathematical, logical, symbolic",             "rank": 16},
-    3: {"name": "WorldKnowledge","trigger": "factual, domain-specific, encyclopedic",      "rank": 8},
-    4: {"name": "Procedural",    "trigger": "planning, tool use, sequential action",       "rank": 8},
-    5: {"name": "Social",        "trigger": "pragmatics, intent, social norms",            "rank": 8},
-    6: {"name": "Multimodal",    "trigger": "cross-modal grounding (image/audio ↔ text)", "rank": 8},
-    7: {"name": "Behavioral",    "trigger": "ethics, constraints — adversarial buffer ONLY","rank": 4},
+SECTORS: dict[int, dict] = {
+    1: {"name": "Linguistic", "trigger": "conversational, stylistic, discourse", "rank": 16},
+    2: {"name": "Formal", "trigger": "mathematical, logical, symbolic", "rank": 16},
+    3: {"name": "WorldKnowledge", "trigger": "factual, domain-specific, encyclopedic", "rank": 8},
+    4: {"name": "Procedural", "trigger": "planning, tool use, sequential action", "rank": 8},
+    5: {"name": "Social", "trigger": "pragmatics, intent, social norms", "rank": 8},
+    6: {"name": "Multimodal", "trigger": "cross-modal grounding (image/audio ↔ text)", "rank": 8},
+    7: {
+        "name": "Behavioral",
+        "trigger": "ethics, constraints — adversarial buffer ONLY",
+        "rank": 4,
+    },
 }
 
 
@@ -49,19 +53,17 @@ class LoRALinear(nn.Module):
         """Increase rank by `delta`, preserving current output (PGQ expansion,
         Guide §4.2 / GradMax-style): new A rows are small-random, new B columns
         are zero, so the added components produce zero output at first."""
-        in_dim   = self.lora_A.weight.shape[1]
-        out_dim  = self.lora_B.weight.shape[0]
+        in_dim = self.lora_A.weight.shape[1]
+        out_dim = self.lora_B.weight.shape[0]
         old_rank = self.lora_A.weight.shape[0]
         new_rank = old_rank + delta
-        newA = ops.concatenate(
-            [self.lora_A.weight, ops.randn((delta, in_dim)) * 0.02], axis=0)
-        newB = ops.concatenate(
-            [self.lora_B.weight, ops.zeros((out_dim, delta))], axis=1)
+        newA = ops.concatenate([self.lora_A.weight, ops.randn((delta, in_dim)) * 0.02], axis=0)
+        newB = ops.concatenate([self.lora_B.weight, ops.zeros((out_dim, delta))], axis=1)
         self.lora_A = nn.Linear(in_dim, new_rank, bias=False)
         self.lora_A.weight = nn.Parameter(newA)
         self.lora_B = nn.Linear(new_rank, out_dim, bias=False)
         self.lora_B.weight = nn.Parameter(newB)
-        self.scale = self.scale * old_rank / new_rank   # keep alpha/rank constant
+        self.scale = self.scale * old_rank / new_rank  # keep alpha/rank constant
 
 
 class SectorAdapter(nn.Module):
@@ -73,19 +75,23 @@ class SectorAdapter(nn.Module):
     def __init__(self, cfg: LoRAConfig):
         super().__init__()
         self.sector_id = cfg.sector_id
-        self.rank      = cfg.rank
+        self.rank = cfg.rank
         # One LoRA adapter per (layer, projection) pair. ModuleList of
         # ModuleDict so params register under both backends.
-        kv_dim = cfg.kv_dim or cfg.d_model        # GQA-narrowed K/V width (= d_model for MHA)
-        self.adapters = nn.ModuleList([
-            nn.ModuleDict({
-                "q": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
-                "k": LoRALinear(cfg.d_model, kv_dim,      cfg.rank, cfg.alpha),
-                "v": LoRALinear(cfg.d_model, kv_dim,      cfg.rank, cfg.alpha),
-                "o": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
-            })
-            for _ in range(cfg.n_layers)
-        ])
+        kv_dim = cfg.kv_dim or cfg.d_model  # GQA-narrowed K/V width (= d_model for MHA)
+        self.adapters = nn.ModuleList(
+            [
+                nn.ModuleDict(
+                    {
+                        "q": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
+                        "k": LoRALinear(cfg.d_model, kv_dim, cfg.rank, cfg.alpha),
+                        "v": LoRALinear(cfg.d_model, kv_dim, cfg.rank, cfg.alpha),
+                        "o": LoRALinear(cfg.d_model, cfg.d_model, cfg.rank, cfg.alpha),
+                    }
+                )
+                for _ in range(cfg.n_layers)
+            ]
+        )
 
     def delta(self, layer_idx: int, proj: str, x):
         """Return the LoRA delta for a specific projection in a specific layer."""
@@ -101,22 +107,21 @@ class SectorAdapter(nn.Module):
         return self.rank
 
 
-def build_all_sectors(d_model: int, n_layers: int,
-                      kv_dim: int | None = None) -> Dict[int, SectorAdapter]:
+def build_all_sectors(
+    d_model: int, n_layers: int, kv_dim: int | None = None
+) -> dict[int, SectorAdapter]:
     """Instantiate all seven sector adapters. `kv_dim` (GQA K/V width) defaults to
     d_model (plain MHA); pass model.cfg.kv_dim for a GQA model."""
     sectors = {}
     for sid, meta in SECTORS.items():
-        cfg = LoRAConfig(d_model=d_model, n_layers=n_layers,
-                         sector_id=sid, rank=meta["rank"], kv_dim=kv_dim)
+        cfg = LoRAConfig(
+            d_model=d_model, n_layers=n_layers, sector_id=sid, rank=meta["rank"], kv_dim=kv_dim
+        )
         sectors[sid] = SectorAdapter(cfg)
     return sectors
 
 
-def masked_sector_update(model,
-                         sector_id: int,
-                         loss_fn,
-                         optimizer) -> tuple:
+def masked_sector_update(model, sector_id: int, loss_fn, optimizer) -> tuple:
     """
     Apply a gradient update to exactly one sector, leaving the frozen
     foundational core and every other sector bit-for-bit unchanged
@@ -149,7 +154,7 @@ def masked_sector_update(model,
 
     B.engine.optimizer_step(optimizer, model, grads)
 
-    B.engine.freeze_all(model)           # restore: nothing trainable between cycles
+    B.engine.freeze_all(model)  # restore: nothing trainable between cycles
     return B.engine.item(loss), gnorm
 
 

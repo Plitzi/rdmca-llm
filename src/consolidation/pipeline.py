@@ -14,42 +14,42 @@ Pipeline steps (§1.7.1):
   8. Masked gradient update per sector (≥ min_batch)
   9. PGQ evaluation + audit log
 """
+
 from __future__ import annotations
+
 import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import numpy as np
 
 import src.backend as backend
+from src.consolidation.ambiguity import AmbiguityHandler
+from src.consolidation.pgq import PGQ
 
-from src.memory.episodic_buffer import EpisodicBuffer, Experience
-from src.memory.ltss import LTSS
-from src.memory.mrf import mrf
-from src.relevance.engine import RelevanceEngine
-from src.model.bcf import BCFHead
 # (MoE joint update is done inline via the backend engine; the isolated
 # masked_sector_update path is no longer used by the consolidation pipeline.)
 from src.consolidation.snapshot import SectorSnapshotManager
-from src.consolidation.ambiguity import AmbiguityHandler
-from src.consolidation.pgq import PGQ
+from src.memory.episodic_buffer import EpisodicBuffer, Experience
+from src.memory.ltss import LTSS
+from src.memory.mrf import mrf
+from src.model.bcf import BCFHead
+from src.relevance.engine import RelevanceEngine
 from src.routing.semantic_router import Chunk
 
-
 MIN_BATCH_PER_SECTOR = 8
-CONSOL_SEQ_LEN       = 128    # token length used for consolidation LM updates
-LTSS_DUPLICATE_COH   = 0.95  # cosine sim above which an experience is flagged
-DEFAULT_SECTOR       = 1     # fallback sector when routing is unavailable
-AUX_LOSS_WEIGHT      = 0.01  # weight of the MoE load-balance auxiliary loss
+CONSOL_SEQ_LEN = 128  # token length used for consolidation LM updates
+LTSS_DUPLICATE_COH = 0.95  # cosine sim above which an experience is flagged
+DEFAULT_SECTOR = 1  # fallback sector when routing is unavailable
+AUX_LOSS_WEIGHT = 0.01  # weight of the MoE load-balance auxiliary loss
 
 # PGQ growth-signal calibration (§14). These turn raw cycle telemetry into the four
 # [0,1] inputs of the Growth Necessity Score (replacing the old hardcoded 0.0s that
 # kept PGQ permanently "stable" — issue C1).
-PGQ_SAT_REF   = 5.0   # grad-norm scale at which the busiest sector reads as saturated
+PGQ_SAT_REF = 5.0  # grad-norm scale at which the busiest sector reads as saturated
 PGQ_NOVEL_COH = 0.30  # max-cosine to LTSS below which an experience is a NOVEL cluster
 PGQ_EXC_THETA = 0.50  # relevance score ≥ this counts as a cognitive-surprise experience
 
@@ -63,12 +63,12 @@ class AuditEntry:
     ltss_flagged: int
     deferred_1: int
     human_queue_added: int
-    sectors_updated: List[int]
-    param_delta_norms: Dict[str, float]
+    sectors_updated: list[int]
+    param_delta_norms: dict[str, float]
     rollback_triggered: bool
     gns: float
     health_score: float
-    modality_balance: Dict[str, int]
+    modality_balance: dict[str, int]
     clean_cycle: bool
     timestamp: float = 0.0
 
@@ -77,41 +77,42 @@ class AuditEntry:
 
 
 class ConsolidationPipeline:
-
-    def __init__(self,
-                 buffer: EpisodicBuffer,
-                 ltss: LTSS,
-                 re: RelevanceEngine,
-                 bcf: BCFHead,
-                 sectors: dict,
-                 snapshot_mgr: SectorSnapshotManager,
-                 ambiguity: AmbiguityHandler,
-                 pgq: PGQ,
-                 log_dir: str = "logs",
-                 adversarial_buffer: Optional[list] = None,
-                 model=None,
-                 tokenizer=None,
-                 semantic_router=None,
-                 sector_router=None,
-                 validator=None,
-                 lr: float = 1e-4):
-        self.buffer       = buffer
-        self.ltss         = ltss
-        self.re           = re
-        self.bcf          = bcf
-        self.sectors      = sectors
-        self.snapshots    = snapshot_mgr
-        self.ambiguity    = ambiguity
-        self.pgq          = pgq
-        self.log_dir      = Path(log_dir)
-        self.adv_buffer   = adversarial_buffer if adversarial_buffer is not None else []
-        self._cycle_history: List[bool] = []   # per-cycle clean/not-clean flags
+    def __init__(
+        self,
+        buffer: EpisodicBuffer,
+        ltss: LTSS,
+        re: RelevanceEngine,
+        bcf: BCFHead,
+        sectors: dict,
+        snapshot_mgr: SectorSnapshotManager,
+        ambiguity: AmbiguityHandler,
+        pgq: PGQ,
+        log_dir: str = "logs",
+        adversarial_buffer: list | None = None,
+        model=None,
+        tokenizer=None,
+        semantic_router=None,
+        sector_router=None,
+        validator=None,
+        lr: float = 1e-4,
+    ):
+        self.buffer = buffer
+        self.ltss = ltss
+        self.re = re
+        self.bcf = bcf
+        self.sectors = sectors
+        self.snapshots = snapshot_mgr
+        self.ambiguity = ambiguity
+        self.pgq = pgq
+        self.log_dir = Path(log_dir)
+        self.adv_buffer = adversarial_buffer if adversarial_buffer is not None else []
+        self._cycle_history: list[bool] = []  # per-cycle clean/not-clean flags
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Optional routing components for sector assignment (step 6). When not
         # provided, the pipeline falls back to exp.sector_assignment.
         self.semantic_router = semantic_router
-        self.sector_router   = sector_router
+        self.sector_router = sector_router
 
         # Optional confidence-gated knowledge validator (validation.py). When set, it
         # decides each experience's fate by how confidently it can be validated
@@ -122,14 +123,17 @@ class ConsolidationPipeline:
         # Optional learning components. When `model` (with sectors attached)
         # and `tokenizer` are provided, the pipeline performs real masked
         # gradient updates; otherwise it runs the filter/audit pipeline only.
-        self.model       = model
-        self.tokenizer   = tokenizer
-        self.optimizer   = (backend.current().engine.make_optimizer(
-            model, lr=lr, weight_decay=0.0) if model is not None else None)
+        self.model = model
+        self.tokenizer = tokenizer
+        self.optimizer = (
+            backend.current().engine.make_optimizer(model, lr=lr, weight_decay=0.0)
+            if model is not None
+            else None
+        )
         self._last_rollback = False
-        self._last_loss: Optional[float] = None   # consolidation CE → PGQ pred_error
+        self._last_loss: float | None = None  # consolidation CE → PGQ pred_error
 
-    def _growth_metrics(self, final, delta_norms, busiest) -> Dict[str, float]:
+    def _growth_metrics(self, final, delta_norms, busiest) -> dict[str, float]:
         """Turn this cycle's telemetry into PGQ's four [0,1] growth signals (§14).
         Each is grounded in a real measurement instead of the old hardcoded 0.0:
 
@@ -165,8 +169,12 @@ class ConsolidationPipeline:
         # exc_rate (cognitive surprise = high relevance, already scored upstream)
         exc = sum(1 for e in final if getattr(e, "relevance_score", 0.0) >= PGQ_EXC_THETA)
         exc_rate = (exc / n) if n else 0.0
-        return dict(saturation=saturation, exc_rate=exc_rate,
-                    pred_error=pred_error, cluster_novel=cluster_novel)
+        return {
+            "saturation": saturation,
+            "exc_rate": exc_rate,
+            "pred_error": pred_error,
+            "cluster_novel": cluster_novel,
+        }
 
     def _moe_update(self, experiences, sectors_updated, delta_norms) -> None:
         """Joint MoE update: the gate + expert sectors (S1..S6) train together on
@@ -174,7 +182,7 @@ class ConsolidationPipeline:
         steps once, and rolls back on a gradient-norm catastrophe. S7 is excluded
         (frozen → isolated)."""
         eng = backend.current().engine
-        m   = self.model
+        m = self.model
         self._last_rollback = False
         batch = self._build_token_batch(experiences)
         if batch is None:
@@ -197,13 +205,14 @@ class ConsolidationPipeline:
         grad_fn = eng.value_and_grad(m, loss_fn)
         loss, grads = grad_fn(m)
         eng.eval(loss)
-        self._last_loss = float(eng.item(loss))      # → PGQ pred_error signal
+        self._last_loss = float(eng.item(loss))  # → PGQ pred_error signal
         gnorm = eng.grad_norm(m, grads)
         eng.optimizer_step(self.optimizer, m, grads)
         eng.freeze_all(m)
 
         cat = self.snapshots.detect_catastrophe(
-            0, benchmark_delta=0.0, kl_divergence=0.0, bcf_delta=0.0, grad_norm=gnorm)
+            0, benchmark_delta=0.0, kl_divergence=0.0, bcf_delta=0.0, grad_norm=gnorm
+        )
         if cat:
             self.snapshots.rollback(0, m.gate)
             for sid in expert_ids:
@@ -221,17 +230,17 @@ class ConsolidationPipeline:
         t0 = time.time()
 
         experiences = self.buffer.all()
-        raw_count   = len(experiences)
+        raw_count = len(experiences)
 
         bcf_rejected = r_neg_rejected = ltss_flagged = 0
         deferred = human_queued = 0
-        sectors_updated: List[int] = []
-        delta_norms: Dict[str, float] = {}
+        sectors_updated: list[int] = []
+        delta_norms: dict[str, float] = {}
         rollback = False
-        self._last_loss = None          # reset; _moe_update sets it if it runs
+        self._last_loss = None  # reset; _moe_update sets it if it runs
 
         # --- Step 2: BCF filter ---
-        clean: List[Experience] = []
+        clean: list[Experience] = []
         for exp in experiences:
             if self._bcf_permissible(exp):
                 clean.append(exp)
@@ -240,7 +249,7 @@ class ConsolidationPipeline:
                 bcf_rejected += 1
 
         # --- Step 3: R+ filter ---
-        scored: List[tuple] = []
+        scored: list[tuple] = []
         for exp in clean:
             score = self.re.score(exp)
             exp.relevance_score = score
@@ -254,7 +263,7 @@ class ConsolidationPipeline:
         # Flag near-duplicate / potentially-conflicting experiences (very high
         # similarity to an existing LTSS node) for review; they still pass
         # through so the MRF can decide redundancy vs. reinforcement.
-        consistent: List[tuple] = []
+        consistent: list[tuple] = []
         for exp, score in scored:
             try:
                 coh = self.ltss.max_cosine_similarity(exp.embedding)
@@ -262,29 +271,35 @@ class ConsolidationPipeline:
                 coh = 0.0
             if coh >= LTSS_DUPLICATE_COH:
                 ltss_flagged += 1
-            exp.coherence = coh                 # kept for the confidence validator (step 6)
+            exp.coherence = coh  # kept for the confidence validator (step 6)
             consistent.append((exp, score))
 
         # --- Step 5: MRF ---
-        to_consolidate: List[Experience] = []
+        to_consolidate: list[Experience] = []
         for exp, score in consistent:
             fate = mrf(exp, score, self.ltss)
             if fate == "promote":
                 from src.memory.ltss import LTSSNode
-                self.ltss.add(LTSSNode(
-                    id=exp.uid, embedding=exp.embedding,
-                    content=exp.text, modality=exp.modality,
-                ))
+
+                self.ltss.add(
+                    LTSSNode(
+                        id=exp.uid,
+                        embedding=exp.embedding,
+                        content=exp.text,
+                        modality=exp.modality,
+                    )
+                )
             if fate in ("promote", "retain"):
                 to_consolidate.append(exp)
 
         # --- Step 6: Ambiguity scoring ---
-        final: List[Experience] = []
+        final: list[Experience] = []
         for exp in to_consolidate:
             affinities = self._sector_affinities(exp)
             if self.sector_router is not None:
-                exp.sector_assignment = (self.sector_router.assign(affinities)
-                                         or exp.sector_assignment)
+                exp.sector_assignment = (
+                    self.sector_router.assign(affinities) or exp.sector_assignment
+                )
             if self.validator is not None:
                 # Confidence-gated validation: trust own knowledge, else seek
                 # research / a peer model, else escalate to a human.
@@ -295,7 +310,7 @@ class ConsolidationPipeline:
                     deferred += 1
                 elif decision.fate == "discard":
                     self.adv_buffer.append(exp)
-                else:                            # queue → human review
+                else:  # queue → human review
                     human_queued += 1
             else:
                 verdict = self.ambiguity.handle(exp, affinities, cycle_id)
@@ -307,7 +322,7 @@ class ConsolidationPipeline:
                     human_queued += 1
 
         # Group by routed sector — kept for stats/PGQ only (training is MoE-joint).
-        sector_groups: Dict[int, List[Experience]] = {}
+        sector_groups: dict[int, list[Experience]] = {}
         for exp in final:
             sid = exp.sector_assignment or 1
             sector_groups.setdefault(sid, []).append(exp)
@@ -319,28 +334,37 @@ class ConsolidationPipeline:
         # new terminology → Linguistic, the method → Formal). The safety sector
         # S7 is NEVER in the trainable set here — it stays frozen/isolated and is
         # only shaped by the BCF probe training (train_bcf_head).
-        if (final and self.model is not None and self.tokenizer is not None
-                and getattr(self.model, "gate", None) is not None
-                and len(final) >= MIN_BATCH_PER_SECTOR):
+        if (
+            final
+            and self.model is not None
+            and self.tokenizer is not None
+            and getattr(self.model, "gate", None) is not None
+            and len(final) >= MIN_BATCH_PER_SECTOR
+        ):
             self._moe_update(final, sectors_updated, delta_norms)
             rollback = rollback or self._last_rollback
         elif final and (self.model is None or self.tokenizer is None):
             # Filter-only mode (no model): report which experts would have updated.
-            sectors_updated.extend(sorted({(e.sector_assignment or DEFAULT_SECTOR)
-                                           for e in final}))
+            sectors_updated.extend(sorted({(e.sector_assignment or DEFAULT_SECTOR) for e in final}))
 
         # --- Step 9: PGQ — fed REAL growth signals from this cycle (was hardcoded
         # to 0.0, so PGQ was permanently "stable" and never grew capacity — C1). ---
-        busiest = (max(sector_groups, key=lambda s: len(sector_groups[s]))
-                   if sector_groups else DEFAULT_SECTOR)
+        busiest = (
+            max(sector_groups, key=lambda s: len(sector_groups[s]))
+            if sector_groups
+            else DEFAULT_SECTOR
+        )
         gm = self._growth_metrics(final, delta_norms, busiest)
         pgq_result = self.pgq.evaluate(
-            cycle_id, busiest_sector_id=busiest, sectors=self.sectors,
-            model=self.model, **gm,
+            cycle_id,
+            busiest_sector_id=busiest,
+            sectors=self.sectors,
+            model=self.model,
+            **gm,
         )
 
         # --- Audit log ---
-        modality_counts: Dict[str, int] = {}
+        modality_counts: dict[str, int] = {}
         for exp in experiences:
             modality_counts[exp.modality] = modality_counts.get(exp.modality, 0) + 1
 
@@ -363,8 +387,10 @@ class ConsolidationPipeline:
         )
         self._write_log(entry)
         self.buffer.clear()
-        logging.info(f"[consolidation] cycle {cycle_id} done in "
-                     f"{time.time()-t0:.1f}s | health={health:.2f}")
+        logging.info(
+            f"[consolidation] cycle {cycle_id} done in "
+            f"{time.time() - t0:.1f}s | health={health:.2f}"
+        )
         return entry
 
     def _bcf_permissible(self, exp: Experience) -> bool:
@@ -375,8 +401,12 @@ class ConsolidationPipeline:
         pipeline-only mode), so consolidation never silently drops data in
         test/toy runs.
         """
-        if (self.model is None or self.tokenizer is None or self.bcf is None
-                or not getattr(self.tokenizer, "ready", False)):
+        if (
+            self.model is None
+            or self.tokenizer is None
+            or self.bcf is None
+            or not getattr(self.tokenizer, "ready", False)
+        ):
             return True
         text = getattr(exp, "text", "") or ""
         if not text:
@@ -388,8 +418,8 @@ class ConsolidationPipeline:
         if not ids:
             return True
         toks = backend.current().ops.array(np.asarray([ids[:CONSOL_SEQ_LEN]], dtype=np.int64))
-        self.model.set_active_sectors([])          # core-only for the BCF gate
-        h = self.model(toks)[:, -1, :]             # final-token hidden state
+        self.model.set_active_sectors([])  # core-only for the BCF gate
+        h = self.model(toks)[:, -1, :]  # final-token hidden state
         return bool(self.bcf.is_permissible(h).item())
 
     def _get_adapter(self, sid: int):
@@ -410,7 +440,7 @@ class ConsolidationPipeline:
                 return routed
         return [(exp.sector_assignment or DEFAULT_SECTOR, 1.0)]
 
-    def _build_token_batch(self, group: List[Experience]):
+    def _build_token_batch(self, group: list[Experience]):
         """
         Tokenize a group of experiences into a padded [B, CONSOL_SEQ_LEN+1]
         batch for the masked LM consolidation update. Returns None if no text
@@ -432,14 +462,14 @@ class ConsolidationPipeline:
                 continue
             ids = ids[:L]
             if len(ids) < L:
-                ids = ids + [0] * (L - len(ids))   # pad_id = 0
+                ids = ids + [0] * (L - len(ids))  # pad_id = 0
             rows.append(ids)
         if not rows:
             return None
         return backend.current().ops.array(np.asarray(rows, dtype=np.int64))
 
     def _rolling_health(self, clean: bool, window: int = 30) -> float:
-        self._cycle_history.append(clean)   # type: ignore
+        self._cycle_history.append(clean)  # type: ignore
         if len(self._cycle_history) > window:
             self._cycle_history.pop(0)
         clean_list = [c for c in self._cycle_history if isinstance(c, bool)]

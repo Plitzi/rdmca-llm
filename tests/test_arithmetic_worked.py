@@ -7,6 +7,7 @@ Guards: the worked steps are arithmetically correct (incl. carry/borrow), the st
 result always equals the true value, multi-digit examples appear even at level 1, and a
 meaningful fraction of generated examples are worked.
 """
+
 import re
 import sys
 from pathlib import Path
@@ -17,18 +18,18 @@ from src.data.graded import _add_worked, _sub_worked, gen_arithmetic
 
 
 def test_add_worked_correct_with_and_without_carry():
-    assert _add_worked(1234, 5555).endswith("So 1234 + 5555 = 6789.")   # no carry
+    assert _add_worked(1234, 5555).endswith("So 1234 + 5555 = 6789.")  # no carry
     s = _add_worked(47, 38)
-    assert s.endswith("So 47 + 38 = 85.") and "carry 1" in s            # carry
+    assert s.endswith("So 47 + 38 = 85.") and "carry 1" in s  # carry
     # the final "So a + b = R" is always the true sum
     for a, b in [(0, 0), (9, 9), (99, 1), (4567, 8999), (1000, 1)]:
         assert _add_worked(a, b).endswith(f"So {a} + {b} = {a + b}.")
 
 
 def test_sub_worked_correct_with_and_without_borrow():
-    assert _sub_worked(68, 45).endswith("So 68 - 45 = 23.")             # no borrow
+    assert _sub_worked(68, 45).endswith("So 68 - 45 = 23.")  # no borrow
     s = _sub_worked(52, 37)
-    assert s.endswith("So 52 - 37 = 15.") and "borrow 1" in s           # borrow
+    assert s.endswith("So 52 - 37 = 15.") and "borrow 1" in s  # borrow
     for a, b in [(9, 9), (100, 1), (5000, 1234), (80, 7)]:
         assert _sub_worked(a, b).endswith(f"So {a} - {b} = {a - b}.")
 
@@ -37,8 +38,13 @@ def test_gen_arithmetic_emits_correct_worked_examples_at_level1():
     """Even at level 1, worked multi-digit examples appear and every stated result is
     the true value (so the model is trained on CORRECT computation, not noise)."""
     rows = list(gen_arithmetic(800, level=1, seed=3))
-    worked = [r["text"] for r in rows if "write" in r["text"] or "borrow" in r["text"]
-              or re.search(r"So \d+ [+-] \d+ = \d+\.$", r["text"])]
+    worked = [
+        r["text"]
+        for r in rows
+        if "write" in r["text"]
+        or "borrow" in r["text"]
+        or re.search(r"So \d+ [+-] \d+ = \d+\.$", r["text"])
+    ]
     assert len(worked) > 50, "expected a meaningful fraction of worked examples"
     # multi-digit operands must appear (the whole point — generalization beyond 1 digit)
     assert any(re.search(r"So \d{2,} [+-]", w) for w in worked)
@@ -61,9 +67,11 @@ def test_question_prompt_never_maps_to_a_bare_pm_result():
     bare result that fails OOD (the observed 12+7→'14'). +/- bare facts stay declarative
     ('5 + 9 = 14'); only ×/÷ (no worked form) may use the Q&A surface."""
     rows = [r["text"] for r in gen_arithmetic(20000, level=1, seed=11)]
-    worked = lambda t: "Assistant:" in t and ". So " in t
-    bad = [t for t in rows
-           if re.search(r"What is \d+ [+-] \d+\?", t) and not worked(t)]
+
+    def worked(t):
+        return "Assistant:" in t and ". So " in t
+
+    bad = [t for t in rows if re.search(r"What is \d+ [+-] \d+\?", t) and not worked(t)]
     assert not bad, f"+/- question prompt mapped to a bare answer (collision): {bad[:3]}"
     # and worked is a major share (the stage's core faculty gets a lot of gradient)
     n_worked = sum(1 for t in rows if worked(t))

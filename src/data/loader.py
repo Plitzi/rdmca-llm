@@ -534,10 +534,11 @@ class DataLoader:
         split (no replay, no oversampling) for honest generalization measurement."""
         mcfg    = cfg["model"]
         tcfg    = cfg["training"]
+        from src.stages import stage_data_dir
+
         stage_cfg = cfg["curriculum"][f"stage{stage}"]   # key-based (levels may omit stages)
-        lvl       = cfg.get("level")                      # per-level layout: data/level{N}/stage{S}
-        default_dir = f"data/level{lvl}/stage{stage}" if lvl is not None else f"data/stage{stage}"
-        data_dir  = stage_cfg.get("data_dir", default_dir)
+        # Each stage owns its data folder inside its package; a config data_dir wins.
+        data_dir  = stage_data_dir(stage, cfg)
         # Optional per-source oversampling, e.g. data.source_weights:{dialogue:3.0}
         # to push the conversational share of the training mixture up.
         source_weights = None if val else (stage_cfg.get("data", {}) or {}).get("source_weights")

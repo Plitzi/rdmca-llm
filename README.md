@@ -19,7 +19,7 @@ pip install -r requirements.txt   # base + torch; MLX auto-added only on Apple S
 # 2. Exercise the WHOLE real pipeline at the most basic level (1 = preescolar)
 python scripts/prepare_data.py    --level 1 --stage 1
 python scripts/train_tokenizer.py --level 1
-python train_stage.py             --level 1 --stage 1
+python scripts/train.py             --level 1 --stage 1
 python uses/chat/run_chat.py      --level 1 --stage 1
 ```
 

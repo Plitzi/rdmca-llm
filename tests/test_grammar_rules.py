@@ -7,12 +7,13 @@ wider words — toward a university-graduate base).
 Guards: morphology is CORRECT (curated, never naive +s/+ed), the article a/an rule is right,
 many distinct rule types appear, and level widens the part-of-speech vocabulary.
 """
+
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.graded import gen_grammar, _PLURAL_IRREG, _PAST_IRREG, _COMPARATIVE
+from src.data.graded import _COMPARATIVE, _PAST_IRREG, _PLURAL_IRREG, gen_grammar
 
 
 def test_no_naive_morphology_errors():
@@ -20,9 +21,21 @@ def test_no_naive_morphology_errors():
     'a adjective', verb-synonym in an adjective frame."""
     texts = [r["text"] for r in gen_grammar(2000, level=1, seed=1)]
     blob = "\n".join(texts)
-    for bad in ["runned", "goed", "eated", "gooses", "mans", "childs",
-                "a apple", "a egg", "a adjective", "a insect", "a elephant",
-                "very begin", "very start"]:
+    for bad in [
+        "runned",
+        "goed",
+        "eated",
+        "gooses",
+        "mans",
+        "childs",
+        "a apple",
+        "a egg",
+        "a adjective",
+        "a insect",
+        "a elephant",
+        "very begin",
+        "very start",
+    ]:
         assert bad not in blob, f"grammar produced an error: {bad!r}"
 
 
@@ -41,20 +54,35 @@ def test_many_rule_types_and_completion_form():
     texts = [r["text"] for r in gen_grammar(2000, level=1, seed=3)]
     blob = "\n".join(texts)
     # a spread of distinct grammar faculties is taught
-    for marker in ["is a noun", "is a verb", "is an adjective",       # parts of speech
-                   "before a vowel", "plural", "past tense",          # a/an, plural, tense
-                   "compare two things", "comes before the noun",     # comparative, adjective
-                   "subject and a verb", "opposite of"]:              # sentence, antonym
+    for marker in [
+        "is a noun",
+        "is a verb",
+        "is an adjective",  # parts of speech
+        "before a vowel",
+        "plural",
+        "past tense",  # a/an, plural, tense
+        "compare two things",
+        "comes before the noun",  # comparative, adjective
+        "subject and a verb",
+        "opposite of",
+    ]:  # sentence, antonym
         assert marker in blob, f"missing rule type: {marker}"
-    assert any(t.startswith("User:") and "Assistant:" in t for t in texts)   # completion Q&A
+    assert any(t.startswith("User:") and "Assistant:" in t for t in texts)  # completion Q&A
 
 
 def test_vocab_scales_with_level():
     """Higher level draws part-of-speech vocab from more dictionary tiers → a richer word
     set, while teaching the SAME rules (the per-level enrichment the design relies on)."""
     from src.data.graded import _DICT_TIERS
+
     if len(_DICT_TIERS) < 2:
-        return                                   # only one tier defined; nothing to compare
-    words = lambda lvl: {w for r in gen_grammar(4000, level=lvl, seed=4)
-                         for w in r["text"].replace("'", " ").split()}
+        return  # only one tier defined; nothing to compare
+
+    def words(lvl):
+        return {
+            w
+            for r in gen_grammar(4000, level=lvl, seed=4)
+            for w in r["text"].replace("'", " ").split()
+        }
+
     assert len(words(2)) >= len(words(1))

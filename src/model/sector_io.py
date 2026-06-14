@@ -14,9 +14,10 @@ is added additively. The cognitive MoE experts (S1..S6) and safety (S7) are a
 separate concern (daily consolidation), so behavioral sectors use their own id
 range and explicit routing.
 """
+
 from __future__ import annotations
+
 from pathlib import Path
-from typing import List, Optional
 
 import src.backend as backend
 
@@ -44,11 +45,18 @@ def frozen_core_path(root: Path) -> Path:
 
 
 def _make_adapter(model, sector_id: int, rank: int = BEHAVIORAL_RANK):
-    from src.model.lora import SectorAdapter
     from src.model.config import LoRAConfig
-    return SectorAdapter(LoRAConfig(
-        d_model=model.cfg.d_model, n_layers=len(model.blocks),
-        sector_id=sector_id, rank=rank, kv_dim=model.cfg.kv_dim))
+    from src.model.lora import SectorAdapter
+
+    return SectorAdapter(
+        LoRAConfig(
+            d_model=model.cfg.d_model,
+            n_layers=len(model.blocks),
+            sector_id=sector_id,
+            rank=rank,
+            kv_dim=model.cfg.kv_dim,
+        )
+    )
 
 
 def attach_for_training(model, stage: int, rank: int = BEHAVIORAL_RANK):
@@ -59,10 +67,10 @@ def attach_for_training(model, stage: int, rank: int = BEHAVIORAL_RANK):
     B = backend.current()
     sid = sector_id_for_stage(stage)
     adapter = _make_adapter(model, sid, rank)
-    model.attach_sectors({sid: adapter}, moe=False)     # explicit routing, no gate
-    model.set_active_sectors([(sid, 1.0)])              # always-on during training
-    B.engine.freeze_all(model)                          # freeze everything…
-    B.engine.set_trainable(model, [adapter])            # …then re-enable the sector only
+    model.attach_sectors({sid: adapter}, moe=False)  # explicit routing, no gate
+    model.set_active_sectors([(sid, 1.0)])  # always-on during training
+    B.engine.freeze_all(model)  # freeze everything…
+    B.engine.set_trainable(model, [adapter])  # …then re-enable the sector only
     return sid, adapter
 
 
@@ -74,7 +82,7 @@ def save_sector(adapter, root: Path, stage: int) -> Path:
     return p
 
 
-def trained_sector_stages(root: Path, up_to: Optional[int] = None) -> List[int]:
+def trained_sector_stages(root: Path, up_to: int | None = None) -> list[int]:
     """Behavioral stages with a saved sector under `root` (optionally ≤ up_to)."""
     d = sectors_dir(root)
     if not d.exists():
@@ -90,7 +98,7 @@ def trained_sector_stages(root: Path, up_to: Optional[int] = None) -> List[int]:
     return sorted(out)
 
 
-def load_for_inference(model, root: Path, stage: Optional[int]) -> Optional[str]:
+def load_for_inference(model, root: Path, stage: int | None) -> str | None:
     """Load the frozen cognitive core and attach every trained behavioral sector
     (≤ stage) onto `model`. Returns a short label, or None when there's no frozen
     core or no applicable sector — so the caller falls back to the plain per-stage
@@ -105,7 +113,7 @@ def load_for_inference(model, root: Path, stage: Optional[int]) -> Optional[str]
     return f"frozen cognitive core + behavioral sectors {sects}"
 
 
-def attach_trained_sectors(model, root: Path, up_to: Optional[int] = None) -> List[int]:
+def attach_trained_sectors(model, root: Path, up_to: int | None = None) -> list[int]:
     """Attach + load every trained behavioral sector (≤ up_to) onto `model` as
     always-on adapters. Returns the attached stage list. No-op (returns []) if
     none are present, so a plain cognitive-stage checkpoint still works."""
@@ -113,8 +121,9 @@ def attach_trained_sectors(model, root: Path, up_to: Optional[int] = None) -> Li
     if not stages:
         return []
     B = backend.current()
-    adapters = {sector_id_for_stage(s): _make_adapter(model, sector_id_for_stage(s))
-                for s in stages}
+    adapters = {
+        sector_id_for_stage(s): _make_adapter(model, sector_id_for_stage(s)) for s in stages
+    }
     model.attach_sectors(adapters, moe=False)
     for s in stages:
         B.engine.load_weights(adapters[sector_id_for_stage(s)], str(sector_path(root, s)))

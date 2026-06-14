@@ -5,9 +5,10 @@ These are pure data (no tensor framework imported), so configs can be built and
 inspected without selecting a compute backend — important because the backend
 must be chosen *before* the backend-bound model modules are imported.
 """
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass
@@ -23,7 +24,7 @@ class ModelConfig:
     ffn_dim: int = 1024
     context_len: int = 2048
     vocab_size: int = 32000
-    mrl_dims: List[int] = field(default_factory=lambda: [64, 128, 256])
+    mrl_dims: list[int] = field(default_factory=lambda: [64, 128, 256])
     dropout: float = 0.1
     rope_theta: float = 10000.0
     # Multi-Token Prediction (MTP): N auxiliary heads predict tokens t+2…t+N+1 at
@@ -34,15 +35,15 @@ class ModelConfig:
     # this is a per-level capacity knob — the FUNCTION is uniform across levels,
     # only the SIZE scales — so it does not break the identical-structure principle.
     n_mtp_heads: int = 0
-    mtp_hidden_dim: int | None = None    # head inner width; None → d_model // 2
-    mtp_loss_weight: float = 0.3         # weight of EACH MTP head's CE in the loss
+    mtp_hidden_dim: int | None = None  # head inner width; None → d_model // 2
+    mtp_loss_weight: float = 0.3  # weight of EACH MTP head's CE in the loss
     # Per-Layer Embeddings (PLE, Gemma-style compression): each block gets its own
     # cheap token-identity lookup (d_ple wide), gated against a context projection
     # and projected up into the residual stream — a "fresh reminder" of token
     # identity that fights signal dilution in deep stacks. The lookup tables are
     # near-zero-FLOP and quantizable/memory-mappable. 0 = disabled (default).
     ple_dim: int = 0
-    ple_gated: bool = True               # sigmoid-gated identity↔context merge
+    ple_gated: bool = True  # sigmoid-gated identity↔context merge
     # Gradient (activation) checkpointing: recompute each block's activations in the
     # backward pass instead of storing them — a large activation-memory saving
     # (5-10×) for ~20-30% extra compute. The decisive lever for fitting deep/long-
@@ -70,8 +71,9 @@ class ModelConfig:
         if self.d_model % self.n_heads != 0:
             raise ValueError(f"d_model ({self.d_model}) not divisible by n_heads ({self.n_heads})")
         if self.n_heads % self.n_kv_heads != 0:
-            raise ValueError(f"n_heads ({self.n_heads}) not divisible by "
-                             f"n_kv_heads ({self.n_kv_heads})")
+            raise ValueError(
+                f"n_heads ({self.n_heads}) not divisible by n_kv_heads ({self.n_kv_heads})"
+            )
 
     @property
     def kv_dim(self) -> int:
@@ -85,7 +87,7 @@ class LoRAConfig:
     n_layers: int
     sector_id: int
     rank: int
-    alpha: float = 1.0   # scaling: weight = alpha / rank
+    alpha: float = 1.0  # scaling: weight = alpha / rank
     # K/V LoRA deltas must match the (GQA-narrowed) K/V projection width
     # (n_kv_heads·head_dim). None → kv_dim = d_model (plain multi-head attention).
     kv_dim: int | None = None

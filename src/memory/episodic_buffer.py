@@ -9,11 +9,12 @@ Memory tier hierarchy:
   T2 — Consolidation buffer:        priority queue, pending sector update
   T3 — LTSS:                        long-term persistent (ltss.py)
 """
+
 from __future__ import annotations
+
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import numpy as np
 
@@ -22,17 +23,17 @@ import numpy as np
 class Experience:
     text: str
     embedding: np.ndarray
-    modality: str = "text"          # text | image | audio | mixed
-    feedback: str = "neutral"       # neutral | accepted | corrected — the user's
-                                    # reaction; drives the Relevance Engine's Utility
-                                    # (a corrected error is the highest-value signal).
+    modality: str = "text"  # text | image | audio | mixed
+    feedback: str = "neutral"  # neutral | accepted | corrected — the user's
+    # reaction; drives the Relevance Engine's Utility
+    # (a corrected error is the highest-value signal).
     timestamp: float = field(default_factory=time.time)
     uid: str = field(default_factory=lambda: str(uuid.uuid4()))
     relevance_score: float = 0.0
-    sector_assignment: Optional[int] = None   # s* after STR routing
+    sector_assignment: int | None = None  # s* after STR routing
     retrieval_count: int = 0
     age_days: float = 0.0
-    episodic_context: List["Experience"] = field(default_factory=list)
+    episodic_context: list[Experience] = field(default_factory=list)
 
     def update_age(self) -> None:
         self.age_days = (time.time() - self.timestamp) / 86400.0
@@ -45,18 +46,18 @@ class EpisodicBuffer:
     """
 
     def __init__(self, max_size: int = 1000):
-        self.max_size  = max_size
-        self._buffer:  List[Experience] = []
+        self.max_size = max_size
+        self._buffer: list[Experience] = []
 
     def add(self, exp: Experience) -> None:
         if len(self._buffer) >= self.max_size:
             self._buffer.pop(0)
         self._buffer.append(exp)
 
-    def all(self) -> List[Experience]:
+    def all(self) -> list[Experience]:
         return list(self._buffer)
 
-    def recent(self, n: int = 50) -> List[Experience]:
+    def recent(self, n: int = 50) -> list[Experience]:
         return self._buffer[-n:]
 
     def clear(self) -> None:

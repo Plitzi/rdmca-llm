@@ -14,6 +14,7 @@ Constraint hierarchy (§15.2):
 
 Backend-neutral (written against `src.backend.current()`).
 """
+
 from __future__ import annotations
 
 import src.backend as backend
@@ -23,7 +24,7 @@ nn = B.nn
 ops = B.ops
 
 
-BCF_THRESHOLD = 0.5   # B(a,s) < threshold → action blocked
+BCF_THRESHOLD = 0.5  # B(a,s) < threshold → action blocked
 
 
 class BCFHead(nn.Module):
@@ -59,7 +60,7 @@ def bcf_loss(logits, labels):
 def _hidden_states(model, tokenizer, texts, seq_len: int = 128):
     """Final-token foundational hidden state for each text (core only)."""
     if hasattr(model, "set_active_sectors"):
-        model.set_active_sectors([])          # BCF reads the frozen core
+        model.set_active_sectors([])  # BCF reads the frozen core
     rows = []
     for t in texts:
         try:
@@ -68,9 +69,9 @@ def _hidden_states(model, tokenizer, texts, seq_len: int = 128):
             ids = tokenizer.encode(t)
         ids = (ids or [0])[:seq_len]
         toks = ops.array(ids)[None]
-        h = model(toks)[:, -1, :]             # [1, d_model]
+        h = model(toks)[:, -1, :]  # [1, d_model]
         rows.append(h)
-    return ops.concatenate(rows, axis=0)      # [N, d_model]
+    return ops.concatenate(rows, axis=0)  # [N, d_model]
 
 
 def bcf_accuracy(model, tokenizer, bcf_head: BCFHead, probes) -> float:
@@ -80,22 +81,21 @@ def bcf_accuracy(model, tokenizer, bcf_head: BCFHead, probes) -> float:
     """
     if not probes:
         return 1.0
-    texts  = [p[0] for p in probes]
+    texts = [p[0] for p in probes]
     labels = ops.array([float(p[1]) for p in probes])
-    h      = _hidden_states(model, tokenizer, texts)
-    preds  = ops.astype(bcf_head.score(h).squeeze(-1) >= BCF_THRESHOLD, ops.float32)
+    h = _hidden_states(model, tokenizer, texts)
+    preds = ops.astype(bcf_head.score(h).squeeze(-1) >= BCF_THRESHOLD, ops.float32)
     return float(ops.astype(preds == labels, ops.float32).mean().item())
 
 
-def bcf_train_step(model, tokenizer, bcf_head: BCFHead,
-                   probes, optimizer) -> float:
+def bcf_train_step(model, tokenizer, bcf_head: BCFHead, probes, optimizer) -> float:
     """
     One supervised step on the BCF head over a probe batch. Only the BCF head
     is trainable — the foundational hidden states are read frozen. Returns loss.
     """
-    texts  = [p[0] for p in probes]
+    texts = [p[0] for p in probes]
     labels = ops.array([float(p[1]) for p in probes])
-    h      = ops.stop_gradient(_hidden_states(model, tokenizer, texts))  # frozen features
+    h = ops.stop_gradient(_hidden_states(model, tokenizer, texts))  # frozen features
 
     def loss_fn(head):
         return bcf_loss(head(h), labels)
@@ -106,8 +106,7 @@ def bcf_train_step(model, tokenizer, bcf_head: BCFHead,
     return B.engine.item(loss)
 
 
-def bcf_probe_delta(model, tokenizer, bcf_head: BCFHead,
-                    probes, baseline_acc: float) -> float:
+def bcf_probe_delta(model, tokenizer, bcf_head: BCFHead, probes, baseline_acc: float) -> float:
     """
     BCF accuracy change vs. a baseline (Consolidation §2.3.2). A positive
     return value means degradation (post-update accuracy fell below baseline).

@@ -7,13 +7,13 @@ Backend-neutral: written once against the active backend facade
 (`src.backend.current()`), so the same code runs on MLX or PyTorch. Select the
 backend (via `src.backend.select`) BEFORE importing this module.
 """
+
 from __future__ import annotations
-from typing import List, Optional
 
 import numpy as np
 
 import src.backend as backend
-from src.model.config import ModelConfig   # re-exported below for compatibility
+from src.model.config import ModelConfig  # re-exported below for compatibility
 
 B = backend.current()
 nn = B.nn
@@ -37,13 +37,14 @@ def set_model_precision(model, precision: str) -> None:
 # the backend parameter tree; converted to backend tensors on the fly per pass.
 # ---------------------------------------------------------------------------
 
+
 def _rope_tables(dim: int, theta: float, max_len: int):
     """Precompute cos/sin rotation tables [max_len, dim//2] as numpy arrays."""
     half = dim // 2
     exponents = np.arange(0, half, dtype=np.float32) * 2.0 / dim
-    inv_freq = 1.0 / (theta ** exponents)                 # [half]
-    positions = np.arange(max_len, dtype=np.float32)      # [max_len]
-    freqs = np.outer(positions, inv_freq)                 # [max_len, half]
+    inv_freq = 1.0 / (theta**exponents)  # [half]
+    positions = np.arange(max_len, dtype=np.float32)  # [max_len]
+    freqs = np.outer(positions, inv_freq)  # [max_len, half]
     return np.cos(freqs), np.sin(freqs)
 
 
@@ -57,15 +58,15 @@ def apply_rope(x, cos, sin):
     x1 = x[..., :half]
     x2 = x[..., half:]
     # cos/sin precomputed in fp32; cast to x.dtype so bf16/fp16 stays low-prec.
-    cos = ops.astype(cos[None, :, None, :], x.dtype)      # [1, S, 1, half]
+    cos = ops.astype(cos[None, :, None, :], x.dtype)  # [1, S, 1, half]
     sin = ops.astype(sin[None, :, None, :], x.dtype)
-    return ops.concatenate([x1 * cos - x2 * sin,
-                            x1 * sin + x2 * cos], axis=-1)
+    return ops.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1)
 
 
 # ---------------------------------------------------------------------------
 # Building blocks
 # ---------------------------------------------------------------------------
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -80,10 +81,11 @@ class RMSNorm(nn.Module):
 
 class SwiGLU(nn.Module):
     """SwiGLU FFN: two projections, swish gate, output projection."""
+
     def __init__(self, d_model: int, ffn_dim: int):
         super().__init__()
         self.gate_proj = nn.Linear(d_model, ffn_dim, bias=False)
-        self.up_proj   = nn.Linear(d_model, ffn_dim, bias=False)
+        self.up_proj = nn.Linear(d_model, ffn_dim, bias=False)
         self.down_proj = nn.Linear(ffn_dim, d_model, bias=False)
 
     def __call__(self, x):
@@ -94,35 +96,36 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         assert cfg.d_model % cfg.n_heads == 0
-        self.n_heads    = cfg.n_heads
-        self.n_kv_heads = cfg.n_kv_heads or cfg.n_heads     # GQA: KV heads (≤ n_heads)
-        self.head_dim   = cfg.d_model // cfg.n_heads
-        self.kv_dim     = self.n_kv_heads * self.head_dim   # K/V projection width
+        self.n_heads = cfg.n_heads
+        self.n_kv_heads = cfg.n_kv_heads or cfg.n_heads  # GQA: KV heads (≤ n_heads)
+        self.head_dim = cfg.d_model // cfg.n_heads
+        self.kv_dim = self.n_kv_heads * self.head_dim  # K/V projection width
         # RoPE splits head_dim into half cos / half sin pairs; an odd head_dim would
         # make x2 one element wider than cos/sin and break the rotation broadcast.
         assert self.head_dim % 2 == 0, f"head_dim must be even for RoPE, got {self.head_dim}"
-        self.scale    = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
 
         # GQA: Q is full width (n_heads·head_dim = d_model); K/V are narrower
         # (n_kv_heads·head_dim), so the KV cache shrinks n_heads/n_kv_heads×. The
         # KV heads are shared across query-head groups by the fused SDPA kernel.
-        self.q_proj = nn.Linear(cfg.d_model, cfg.d_model,  bias=False)
-        self.k_proj = nn.Linear(cfg.d_model, self.kv_dim,  bias=False)
-        self.v_proj = nn.Linear(cfg.d_model, self.kv_dim,  bias=False)
-        self.o_proj = nn.Linear(cfg.d_model, cfg.d_model,  bias=False)
+        self.q_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
+        self.k_proj = nn.Linear(cfg.d_model, self.kv_dim, bias=False)
+        self.v_proj = nn.Linear(cfg.d_model, self.kv_dim, bias=False)
+        self.o_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
 
         # RoPE tables (numpy host arrays — invisible to the param tree). Their
         # backend-tensor form is built lazily and cached on first forward (L9).
         self._rope_cos, self._rope_sin = _rope_tables(
-            self.head_dim, cfg.rope_theta, cfg.context_len)
+            self.head_dim, cfg.rope_theta, cfg.context_len
+        )
         self._rope_cos_t = None
         self._rope_sin_t = None
 
         # Sector wiring (set by RDMCAFoundational.attach_sectors). Plain Python
         # attributes, ignored by both backends' parameter trees.
         self.layer_idx = 0
-        self._sector_delta = None      # model._compute_delta(layer, proj, x, route)
-        self._sector_route = None      # model._route(x) -> per-token expert weights
+        self._sector_delta = None  # model._compute_delta(layer, proj, x, route)
+        self._sector_route = None  # model._route(x) -> per-token expert weights
 
     def __call__(self, x, mask=None, cache=None, pos_offset=0, return_kv=False):
         """Attention over `x`.
@@ -153,8 +156,8 @@ class CausalSelfAttention(nn.Module):
             q = q + self._sector_delta(self.layer_idx, "q", x, route)
             k = k + self._sector_delta(self.layer_idx, "k", x, route)
             v = v + self._sector_delta(self.layer_idx, "v", x, route)
-        q = q.reshape(Bsz, S, H,   Hd)
-        k = k.reshape(Bsz, S, Hkv, Hd)        # GQA: fewer KV heads than query heads
+        q = q.reshape(Bsz, S, H, Hd)
+        k = k.reshape(Bsz, S, Hkv, Hd)  # GQA: fewer KV heads than query heads
         v = v.reshape(Bsz, S, Hkv, Hd)
 
         # Apply RoPE at absolute positions [pos_offset, pos_offset+S). Convert the
@@ -165,13 +168,13 @@ class CausalSelfAttention(nn.Module):
         if self._rope_cos_t is None:
             self._rope_cos_t = ops.array(self._rope_cos)
             self._rope_sin_t = ops.array(self._rope_sin)
-        cos = self._rope_cos_t[pos_offset:pos_offset + S]
-        sin = self._rope_sin_t[pos_offset:pos_offset + S]
+        cos = self._rope_cos_t[pos_offset : pos_offset + S]
+        sin = self._rope_sin_t[pos_offset : pos_offset + S]
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        q = ops.transpose(q, (0, 2, 1, 3))    # [B, H,   S, Hd]
-        k = ops.transpose(k, (0, 2, 1, 3))    # [B, Hkv, S, Hd]
+        q = ops.transpose(q, (0, 2, 1, 3))  # [B, H,   S, Hd]
+        k = ops.transpose(k, (0, 2, 1, 3))  # [B, Hkv, S, Hd]
         v = ops.transpose(v, (0, 2, 1, 3))
 
         # KV cache: prepend the past keys/values (seq axis = 2) so the new queries
@@ -189,8 +192,9 @@ class CausalSelfAttention(nn.Module):
         # training (cache is None, S>1); single-token decode attends to all cached
         # keys, so no mask. Attention-weight dropout is dropped (residual + FFN
         # dropout remain) — modern small LLMs train fine with 0 attention dropout.
-        out = ops.sdpa(q, k, v, scale=self.scale,
-                       is_causal=(cache is None and S > 1), attn_mask=mask)
+        out = ops.sdpa(
+            q, k, v, scale=self.scale, is_causal=(cache is None and S > 1), attn_mask=mask
+        )
         out = ops.transpose(out, (0, 2, 1, 3)).reshape(Bsz, S, D)
         proj = self.o_proj(out)
         if self._sector_delta is not None:
@@ -201,10 +205,10 @@ class CausalSelfAttention(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
-        self.ln1  = RMSNorm(cfg.d_model)
+        self.ln1 = RMSNorm(cfg.d_model)
         self.attn = CausalSelfAttention(cfg)
-        self.ln2  = RMSNorm(cfg.d_model)
-        self.ffn  = SwiGLU(cfg.d_model, cfg.ffn_dim)
+        self.ln2 = RMSNorm(cfg.d_model)
+        self.ffn = SwiGLU(cfg.d_model, cfg.ffn_dim)
         self.drop = nn.Dropout(cfg.dropout)
 
     def __call__(self, x, mask=None):
@@ -226,6 +230,7 @@ class TransformerBlock(nn.Module):
 # Main model
 # ---------------------------------------------------------------------------
 
+
 class RDMCAFoundational(nn.Module):
     """
     Foundational decoder-only transformer for RDMCA T2 Edge.
@@ -235,7 +240,7 @@ class RDMCAFoundational(nn.Module):
 
     def __init__(self, cfg: ModelConfig):
         super().__init__()
-        self.cfg    = cfg
+        self.cfg = cfg
         # TODO(multimodal / "M1"): embed is sized to cfg.vocab_size, which is the
         # TEXT vocab (8192) — deliberately, to avoid wasting params and creating
         # "phantom logits" over the unused image/audio ranges of the unified layout
@@ -247,10 +252,10 @@ class RDMCAFoundational(nn.Module):
         # train at the full 20480 vocab (that brings back the phantom-logit problem
         # the text_vocab_size fix removed). Note: embed is WEIGHT-TIED to the output
         # projection (see head_at_dim), so growing embed.weight grows both at once.
-        self.embed  = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.drop   = nn.Dropout(cfg.dropout)
+        self.embed = nn.Embedding(cfg.vocab_size, cfg.d_model)
+        self.drop = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
-        self.ln_f   = RMSNorm(cfg.d_model)
+        self.ln_f = RMSNorm(cfg.d_model)
 
         # Optional performance modules — both off by default (cfg defaults 0), both
         # part of the cognitive core (freeze with it after BCF), both serialise as
@@ -260,10 +265,12 @@ class RDMCAFoundational(nn.Module):
         self.ple = None
         if cfg.ple_dim > 0:
             from src.model.ple import PerLayerEmbeddings
+
             self.ple = PerLayerEmbeddings(cfg)
         self.mtp = None
         if cfg.n_mtp_heads > 0:
             from src.model.mtp import MTPModule
+
             self.mtp = MTPModule(cfg, cfg.n_mtp_heads, cfg.mtp_hidden_dim or cfg.d_model // 2)
 
         # Output projection is WEIGHT-TIED to the input embedding (no separate head):
@@ -276,12 +283,12 @@ class RDMCAFoundational(nn.Module):
         # Sector state (populated by attach_sectors). int-keyed dict for logic;
         # params are registered for the backend via engine.register_submodules.
         self.sectors = None
-        self.gate = None              # SectorGate (MoE router over S1..S6)
-        self._expert_ids = []         # sector ids routed by the gate (experts)
-        self._safety_ids = []         # always-on, isolated safety sectors (S7)
-        self._moe_capacity_factor = 1.25   # per-expert capacity slack (MLX dispatch)
+        self.gate = None  # SectorGate (MoE router over S1..S6)
+        self._expert_ids = []  # sector ids routed by the gate (experts)
+        self._safety_ids = []  # always-on, isolated safety sectors (S7)
+        self._moe_capacity_factor = 1.25  # per-expert capacity slack (MLX dispatch)
         self._routing = _Routing()
-        self._aux_accum = 0.0         # MoE load-balance loss accumulated per forward
+        self._aux_accum = 0.0  # MoE load-balance loss accumulated per forward
         self._aux_count = 0
 
     # ------------------------------------------------------------------
@@ -291,14 +298,14 @@ class RDMCAFoundational(nn.Module):
     def head_at_dim(self, h, d: int):
         """Project the first d hidden dims to vocab using the tied embedding as the
         output head (weight tying): logits = h[:, :d] @ embed.weight[:, :d].T."""
-        w_d = self.embed.weight[:, :d]           # [vocab, d] — tied input/output matrix
-        return h[..., :d] @ w_d.T                # [..., vocab]
+        w_d = self.embed.weight[:, :d]  # [vocab, d] — tied input/output matrix
+        return h[..., :d] @ w_d.T  # [..., vocab]
 
     # ------------------------------------------------------------------
 
     def __call__(self, tokens, mask=None):
         """Forward pass. Returns full-dim hidden states [B, S, d_model]."""
-        self._aux_accum = 0.0          # reset MoE aux loss for this forward
+        self._aux_accum = 0.0  # reset MoE aux loss for this forward
         self._aux_count = 0
         x = self.drop(self.embed(tokens))
         ckpt = getattr(self.cfg, "gradient_checkpointing", False)
@@ -332,7 +339,7 @@ class RDMCAFoundational(nn.Module):
         for i, block in enumerate(self.blocks):
             past = caches[i] if caches is not None else None
             x, kv = block.forward_cached(x, cache=past, pos_offset=pos_offset)
-            if self.ple is not None:                 # same per-layer PLE as training
+            if self.ple is not None:  # same per-layer PLE as training
                 x = x + self.ple(tokens, x, i)
             new_caches.append(kv)
         return self.ln_f(x), new_caches
@@ -372,11 +379,13 @@ class RDMCAFoundational(nn.Module):
         Bsz, S, V = logits.shape
         if mask is None:
             return ops.cross_entropy(
-                logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="mean")
+                logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="mean"
+            )
         ce = ops.cross_entropy(
-            logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="none")
+            logits.reshape(Bsz * S, V), targets.reshape(Bsz * S), reduction="none"
+        )
         m = ops.astype(mask[:, 1:].reshape(Bsz * S), ce.dtype)
-        return ops.sum(ce * m) / (ops.sum(m) + 1e-6)   # mean over assistant targets
+        return ops.sum(ce * m) / (ops.sum(m) + 1e-6)  # mean over assistant targets
 
     # ------------------------------------------------------------------
     # MRL loss (multi-scale Matryoshka)
@@ -392,11 +401,11 @@ class RDMCAFoundational(nn.Module):
                 the plain mean over all tokens (pretraining / validation).
         Returns scalar loss (weighted sum across MRL dims).
         """
-        inputs  = tokens[:, :-1]   # [B, S]
-        targets = tokens[:, 1:]    # [B, S]
-        tmask   = mask[:, 1:] if mask is not None else None   # align with targets
+        inputs = tokens[:, :-1]  # [B, S]
+        targets = tokens[:, 1:]  # [B, S]
+        tmask = mask[:, 1:] if mask is not None else None  # align with targets
 
-        h = self(inputs)           # [B, S, d_model]
+        h = self(inputs)  # [B, S, d_model]
 
         # Accumulate into `total` lazily (start from the first weighted term) rather
         # than from a float32 `ops.array(0.0)` — adding a float32 scalar to a bf16
@@ -405,12 +414,12 @@ class RDMCAFoundational(nn.Module):
         # on the smallest dim and only ~33% on the full dim — yet inference uses the
         # FULL d_model head, so its upper columns were undertrained. Equal weight
         # gives the full head a fair share (≥50%).
-        total   = None
+        total = None
         weights = [1.0 for _ in self.cfg.mrl_dims]
-        w_sum   = sum(weights)
+        w_sum = sum(weights)
 
-        for w, d in zip(weights, self.cfg.mrl_dims):
-            logits_d = self.head_at_dim(h, d)              # [B, S, vocab]
+        for w, d in zip(weights, self.cfg.mrl_dims, strict=False):
+            logits_d = self.head_at_dim(h, d)  # [B, S, vocab]
             Bsz, S, V = logits_d.shape
             if tmask is None:
                 loss_d = ops.cross_entropy(
@@ -419,7 +428,7 @@ class RDMCAFoundational(nn.Module):
                     reduction="mean",
                 )
             else:
-                ce = ops.cross_entropy(                    # [Bsz*S] per-token loss
+                ce = ops.cross_entropy(  # [Bsz*S] per-token loss
                     logits_d.reshape(Bsz * S, V),
                     targets.reshape(Bsz * S),
                     reduction="none",
@@ -428,7 +437,7 @@ class RDMCAFoundational(nn.Module):
                 # Mean over the unmasked (assistant) targets. +1e-6 guards the rare
                 # packed window with no response token (loss 0 ⇒ no gradient).
                 loss_d = ops.sum(ce * m) / (ops.sum(m) + 1e-6)
-            term  = (w / w_sum) * loss_d
+            term = (w / w_sum) * loss_d
             total = term if total is None else total + term
 
         # Multi-Token Prediction auxiliary loss (optional): each head k predicts the
@@ -436,19 +445,19 @@ class RDMCAFoundational(nn.Module):
         # completion-only mask so MTP, like the main loss, learns on the response
         # tokens only. No-op when MTP is disabled.
         if self.mtp is not None:
-            embed_next = self.embed(inputs)                # [B,S,d_model]
+            embed_next = self.embed(inputs)  # [B,S,d_model]
             for k, logits_k in enumerate(self.mtp(h, embed_next)):
-                tgt_k = targets[:, k + 1:]                  # head k → tokens[:, k+2:]
+                tgt_k = targets[:, k + 1 :]  # head k → tokens[:, k+2:]
                 Bk, Sk, Vk = logits_k.shape
                 if tmask is None:
                     loss_k = ops.cross_entropy(
-                        logits_k.reshape(Bk * Sk, Vk),
-                        tgt_k.reshape(Bk * Sk), reduction="mean")
+                        logits_k.reshape(Bk * Sk, Vk), tgt_k.reshape(Bk * Sk), reduction="mean"
+                    )
                 else:
                     ce = ops.cross_entropy(
-                        logits_k.reshape(Bk * Sk, Vk),
-                        tgt_k.reshape(Bk * Sk), reduction="none")
-                    mk = ops.astype(tmask[:, k + 1:].reshape(Bk * Sk), ce.dtype)
+                        logits_k.reshape(Bk * Sk, Vk), tgt_k.reshape(Bk * Sk), reduction="none"
+                    )
+                    mk = ops.astype(tmask[:, k + 1 :].reshape(Bk * Sk), ce.dtype)
                     loss_k = ops.sum(ce * mk) / (ops.sum(mk) + 1e-6)
                 total = total + self.cfg.mtp_loss_weight * loss_k
 
@@ -473,8 +482,9 @@ class RDMCAFoundational(nn.Module):
     # Sector integration (post foundational freeze)
     # ------------------------------------------------------------------
 
-    def attach_sectors(self, sectors: dict, moe: bool = True, top_k: int = 2,
-                       capacity_factor: float = 1.25) -> None:
+    def attach_sectors(
+        self, sectors: dict, moe: bool = True, top_k: int = 2, capacity_factor: float = 1.25
+    ) -> None:
         """
         Register LoRA sector adapters and wire them into every attention block.
         `sectors` is a {sector_id: SectorAdapter} mapping. Adapters are
@@ -487,6 +497,7 @@ class RDMCAFoundational(nn.Module):
         legacy explicit routing (`set_active_sectors`).
         """
         from src.model.moe import SectorGate
+
         self.sectors = sectors
         self._moe_capacity_factor = capacity_factor
         B.engine.register_submodules(self, "_sector_store", list(sectors.values()))
@@ -495,7 +506,7 @@ class RDMCAFoundational(nn.Module):
 
         if moe and self._expert_ids:
             self.gate = SectorGate(self.cfg.d_model, len(self._expert_ids), top_k=top_k)
-            B.engine.align_module(self.gate, self)   # match model device/dtype
+            B.engine.align_module(self.gate, self)  # match model device/dtype
             self._routing.mode = "moe"
         else:
             self.gate = None
@@ -511,13 +522,20 @@ class RDMCAFoundational(nn.Module):
         sector creation, §10.7.4). It participates in inference immediately
         because _compute_delta reads self.sectors live. If MoE is active and the
         sector is an expert (not safety), the gate grows by one column."""
-        from src.model.lora import SectorAdapter
         from src.model.config import LoRAConfig
+        from src.model.lora import SectorAdapter
+
         if self.sectors is None:
             self.attach_sectors({})
-        adapter = SectorAdapter(LoRAConfig(
-            d_model=self.cfg.d_model, n_layers=len(self.blocks),
-            sector_id=sector_id, rank=rank, kv_dim=self.cfg.kv_dim))
+        adapter = SectorAdapter(
+            LoRAConfig(
+                d_model=self.cfg.d_model,
+                n_layers=len(self.blocks),
+                sector_id=sector_id,
+                rank=rank,
+                kv_dim=self.cfg.kv_dim,
+            )
+        )
         self.sectors[sector_id] = adapter
         # Re-register so the new adapter's params are tracked by the backend.
         B.engine.register_submodules(self, "_sector_store", list(self.sectors.values()))
@@ -528,7 +546,7 @@ class RDMCAFoundational(nn.Module):
             if sector_id not in self._expert_ids:
                 self._expert_ids.append(sector_id)
                 if self.gate is not None:
-                    self.gate.grow_experts(1)     # new expert column (zero-init)
+                    self.gate.grow_experts(1)  # new expert column (zero-init)
         return adapter
 
     def use_moe(self) -> None:
@@ -548,10 +566,11 @@ class RDMCAFoundational(nn.Module):
         if self.gate is None or self._routing.mode != "moe":
             return None
         from src.model.moe import expert_weights, load_balance_loss
+
         idx, w, logits = self.gate(x)
         self._aux_accum = self._aux_accum + load_balance_loss(logits, idx, len(self._expert_ids))
         self._aux_count += 1
-        return expert_weights(idx, w, len(self._expert_ids))   # [B, S, n_experts]
+        return expert_weights(idx, w, len(self._expert_ids))  # [B, S, n_experts]
 
     def _compute_delta(self, layer_idx: int, proj: str, x, route=None):
         """Combine sector deltas for one projection in one layer.
@@ -583,13 +602,13 @@ class RDMCAFoundational(nn.Module):
             tokens beyond an expert's capacity are dropped (rare with the default
             capacity factor)."""
         Bsz, S, D = x.shape
-        flat = x.reshape(-1, D)                                 # [T, D]
-        w    = route.reshape(-1, len(self._expert_ids))         # [T, E]
+        flat = x.reshape(-1, D)  # [T, D]
+        w = route.reshape(-1, len(self._expert_ids))  # [T, E]
         if getattr(ops, "nonzero", None) is not None:
             out = self._moe_sparse(layer_idx, proj, flat, w)
         else:
             out = self._moe_capacity(layer_idx, proj, flat, w)
-        for sid in self._safety_ids:                            # safety: always on
+        for sid in self._safety_ids:  # safety: always on
             out = out + self.sectors[sid].delta(layer_idx, proj, flat)
         return out.reshape(Bsz, S, D)
 
@@ -598,11 +617,11 @@ class RDMCAFoundational(nn.Module):
         run the expert on that subset, scatter the weighted result back."""
         out = ops.zeros((flat.shape[0], flat.shape[1]), dtype=flat.dtype)
         for pos, sid in enumerate(self._expert_ids):
-            we = w[:, pos]                                      # [T] gate weight
-            nz = ops.nonzero(we > 0.0)                          # tokens routed here
+            we = w[:, pos]  # [T] gate weight
+            nz = ops.nonzero(we > 0.0)  # tokens routed here
             if nz.shape[0] == 0:
                 continue
-            xe = ops.index_select(flat, nz, 0)                  # [m, D]
+            xe = ops.index_select(flat, nz, 0)  # [m, D]
             de = self.sectors[sid].delta(layer_idx, proj, xe)
             out = ops.index_add(out, nz, de * we[nz][:, None])
         return out
@@ -620,28 +639,32 @@ class RDMCAFoundational(nn.Module):
         # out of the autograd graph (stop_gradient), or MLX errors trying to take
         # a VJP w.r.t. scatter indices. The combine WEIGHTS stay differentiable so
         # the gate still learns.
-        keep = ops.astype(w > 0.0, ops.float32)                 # [T, E] routed?
-        pos  = ops.astype(ops.cumsum(keep, axis=0), ops.int_) - 1   # queue position per expert
-        within = keep * ops.astype(pos < C, ops.float32)        # 1 if kept within capacity
-        keep_i = ops.astype(within, ops.int_)                   # [T, E] int 0/1
+        keep = ops.astype(w > 0.0, ops.float32)  # [T, E] routed?
+        pos = ops.astype(ops.cumsum(keep, axis=0), ops.int_) - 1  # queue position per expert
+        within = keep * ops.astype(pos < C, ops.float32)  # 1 if kept within capacity
+        keep_i = ops.astype(within, ops.int_)  # [T, E] int 0/1
 
-        erange = ops.astype(ops.arange(E), ops.int_)[None, :]   # [1, E]
-        slot   = erange * C + pos                                # [T, E] target slot per expert
-        trash  = E * C                                           # overflow / not-routed sink
-        target = ops.stop_gradient(slot * keep_i + trash * (1 - keep_i))   # [T, E] int (const)
-        tok    = ops.astype(ops.arange(T), ops.int_)[:, None] + ops.zeros((1, E), dtype=ops.int_)
+        erange = ops.astype(ops.arange(E), ops.int_)[None, :]  # [1, E]
+        slot = erange * C + pos  # [T, E] target slot per expert
+        trash = E * C  # overflow / not-routed sink
+        target = ops.stop_gradient(slot * keep_i + trash * (1 - keep_i))  # [T, E] int (const)
+        tok = ops.astype(ops.arange(T), ops.int_)[:, None] + ops.zeros((1, E), dtype=ops.int_)
 
-        disp = ops.stop_gradient(ops.index_add(ops.zeros((E * C + 1,), dtype=ops.int_),
-                                 target.reshape(-1), tok.reshape(-1)))     # token id per slot
-        comb = ops.index_add(ops.zeros((E * C + 1,)),
-                             target.reshape(-1), w.reshape(-1))            # gate weight per slot (diff)
-        disp = disp[:E * C].reshape(E, C)
-        comb = comb[:E * C].reshape(E, C)
+        disp = ops.stop_gradient(
+            ops.index_add(
+                ops.zeros((E * C + 1,), dtype=ops.int_), target.reshape(-1), tok.reshape(-1)
+            )
+        )  # token id per slot
+        comb = ops.index_add(
+            ops.zeros((E * C + 1,)), target.reshape(-1), w.reshape(-1)
+        )  # gate weight per slot (diff)
+        disp = disp[: E * C].reshape(E, C)
+        comb = comb[: E * C].reshape(E, C)
 
         out = ops.zeros((T, D), dtype=flat.dtype)
         for e, sid in enumerate(self._expert_ids):
-            idx_e = ops.stop_gradient(disp[e])                 # [C] token indices (const)
-            xe = ops.index_select(flat, idx_e, 0)              # [C, D]
+            idx_e = ops.stop_gradient(disp[e])  # [C] token indices (const)
+            xe = ops.index_select(flat, idx_e, 0)  # [C, D]
             de = self.sectors[sid].delta(layer_idx, proj, xe)  # [C, D]
             out = ops.index_add(out, idx_e, de * comb[e][:, None])
         return out
@@ -651,6 +674,7 @@ class _Routing:
     """Plain (non-Module) holder for routing state, so the backend parameter tree
     never tries to traverse it. `mode` is 'moe' (gated experts + safety) or
     'explicit' (only the `active` list)."""
+
     def __init__(self):
         self.mode = "explicit"
         self.active = []

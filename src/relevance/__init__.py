@@ -1,2 +1,2 @@
-from .engine import RelevanceEngine, THETA_1, THETA_2, THETA_3
-from .penalty import penalty_score, is_adversarial
+from .engine import THETA_1, THETA_2, THETA_3, RelevanceEngine
+from .penalty import is_adversarial, penalty_score

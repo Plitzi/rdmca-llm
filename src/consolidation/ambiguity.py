@@ -15,18 +15,19 @@ Thresholds:
 Human queue actions: consolidate | discard | adversarial | policy_defer
 Experiences unreviewed for 7 days are auto-expired.
 """
+
 from __future__ import annotations
+
 import json
 import os
 import time
-from dataclasses import dataclass, asdict
-from typing import List, Literal, Optional
+from dataclasses import asdict, dataclass
+from typing import Literal
 
 from src.memory.episodic_buffer import Experience
 
-
-AMBIGUITY_DEFER  = 0.3
-AMBIGUITY_QUEUE  = 0.7
+AMBIGUITY_DEFER = 0.3
+AMBIGUITY_QUEUE = 0.7
 MAX_DEFER_CYCLES = 3
 QUEUE_EXPIRY_DAYS = 7
 
@@ -41,7 +42,7 @@ class QueueEntry:
     added_at: float
     defer_count: int = 0
     reviewed: bool = False
-    action: Optional[HumanAction] = None
+    action: HumanAction | None = None
     rationale: str = ""
 
 
@@ -52,9 +53,9 @@ class AmbiguityHandler:
     """
 
     def __init__(self, queue_path: str = "logs/human_queue.jsonl"):
-        self.queue_path    = queue_path
-        self._deferred:    List[tuple]     = []   # (experience, defer_count)
-        self._queue:       List[QueueEntry] = []
+        self.queue_path = queue_path
+        self._deferred: list[tuple] = []  # (experience, defer_count)
+        self._queue: list[QueueEntry] = []
         os.makedirs(os.path.dirname(queue_path) or ".", exist_ok=True)
 
     def ambiguity_score(self, affinities: list) -> float:
@@ -63,9 +64,9 @@ class AmbiguityHandler:
             return 1.0
         return 1.0 - max(sc for _, sc in affinities)
 
-    def handle(self, experience: Experience,
-               affinities: list,
-               cycle_id: str) -> Literal["clear", "defer", "queue"]:
+    def handle(
+        self, experience: Experience, affinities: list, cycle_id: str
+    ) -> Literal["clear", "defer", "queue"]:
         """
         Evaluate ambiguity and decide fate:
           'clear'  → experience passes to consolidation pipeline
@@ -95,8 +96,7 @@ class AmbiguityHandler:
         self._persist_entry(entry)
         return "queue"
 
-    def queue_for_review(self, experience: Experience, score: float,
-                         rationale: str = "") -> None:
+    def queue_for_review(self, experience: Experience, score: float, rationale: str = "") -> None:
         """Escalate an experience to the human queue directly (used by the
         confidence-gated validator, not just by sector-ambiguity). `score` is the
         ambiguity/uncertainty in [0,1]."""
@@ -115,8 +115,7 @@ class AmbiguityHandler:
         """Remove queue entries older than QUEUE_EXPIRY_DAYS. Returns count."""
         cutoff = time.time() - QUEUE_EXPIRY_DAYS * 86400
         before = len(self._queue)
-        self._queue = [e for e in self._queue
-                       if e.added_at > cutoff or e.reviewed]
+        self._queue = [e for e in self._queue if e.added_at > cutoff or e.reviewed]
         return before - len(self._queue)
 
     def _get_defer_count(self, uid: str) -> int:

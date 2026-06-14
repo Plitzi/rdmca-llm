@@ -23,18 +23,18 @@ Decision thresholds (§5.2):
   θ2 — consolidation buffer eligibility
   θ3 — parameter update eligibility
 """
+
 from __future__ import annotations
-import time
+
 import math
-from typing import List, Optional, Tuple
+import time
 
 import numpy as np
 
-
 # Default thresholds (tunable via config)
-THETA_1 = 0.3   # memory retrieval
-THETA_2 = 0.5   # consolidation buffer
-THETA_3 = 0.7   # parameter update
+THETA_1 = 0.3  # memory retrieval
+THETA_2 = 0.5  # consolidation buffer
+THETA_3 = 0.7  # parameter update
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -50,7 +50,7 @@ def novelty(e_emb: np.ndarray, state_emb: np.ndarray) -> float:
     return 1.0 - cosine_similarity(e_emb, state_emb)
 
 
-def utility(e_emb: np.ndarray, grad_buffer: Optional[np.ndarray]) -> float:
+def utility(e_emb: np.ndarray, grad_buffer: np.ndarray | None) -> float:
     """U(e,s) — alignment with recent loss gradient. §5.1"""
     if grad_buffer is None:
         return 0.5
@@ -66,7 +66,7 @@ def utility(e_emb: np.ndarray, grad_buffer: Optional[np.ndarray]) -> float:
 _FEEDBACK_UTILITY = {"corrected": 1.0, "accepted": 0.7, "neutral": None}
 
 
-def feedback_utility(feedback: str) -> Optional[float]:
+def feedback_utility(feedback: str) -> float | None:
     """Return the ground-truth U for a feedback label, or None to fall back to the
     gradient-alignment proxy (neutral / unknown)."""
     return _FEEDBACK_UTILITY.get(feedback)
@@ -80,16 +80,14 @@ def coherence(e_emb: np.ndarray, ltss) -> float:
     return max(score for _, score in results)
 
 
-def repetition(e_emb: np.ndarray,
-               episodic_buffer: list,
-               lambda_decay: float = 0.1) -> float:
+def repetition(e_emb: np.ndarray, episodic_buffer: list, lambda_decay: float = 0.1) -> float:
     """Rep(e,s) — temporal-decay similarity to past experiences. §5.1"""
     if not episodic_buffer:
         return 0.0
     now = time.time()
     scores = []
     for past in episodic_buffer:
-        sim   = cosine_similarity(e_emb, past.embedding)
+        sim = cosine_similarity(e_emb, past.embedding)
         decay = math.exp(-lambda_decay * (now - past.timestamp))
         scores.append(sim * decay)
     return sum(scores) / len(scores)
@@ -101,18 +99,20 @@ class RelevanceEngine:
     Runs on CPU — target latency < 5ms per experience (M2).
     """
 
-    def __init__(self,
-                 ltss=None,
-                 weights: Tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2),
-                 thresholds: Tuple[float, float, float] = (THETA_1, THETA_2, THETA_3),
-                 lambda_p: float = 1.0):
-        self.ltss       = ltss
+    def __init__(
+        self,
+        ltss=None,
+        weights: tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2),
+        thresholds: tuple[float, float, float] = (THETA_1, THETA_2, THETA_3),
+        lambda_p: float = 1.0,
+    ):
+        self.ltss = ltss
         # (α, β, γ, δ) for (Novelty, Utility, Coherence, Repetition); sum to 1.
         self.alpha, self.beta, self.gamma, self.delta = weights
-        self.lambda_p   = lambda_p              # penalty weight λ_p (§15.4)
-        self.theta1, self.theta2, self.theta3   = thresholds
-        self._state_emb:   Optional[np.ndarray] = None
-        self._grad_buffer: Optional[np.ndarray] = None
+        self.lambda_p = lambda_p  # penalty weight λ_p (§15.4)
+        self.theta1, self.theta2, self.theta3 = thresholds
+        self._state_emb: np.ndarray | None = None
+        self._grad_buffer: np.ndarray | None = None
 
     def update_state(self, state_emb: np.ndarray) -> None:
         self._state_emb = state_emb
@@ -127,21 +127,21 @@ class RelevanceEngine:
         experience must have: .embedding (np.ndarray), .episodic_context (list)
         """
         from .penalty import penalty_score
+
         e = experience.embedding
         s = self._state_emb if self._state_emb is not None else np.zeros_like(e)
 
-        N   = novelty(e, s)
+        N = novelty(e, s)
         # Prefer ground-truth feedback for Utility; fall back to the gradient proxy
         # when the turn is unlabeled. A `corrected` experience (U=1.0) thus gets a
         # strong R⁺ boost — error-driven learning, the highest-value signal.
         fb_u = feedback_utility(getattr(experience, "feedback", "neutral"))
-        U   = fb_u if fb_u is not None else utility(e, self._grad_buffer)
-        C   = coherence(e, self.ltss) if self.ltss else 0.5
-        Rep = repetition(e, experience.episodic_context)   # additive (spacing effect)
-        P   = penalty_score(experience)
+        U = fb_u if fb_u is not None else utility(e, self._grad_buffer)
+        C = coherence(e, self.ltss) if self.ltss else 0.5
+        Rep = repetition(e, experience.episodic_context)  # additive (spacing effect)
+        P = penalty_score(experience)
 
-        R = (self.alpha * N + self.beta * U
-             + self.gamma * C + self.delta * Rep)
+        R = self.alpha * N + self.beta * U + self.gamma * C + self.delta * Rep
         return float(R - self.lambda_p * P)
 
     # Threshold helpers

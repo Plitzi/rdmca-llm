@@ -8,7 +8,9 @@ Real environment variables always win over `.env` values. Loading is idempotent
 and runs once on import. Uses python-dotenv when installed, else a minimal
 built-in parser so it works before dependencies are installed.
 """
+
 from __future__ import annotations
+
 import os
 from pathlib import Path
 
@@ -25,7 +27,7 @@ def _minimal_load(path: Path) -> None:
         key, _, val = line.partition("=")
         key = key.strip()
         val = val.strip().strip('"').strip("'")
-        if key and key not in os.environ:        # real env takes precedence
+        if key and key not in os.environ:  # real env takes precedence
             os.environ[key] = val
 
 
@@ -38,7 +40,8 @@ def load_env(path: Path = ENV_FILE) -> None:
     if not path.exists():
         return
     try:
-        from dotenv import load_dotenv          # standard, if available
+        from dotenv import load_dotenv  # standard, if available
+
         load_dotenv(path, override=False)
     except ImportError:
         _minimal_load(path)

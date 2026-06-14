@@ -23,11 +23,17 @@ Usage:
   .venv/bin/python scripts/run_benchmarks.py --level 1 --stage 5 --benchmarks wikitext lambada
   .venv/bin/python scripts/run_benchmarks.py --checkpoint dist/checkpoints/level1/stage5/best.npz --level 1
 """
+
 from __future__ import annotations
-import sys, os
-_venv = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "bin", "python")
+
+import os
+import sys
+
+_venv = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "bin", "python"
+)
 if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(_venv):
-    os.execv(_venv, [_venv] + sys.argv)
+    os.execv(_venv, [_venv, *sys.argv])
 
 import argparse
 import csv
@@ -47,10 +53,12 @@ ALL = ["wikitext", "lambada", "mmlu", "gsm8k", "mt_bench"]
 
 # ── scoring primitives ─────────────────────────────────────────────────────────
 
+
 def _logits_np(model, ids):
     """Full-sequence logits [S, V] as numpy for a single token sequence. Uses the
     backend's to_numpy (logits are bf16 at inference; numpy has no bfloat16)."""
     import src.backend as backend
+
     ops = backend.current().ops
     out = model.logits(ops.array(np.asarray([ids], dtype=np.int64)))
     return ops.to_numpy(out)[0]
@@ -71,7 +79,7 @@ def _continuation_logprob(model, prompt_ids, cont_ids) -> float:
     lg = _logits_np(model, ids)
     total = 0.0
     for i, tid in enumerate(cont_ids):
-        pos = len(prompt_ids) + i - 1               # position whose logits predict tid
+        pos = len(prompt_ids) + i - 1  # position whose logits predict tid
         total += float(_logsoftmax_row(lg[pos])[tid])
     return total
 
@@ -87,15 +95,18 @@ def _try_dataset(load, log):
 
 # ── benchmarks ──────────────────────────────────────────────────────────────────
 
+
 def bench_wikitext(model, tok, limit, log) -> dict:
     """Token-level perplexity on wikitext-2 test (sliding 256-token windows)."""
     from datasets import load_dataset
-    ds = _try_dataset(lambda: load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1",
-                                           split="test"), log) \
-        or _try_dataset(lambda: load_dataset("wikitext", "wikitext-2-raw-v1", split="test"), log)
+
+    ds = _try_dataset(
+        lambda: load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test"), log
+    ) or _try_dataset(lambda: load_dataset("wikitext", "wikitext-2-raw-v1", split="test"), log)
     if ds is None:
         return {"skipped": True}
     import src.backend as backend
+
     ops, engine = backend.current().ops, backend.current().engine
     text = "\n".join(r["text"] for r in ds if r["text"].strip())
     ids = tok.encode(text, add_bos=False, add_eos=False)
@@ -104,7 +115,7 @@ def bench_wikitext(model, tok, limit, log) -> dict:
     losses = []
     engine.set_eval(model)
     for s in range(0, n - 1, win):
-        chunk = ids[s:s + win + 1]
+        chunk = ids[s : s + win + 1]
         if len(chunk) < 2:
             continue
         loss = model.eval_ce(ops.array(np.asarray([chunk], dtype=np.int64)))
@@ -120,8 +131,10 @@ def bench_lambada(model, tok, limit, log) -> dict:
     """Last-word prediction accuracy: greedily continue the context and check the
     predicted word matches the held-out final word."""
     from datasets import load_dataset
-    ds = _try_dataset(lambda: load_dataset("EleutherAI/lambada_openai", "en", split="test"), log) \
-        or _try_dataset(lambda: load_dataset("lambada", split="test"), log)
+
+    ds = _try_dataset(
+        lambda: load_dataset("EleutherAI/lambada_openai", "en", split="test"), log
+    ) or _try_dataset(lambda: load_dataset("lambada", split="test"), log)
     if ds is None:
         return {"skipped": True}
     correct = total = 0
@@ -141,9 +154,13 @@ def bench_lambada(model, tok, limit, log) -> dict:
         for _ in range(max(1, len(cont)) + 2):
             row = _logits_np(model, ids)[-1]
             nxt = int(row.argmax())
-            gen.append(nxt); ids.append(nxt)
-        pred = re.sub(r"[^\w]", "", tok.decode(gen).split()[0] if tok.decode(gen).split() else "").lower()
-        correct += int(pred == target); total += 1
+            gen.append(nxt)
+            ids.append(nxt)
+        pred = re.sub(
+            r"[^\w]", "", tok.decode(gen).split()[0] if tok.decode(gen).split() else ""
+        ).lower()
+        correct += int(pred == target)
+        total += 1
     acc = correct / total if total else float("nan")
     log(f"  lambada: acc={acc:.3f} ({correct}/{total})")
     return {"acc": acc, "n": total}
@@ -153,6 +170,7 @@ def bench_mmlu(model, tok, limit, log) -> dict:
     """4-way multiple choice: pick the option with the highest length-normalized
     continuation logprob. Chance = 0.25."""
     from datasets import load_dataset
+
     ds = _try_dataset(lambda: load_dataset("cais/mmlu", "all", split="test"), log)
     if ds is None:
         return {"skipped": True}
@@ -164,8 +182,9 @@ def bench_mmlu(model, tok, limit, log) -> dict:
         for ch in choices:
             cont = tok.encode(" " + str(ch), add_bos=False, add_eos=False)
             lp = _continuation_logprob(model, prompt, cont)
-            scores.append(lp / max(1, len(cont)))       # length-normalized
-        correct += int(int(np.argmax(scores)) == ans); total += 1
+            scores.append(lp / max(1, len(cont)))  # length-normalized
+        correct += int(int(np.argmax(scores)) == ans)
+        total += 1
     acc = correct / total if total else float("nan")
     log(f"  mmlu: acc={acc:.3f} ({correct}/{total}) — chance 0.25")
     return {"acc": acc, "n": total}
@@ -174,10 +193,10 @@ def bench_mmlu(model, tok, limit, log) -> dict:
 def bench_gsm8k(model, tok, limit, log, generate) -> dict:
     """Grade-school math: generate a solution and exact-match the final integer."""
     from datasets import load_dataset
+
     ds = _try_dataset(lambda: load_dataset("gsm8k", "main", split="test"), log)
     if ds is None:
         return {"skipped": True}
-    import src.backend as backend
     correct = total = 0
     last_num = re.compile(r"-?\d[\d,]*")
     for r in ds.select(range(min(limit or 100, len(ds)))):
@@ -185,15 +204,26 @@ def bench_gsm8k(model, tok, limit, log, generate) -> dict:
         if not gold:
             continue
         gold_n = gold[-1].replace(",", "")
-        prompt = tok.encode(f"\nUser: {r['question']}\nAssistant:", lang="en",
-                            add_bos=True, add_eos=False)
-        ids, _ = generate(model, list(prompt), max_new_tokens=160, temperature=0.0,
-                          top_p=1.0, vocab_size=model.cfg.vocab_size,
-                          context_len=model.cfg.context_len, stream=False,
-                          decode_fn=tok.decode, top_k=1, rep_penalty=1.0)
+        prompt = tok.encode(
+            f"\nUser: {r['question']}\nAssistant:", lang="en", add_bos=True, add_eos=False
+        )
+        ids, _ = generate(
+            model,
+            list(prompt),
+            max_new_tokens=160,
+            temperature=0.0,
+            top_p=1.0,
+            vocab_size=model.cfg.vocab_size,
+            context_len=model.cfg.context_len,
+            stream=False,
+            decode_fn=tok.decode,
+            top_k=1,
+            rep_penalty=1.0,
+        )
         nums = last_num.findall(tok.decode(ids))
         pred = nums[-1].replace(",", "") if nums else None
-        correct += int(pred == gold_n); total += 1
+        correct += int(pred == gold_n)
+        total += 1
     acc = correct / total if total else float("nan")
     log(f"  gsm8k: acc={acc:.3f} ({correct}/{total})")
     return {"acc": acc, "n": total}
@@ -213,34 +243,47 @@ def bench_mt_bench(model, tok, limit, log, judge_cmd) -> dict:
 
 # ── driver ────────────────────────────────────────────────────────────────────
 
+
 def main():
     ap = argparse.ArgumentParser(description="Run external benchmarks on a checkpoint.")
     ap.add_argument("--level", type=int, default=1)
     ap.add_argument("--stage", type=int, default=None)
     ap.add_argument("--checkpoint", type=str, default=None)
     ap.add_argument("--benchmarks", nargs="*", default=ALL, choices=ALL)
-    ap.add_argument("--limit", type=int, default=None,
-                    help="cap examples per benchmark (speed; default per-bench)")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="cap examples per benchmark (speed; default per-bench)",
+    )
     ap.add_argument("--judge-cmd", type=str, default=None, help="external judge for mt_bench")
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
     if not args.checkpoint and args.stage is None:
-        print("Specify --stage N or --checkpoint PATH"); sys.exit(1)
+        print("Specify --stage N or --checkpoint PATH")
+        sys.exit(1)
 
-    from uses.chat.run_chat import load_model, generate
     from src.config import resolve_config_path
     from src.modalities.text import TextTokenizer
+    from uses.chat.run_chat import generate, load_model
 
-    la = Namespace(config=resolve_config_path(None, args.level), level=args.level,
-                   stage=args.stage, checkpoint=args.checkpoint, dummy=False,
-                   quant="none", force=args.force)
+    la = Namespace(
+        config=resolve_config_path(None, args.level),
+        level=args.level,
+        stage=args.stage,
+        checkpoint=args.checkpoint,
+        dummy=False,
+        quant="none",
+        force=args.force,
+    )
     print("Loading model…")
     model, _ = load_model(la)
     tok = TextTokenizer()
     if not tok.ready:
-        print("Tokenizer not trained — aborting."); sys.exit(1)
+        print("Tokenizer not trained — aborting.")
+        sys.exit(1)
 
     results, t0 = {}, time.time()
     for name in args.benchmarks:
@@ -260,9 +303,14 @@ def main():
             print(f"  [error] {name}: {type(e).__name__}: {e}")
             results[name] = {"error": f"{type(e).__name__}: {e}"}
 
-    record = {"level": args.level, "stage": args.stage,
-              "checkpoint": args.checkpoint, "timestamp": time.time(),
-              "elapsed_s": round(time.time() - t0, 1), "results": results}
+    record = {
+        "level": args.level,
+        "stage": args.stage,
+        "checkpoint": args.checkpoint,
+        "timestamp": time.time(),
+        "elapsed_s": round(time.time() - t0, 1),
+        "results": results,
+    }
 
     out_dir = ROOT / "dist" / "benchmarks"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -272,17 +320,27 @@ def main():
 
     # Append a flat row to history.csv so evolution across levels/stages is plottable.
     hist = out_dir / "history.csv"
-    cols = ["timestamp", "level", "stage", "wikitext_ppl", "lambada_acc",
-            "mmlu_acc", "gsm8k_acc"]
+    cols = ["timestamp", "level", "stage", "wikitext_ppl", "lambada_acc", "mmlu_acc", "gsm8k_acc"]
     new = not hist.exists()
     with open(hist, "a", newline="") as f:
         w = csv.writer(f)
         if new:
             w.writerow(cols)
-        g = lambda b, k: results.get(b, {}).get(k, "")
-        w.writerow([round(record["timestamp"]), args.level, args.stage,
-                    g("wikitext", "ppl"), g("lambada", "acc"),
-                    g("mmlu", "acc"), g("gsm8k", "acc")])
+
+        def g(b, k):
+            return results.get(b, {}).get(k, "")
+
+        w.writerow(
+            [
+                round(record["timestamp"]),
+                args.level,
+                args.stage,
+                g("wikitext", "ppl"),
+                g("lambada", "acc"),
+                g("mmlu", "acc"),
+                g("gsm8k", "acc"),
+            ]
+        )
     print(f"History → {hist}")
 
 

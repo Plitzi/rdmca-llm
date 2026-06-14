@@ -68,7 +68,6 @@ curriculum:
     name: "Language and communication"
     entry_level: 1
     n_tokens: 450_000_000      # > L2 (300M): secundaria, bigger model (~32M params)
-    data_dir: "data/level3/stage1"
     data:
       sources: [wikipedia]            # full Wikipedia, but readability-filtered.
       filter:
@@ -78,7 +77,6 @@ curriculum:
     name: "Perception and pattern recognition"
     entry_level: 1
     n_tokens: 60_000_000
-    data_dir: "data/level3/stage2"
     data:
       sources: [analogies, arc_easy]
       filter: null
@@ -86,7 +84,6 @@ curriculum:
     name: "Abstraction and symbolic composition"
     entry_level: 1
     n_tokens: 110_000_000
-    data_dir: "data/level3/stage3"
     data:
       sources: [arithmetic]
       filter:
@@ -95,7 +92,6 @@ curriculum:
     name: "Causal and procedural reasoning"
     entry_level: 1                     # present from L1 (uniform structure); graded by level.
     n_tokens: 90_000_000
-    data_dir: "data/level3/stage4"
     data:
       sources: [causal_synth]          # synthetic cause→effect statements.
       filter: null
@@ -103,7 +99,6 @@ curriculum:
     name: "Action and tool use"
     entry_level: 0
     n_tokens: 40_000_000
-    data_dir: "data/level3/stage8"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null
@@ -111,7 +106,6 @@ curriculum:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 30_000_000
-    data_dir: "data/level3/stage9"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
@@ -119,7 +113,6 @@ curriculum:
     name: "Skills"
     entry_level: 0
     n_tokens: 30_000_000
-    data_dir: "data/level3/stage10"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
@@ -127,7 +120,6 @@ curriculum:
     name: "Reasoning"
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 80_000_000
-    data_dir: "data/level3/stage5"
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
@@ -136,7 +128,6 @@ curriculum:
     entry_level: 1             # memory is a cognitive faculty: the frozen core learns
                                # to recall and USE injected memory (LTSS + episodic).
     n_tokens: 90_000_000
-    data_dir: "data/level3/stage6"
     data:
       sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
       filter: null
@@ -144,7 +135,6 @@ curriculum:
     name: "Cognitive ethics and BCF"
     entry_level: 1             # core freezes after stage 7 (BCF) at every level (uniform).
     n_tokens: 50_000_000
-    data_dir: "data/level3/stage7"
     data:
       sources: [ethics]
       filter: null

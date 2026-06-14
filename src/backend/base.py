@@ -15,7 +15,9 @@ namespaces, and register it in `registry.py`. No model code changes.
 The model is written once against `B = src.backend.current()` and uses
 `B.nn.*` / `B.ops.*`; the entrypoints drive training through `B.engine.*`.
 """
+
 from __future__ import annotations
+
 from types import SimpleNamespace
 
 
@@ -39,30 +41,82 @@ class Backend:
 # Canonical method/function surface each backend is expected to provide. Kept as
 # documentation + a light self-check used by the test-suite, not as hard ABCs.
 NN_SURFACE = (
-    "Module", "Linear", "Embedding", "Dropout",
-    "Conv1d", "Conv2d", "ConvTranspose1d", "ConvTranspose2d",
-    "Parameter", "ModuleList", "ModuleDict",
+    "Module",
+    "Linear",
+    "Embedding",
+    "Dropout",
+    "Conv1d",
+    "Conv2d",
+    "ConvTranspose1d",
+    "ConvTranspose2d",
+    "Parameter",
+    "ModuleList",
+    "ModuleDict",
 )
 
 OPS_SURFACE = (
-    "array", "arange", "zeros", "ones", "full", "randn",
-    "cos", "sin", "sqrt", "mean", "sum", "concatenate", "outer",
-    "softmax", "sdpa", "sigmoid", "triu", "argmax", "argmin",
-    "transpose", "astype", "stop_gradient",
-    "silu", "relu", "cross_entropy", "bce_with_logits",
-    "to_numpy", "from_numpy",
-    "float32", "bfloat16", "float16",
+    "array",
+    "arange",
+    "zeros",
+    "ones",
+    "full",
+    "randn",
+    "cos",
+    "sin",
+    "sqrt",
+    "mean",
+    "sum",
+    "concatenate",
+    "outer",
+    "softmax",
+    "sdpa",
+    "sigmoid",
+    "triu",
+    "argmax",
+    "argmin",
+    "transpose",
+    "astype",
+    "stop_gradient",
+    "silu",
+    "relu",
+    "cross_entropy",
+    "bce_with_logits",
+    "to_numpy",
+    "from_numpy",
+    "float32",
+    "bfloat16",
+    "float16",
 )
 
 ENGINE_SURFACE = (
-    "value_and_grad", "make_optimizer", "optimizer_step", "set_lr",
-    "eval", "item", "set_precision", "quantize", "set_train", "set_eval",
-    "save_weights", "load_weights", "state_dict", "load_state_dict",
-    "set_trainable", "freeze_all", "register_submodules",
-    "grad_norm", "clip_grads", "accumulate_grads", "finalize_grads",
-    "save_optimizer", "load_optimizer", "param_count", "memory_stats", "set_seed",
+    "value_and_grad",
+    "make_optimizer",
+    "optimizer_step",
+    "set_lr",
+    "eval",
+    "item",
+    "set_precision",
+    "quantize",
+    "set_train",
+    "set_eval",
+    "save_weights",
+    "load_weights",
+    "state_dict",
+    "load_state_dict",
+    "set_trainable",
+    "freeze_all",
+    "register_submodules",
+    "grad_norm",
+    "clip_grads",
+    "accumulate_grads",
+    "finalize_grads",
+    "save_optimizer",
+    "load_optimizer",
+    "param_count",
+    "memory_stats",
+    "set_seed",
     "checkpoint",
-    "align_module",      # called by transformer.py to match a submodule's device/dtype
+    "align_module",  # called by transformer.py to match a submodule's device/dtype
 )
 
 
@@ -71,18 +125,24 @@ def warn_load_mismatch(model_shapes: dict, ckpt_shapes: dict, path: str = "") ->
     load (used so prev-stage/partial weights load) otherwise SILENTLY ignores
     missing/extra/shape-mismatched params, e.g. loading another level's weights."""
     import sys
-    mk, ck  = set(model_shapes), set(ckpt_shapes)
-    missing = mk - ck                                  # model expects, ckpt lacks → init
-    extra   = ck - mk                                  # ckpt has, model ignores
-    mism    = [k for k in (mk & ck) if tuple(model_shapes[k]) != tuple(ckpt_shapes[k])]
+
+    mk, ck = set(model_shapes), set(ckpt_shapes)
+    missing = mk - ck  # model expects, ckpt lacks → init
+    extra = ck - mk  # ckpt has, model ignores
+    mism = [k for k in (mk & ck) if tuple(model_shapes[k]) != tuple(ckpt_shapes[k])]
     if missing or extra or mism:
         tag = f" ({path})" if path else ""
-        print(f"  [load] checkpoint mismatch{tag}: {len(missing)} missing, "
-              f"{len(extra)} unexpected, {len(mism)} shape-mismatched — those params "
-              f"keep their current (uninitialized/previous) values.", file=sys.stderr)
+        print(
+            f"  [load] checkpoint mismatch{tag}: {len(missing)} missing, "
+            f"{len(extra)} unexpected, {len(mism)} shape-mismatched — those params "
+            f"keep their current (uninitialized/previous) values.",
+            file=sys.stderr,
+        )
         for k in mism[:5]:
-            print(f"    shape {k}: model {tuple(model_shapes[k])} vs "
-                  f"ckpt {tuple(ckpt_shapes[k])}", file=sys.stderr)
+            print(
+                f"    shape {k}: model {tuple(model_shapes[k])} vs ckpt {tuple(ckpt_shapes[k])}",
+                file=sys.stderr,
+            )
 
 
 def check_surface(backend: Backend) -> list[str]:

@@ -15,7 +15,9 @@ Special case — Cognitive Surprise:
   If Exc(e) > 2.5 σ, the experience bypasses the standard fate pipeline
   and is promoted directly to LTSS regardless of other scores.
 """
+
 from __future__ import annotations
+
 import math
 import time
 from typing import Literal
@@ -25,27 +27,24 @@ import numpy as np
 from .episodic_buffer import Experience
 from .ltss import LTSS
 
-
 THETA_PROMOTE = 0.65
-THETA_RETAIN  = 0.35
+THETA_RETAIN = 0.35
 SURPRISE_SIGMA = 2.5
-DECAY_LAMBDA   = 0.05   # per-day decay rate
+DECAY_LAMBDA = 0.05  # per-day decay rate
 
 
 Fate = Literal["promote", "retain", "expire"]
 
 
-def z_score(emb: np.ndarray, centroid: np.ndarray,
-            std: np.ndarray) -> float:
+def z_score(emb: np.ndarray, centroid: np.ndarray, std: np.ndarray) -> float:
     """Exceptionality: max z-score component relative to LTSS distribution."""
     denom = np.maximum(std, 1e-8)
     return float(np.max(np.abs(emb - centroid) / denom))
 
 
-def mrf(experience: Experience,
-        relevance_score: float,
-        ltss: LTSS,
-        sigma: tuple = (0.4, 0.2, 0.2, 0.2)) -> Fate:
+def mrf(
+    experience: Experience, relevance_score: float, ltss: LTSS, sigma: tuple = (0.4, 0.2, 0.2, 0.2)
+) -> Fate:
     """
     Evaluate a single experience and return its fate.
 
@@ -61,7 +60,7 @@ def mrf(experience: Experience,
     freq = experience.retrieval_count / max(experience.age_days, 1)
 
     centroid = ltss.global_centroid
-    std      = ltss.global_std
+    std = ltss.global_std
     if centroid is not None and std is not None:
         exc = z_score(e, centroid, std)
         # Cognitive surprise — direct promotion
@@ -70,7 +69,7 @@ def mrf(experience: Experience,
     else:
         exc = 0.0
 
-    coh   = ltss.max_cosine_similarity(e)
+    coh = ltss.max_cosine_similarity(e)
     score = s1 * relevance_score + s2 * freq + s3 * exc + s4 * coh
 
     # Temporal decay

@@ -7,8 +7,8 @@ During inference: multiple sectors can activate simultaneously (weighted).
 During consolidation: one sector s* per experience (highest affinity wins,
                       ties broken by recency of last sector update).
 """
+
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
 
 from src.model.lora import SECTORS
 
@@ -18,9 +18,9 @@ class SectorRouter:
 
     def __init__(self):
         # Track last update time per sector for tie-breaking
-        self._last_update: Dict[int, float] = {s: 0.0 for s in SECTORS}
+        self._last_update: dict[int, float] = dict.fromkeys(SECTORS, 0.0)
 
-    def assign(self, affinities: List[Tuple[int, float]]) -> Optional[int]:
+    def assign(self, affinities: list[tuple[int, float]]) -> int | None:
         """
         Return the primary sector id s* for a given affinity vector.
         Returns None if no sector exceeds the minimum threshold.
@@ -30,8 +30,7 @@ class SectorRouter:
             return None
         # Highest affinity wins; tie-break by stalest update
         top_score = affinities[0][1]
-        candidates = [(sid, sc) for sid, sc in affinities
-                      if abs(sc - top_score) < 0.01]
+        candidates = [(sid, sc) for sid, sc in affinities if abs(sc - top_score) < 0.01]
         if len(candidates) == 1:
             return candidates[0][0]
         # Pick the sector that was updated least recently

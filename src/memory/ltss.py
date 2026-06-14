@@ -4,17 +4,16 @@ Persistent memory: SQLite for node metadata + FAISS for vector similarity.
 Stores abstracted semantic concepts (nodes) with causal/associative edges.
 Target retrieval latency: < 10ms for top-5 among 100k nodes.
 """
+
 from __future__ import annotations
-import json
+
+import contextlib
 import os
 import sqlite3
 import time
-import uuid
-from dataclasses import dataclass, asdict
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
 
 import numpy as np
-
 
 SCHEMA_NODES = """
 CREATE TABLE IF NOT EXISTS ltss_nodes (
@@ -62,9 +61,9 @@ class LTSS:
     def __init__(self, db_path: str = "data/runtime/ltss.db", emb_dim: int = 256):
         self.db_path = db_path
         self.emb_dim = emb_dim
-        self._embeddings: List[np.ndarray] = []
-        self._ids:        List[str]        = []
-        self._conn: Optional[sqlite3.Connection] = None
+        self._embeddings: list[np.ndarray] = []
+        self._ids: list[str] = []
+        self._conn: sqlite3.Connection | None = None
         # Optional FAISS ANN index: search O(N)→O(log N) at scale. Trivial gain at
         # small N (numpy is already sub-ms), decisive past ~100k nodes — present from
         # the start so the progression is visible. Falls back to brute-force numpy
@@ -79,14 +78,19 @@ class LTSS:
         if os.environ.get("RDMCA_FAISS", "").lower() in ("1", "true", "yes", "on"):
             try:
                 import faiss
+
                 self._faiss = faiss
             except Exception as e:
                 # Requested but unavailable → fall back to brute-force numpy, but say
                 # so: at 100k+ nodes that is O(N) instead of O(log N) (~10-100× slower
                 # in consolidation), and a silent fallback hides why search got slow.
                 import warnings
-                warnings.warn(f"RDMCA_FAISS set but faiss import failed ({e}); "
-                              "using brute-force numpy search (slower at scale).")
+
+                warnings.warn(
+                    f"RDMCA_FAISS set but faiss import failed ({e}); "
+                    "using brute-force numpy search (slower at scale).",
+                    stacklevel=2,
+                )
                 self._faiss = None
         self._faiss_index = None
         self._load()
@@ -143,26 +147,33 @@ class LTSS:
     def add(self, node: LTSSNode) -> None:
         """Persist a new node (embedding included) and update the in-memory index."""
         now = time.time()
-        node.created_at    = node.created_at or now
+        node.created_at = node.created_at or now
         node.last_accessed = node.last_accessed or now
         emb = np.asarray(node.embedding, dtype=np.float32)
         self._conn.execute(
             "INSERT OR REPLACE INTO ltss_nodes "
             "(id, embedding, content, modality, sector, created_at, last_accessed, access_count) "
             "VALUES (?,?,?,?,?,?,?,?)",
-            (node.id, emb.tobytes(), node.content, node.modality, node.sector,
-             node.created_at, node.last_accessed, node.access_count),
+            (
+                node.id,
+                emb.tobytes(),
+                node.content,
+                node.modality,
+                node.sector,
+                node.created_at,
+                node.last_accessed,
+                node.access_count,
+            ),
         )
         self._conn.commit()
         self._embeddings.append(emb)
         self._ids.append(node.id)
         self._faiss_add(emb)
 
-    def add_edge(self, src_id: str, dst_id: str,
-                 relation: str, weight: float = 1.0) -> None:
+    def add_edge(self, src_id: str, dst_id: str, relation: str, weight: float = 1.0) -> None:
         self._conn.execute(
-            "INSERT OR REPLACE INTO ltss_edges (src_id,dst_id,relation,weight) "
-            "VALUES (?,?,?,?)", (src_id, dst_id, relation, weight)
+            "INSERT OR REPLACE INTO ltss_edges (src_id,dst_id,relation,weight) VALUES (?,?,?,?)",
+            (src_id, dst_id, relation, weight),
         )
         self._conn.commit()
 
@@ -170,7 +181,7 @@ class LTSS:
     # Retrieval
     # ------------------------------------------------------------------
 
-    def search(self, query: np.ndarray, k: int = 5) -> List[Tuple[str, float]]:
+    def search(self, query: np.ndarray, k: int = 5) -> list[tuple[str, float]]:
         """
         Return top-k (node_id, cosine_similarity) pairs. Uses the FAISS index when
         available (O(log N)); falls back to brute-force numpy (O(N), exact).
@@ -179,19 +190,21 @@ class LTSS:
             return []
         # FAISS path — only when the index covers every id (all nodes embedded), so
         # the returned indices map 1:1 onto self._ids.
-        if (self._faiss_index is not None
-                and self._faiss_index.ntotal == len(self._ids)):
+        if self._faiss_index is not None and self._faiss_index.ntotal == len(self._ids):
             q = np.asarray(query, dtype=np.float32).reshape(1, -1).copy()
             self._faiss.normalize_L2(q)
             sims, idx = self._faiss_index.search(q, min(k, len(self._ids)))
-            return [(self._ids[i], float(s))
-                    for s, i in zip(sims[0], idx[0]) if 0 <= i < len(self._ids)]
+            return [
+                (self._ids[i], float(s))
+                for s, i in zip(sims[0], idx[0], strict=False)
+                if 0 <= i < len(self._ids)
+            ]
         # numpy fallback (exact brute force)
-        mat = np.stack(self._embeddings, axis=0)   # [N, dim]
-        q   = query / (np.linalg.norm(query) + 1e-8)
+        mat = np.stack(self._embeddings, axis=0)  # [N, dim]
+        q = query / (np.linalg.norm(query) + 1e-8)
         mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-8)
         sims = (mat @ q).tolist()
-        ranked = sorted(zip(self._ids, sims), key=lambda x: -x[1])
+        ranked = sorted(zip(self._ids, sims, strict=False), key=lambda x: -x[1])
         return ranked[:k]
 
     def max_cosine_similarity(self, query: np.ndarray) -> float:
@@ -208,27 +221,26 @@ class LTSS:
             finally:
                 self._conn = None
 
-    def __del__(self):                       # best-effort cleanup on GC
-        try:
+    def __del__(self):  # best-effort cleanup on GC
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
-    def get_content(self, node_id: str) -> Optional[str]:
+    def get_content(self, node_id: str) -> str | None:
         """Return the stored content for a node id (None if unknown). Used by the
         inference-time recall (MemoryRecall) to turn a search hit into text."""
         row = self._conn.execute(
-            "SELECT content FROM ltss_nodes WHERE id = ?", (node_id,)).fetchone()
+            "SELECT content FROM ltss_nodes WHERE id = ?", (node_id,)
+        ).fetchone()
         return row[0] if row else None
 
     @property
-    def global_centroid(self) -> Optional[np.ndarray]:
+    def global_centroid(self) -> np.ndarray | None:
         if not self._embeddings:
             return None
         return np.mean(self._embeddings, axis=0)
 
     @property
-    def global_std(self) -> Optional[np.ndarray]:
+    def global_std(self) -> np.ndarray | None:
         if len(self._embeddings) < 2:
             return None
         return np.std(self._embeddings, axis=0)

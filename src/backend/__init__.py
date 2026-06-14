@@ -17,14 +17,16 @@ model modules afterwards (function-local imports). If no explicit selection is
 made, the first `current()` lazily picks a default (MLX if importable, else
 torch) so ad-hoc scripts and tests still work.
 """
+
 from __future__ import annotations
+
 import os
 from typing import Optional
 
-from src.backend.base import Backend
 from src.backend import registry
+from src.backend.base import Backend
 
-_active: Optional[Backend] = None
+_active: Backend | None = None
 
 
 def _default_name() -> str:
@@ -47,22 +49,26 @@ def select(name: str) -> Backend:
     import."""
     global _active
     requested = (name or "").lower()
-    name = registry.resolve(requested)          # fall back BEFORE any heavy import
+    name = registry.resolve(requested)  # fall back BEFORE any heavy import
     if name != requested:
         import warnings
+
         warnings.warn(
             f"Backend {requested!r} is not available here; falling back to {name!r}. "
             "(Set `backend:` in the config or RDMCA_BACKEND to silence.)",
-            stacklevel=2)
+            stacklevel=2,
+        )
     if _active is not None and _active.name == name:
         return _active
     if _active is not None and _active.name != name:
         import warnings
+
         warnings.warn(
             f"Switching backend {_active.name!r} -> {name!r} after it was already "
             "active; model classes already imported remain bound to the old "
             "backend. Select the backend before importing model modules.",
-            stacklevel=2)
+            stacklevel=2,
+        )
     _active = registry.build(name)
     return _active
 
@@ -71,7 +77,7 @@ def current() -> Backend:
     """Return the active backend, lazily selecting a default if none was set."""
     global _active
     if _active is None:
-        select(_default_name())                 # routes through the availability pre-check
+        select(_default_name())  # routes through the availability pre-check
     return _active
 
 

@@ -14,13 +14,14 @@ Claude Code:
 
 Both are dependency-free and POSIX/macOS friendly (no raw-mode / curses).
 """
+
 from __future__ import annotations
 
+import contextlib
 import queue
 import signal
 import sys
 import threading
-from typing import List, Optional
 
 
 class InterruptGuard:
@@ -49,21 +50,19 @@ class InterruptGuard:
     def _on_sigint(self, *_a) -> None:
         self._stop = True
 
-    def __enter__(self) -> "InterruptGuard":
+    def __enter__(self) -> InterruptGuard:
         self._stop = False
         try:
             self._prev = signal.signal(signal.SIGINT, self._on_sigint)
         except (ValueError, OSError):
-            self._prev = None          # not on the main thread → no abort, still safe
+            self._prev = None  # not on the main thread → no abort, still safe
         return self
 
     def __exit__(self, *_a) -> bool:
         if self._prev is not None:
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(signal.SIGINT, self._prev)
-            except (ValueError, OSError):
-                pass
-        return False                   # never swallow exceptions
+        return False  # never swallow exceptions
 
 
 class SessionInput:
@@ -72,7 +71,7 @@ class SessionInput:
     blocks process exit."""
 
     def __init__(self) -> None:
-        self._q: "queue.Queue[str]" = queue.Queue()
+        self._q: queue.Queue[str] = queue.Queue()
         self._eof = threading.Event()  # set once stdin closes (Ctrl-D / pipe end)
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
@@ -82,7 +81,7 @@ class SessionInput:
         # as Enter is pressed, not buffered behind a block read.
         while True:
             line = sys.stdin.readline()
-            if line == "":             # EOF (Ctrl-D / piped input exhausted)
+            if line == "":  # EOF (Ctrl-D / piped input exhausted)
                 self._eof.set()
                 return
             self._q.put(line.rstrip("\n"))
@@ -91,7 +90,7 @@ class SessionInput:
         """How many messages were typed ahead (queued during generation)."""
         return self._q.qsize()
 
-    def next_message(self, prompt: str = "") -> Optional[str]:
+    def next_message(self, prompt: str = "") -> str | None:
         """Block for the next line and return it (already-queued lines come back
         immediately, in order). Returns None at EOF. Polls so Ctrl-C at the prompt
         still raises KeyboardInterrupt (leave the session)."""
@@ -103,13 +102,13 @@ class SessionInput:
                 return self._q.get(timeout=0.2)
             except queue.Empty:
                 if self._eof.is_set() and self._q.empty():
-                    return None        # drained and stdin closed
+                    return None  # drained and stdin closed
                 continue
 
-    def drain_pending(self) -> List[str]:
+    def drain_pending(self) -> list[str]:
         """Return (and remove) all lines already queued — e.g. typed while the model
         was generating — in order."""
-        out: List[str] = []
+        out: list[str] = []
         while True:
             try:
                 out.append(self._q.get_nowait())

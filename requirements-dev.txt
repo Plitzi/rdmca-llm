@@ -1,0 +1,9 @@
+# Herramientas de desarrollo (no necesarias en producción/entrenamiento).
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Ruff = formateador (como Prettier) + linter (como ESLint), en una herramienta.
+#   ruff format .          formatea todo el repo
+#   ruff check .           reporta problemas de lint
+#   ruff check --fix .     autocorrige lo posible
+ruff>=0.15

@@ -51,9 +51,10 @@ moe:
 
 # ── Curriculum STRUCTURE — which cognitive/behavioral stages exist, their canonical
 #    name and entry_level (the level at which a stage first becomes active). This is
-#    level-INDEPENDENT. Each level adds the per-stage DATA (n_tokens, sources, filter)
-#    and, optionally, data_dir (else it defaults to data/level{L}/stage{N}). Names
-#    mirror src/training/stages.py:STAGE_NAMES. ────────────────────────────────────────
+#    level-INDEPENDENT. Each level adds the per-stage DATA (n_tokens, sources, filter).
+#    Each stage OWNS its data folder inside its plugin package
+#    (src/stages/stageNN_<slug>/data/level{L}/); override per stage with `data_dir`.
+#    Stage names/metadata live in the stage plugins (src/stages/, the registry). ────────
 curriculum:
   stage1:  {name: "Language and communication",            entry_level: 1}
   stage2:  {name: "Perception and pattern recognition",    entry_level: 1}

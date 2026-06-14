@@ -8,6 +8,7 @@ guards two things:
   2. The mechanism — a level that omits a shared block inherits it from the base, and the
      level-0 smoke tier (inherit_base: false) stays standalone.
 """
+
 import json
 import sys
 from pathlib import Path
@@ -16,10 +17,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yaml
 
-from src.config import load_config, level_config_path, _deep_merge
+from src.config import _deep_merge, level_config_path, load_config
 
-SNAP = json.loads((Path(__file__).parent / "fixtures" /
-                   "level_configs_snapshot.json").read_text())
+SNAP = json.loads((Path(__file__).parent / "fixtures" / "level_configs_snapshot.json").read_text())
 
 
 def _strkeys(o):
@@ -46,7 +46,7 @@ def test_levels_inherit_shared_base_blocks():
     curriculum stage structure from the base even if its own yaml omits them."""
     base = yaml.safe_load((Path("configs/levels/_base.yaml")).read_text())
     cfg = load_config(level_config_path(1))
-    assert cfg["moe"] == base["moe"]                      # full moe block from base
+    assert cfg["moe"] == base["moe"]  # full moe block from base
     assert cfg.get("skip_gate") is False
     # Every stage carries a name + entry_level (from base, possibly overridden).
     for s in range(1, 8):
@@ -66,4 +66,4 @@ def test_deep_merge_override_wins_and_dicts_merge():
     base = {"a": 1, "b": {"x": 1, "y": 2}, "l": [1, 2]}
     over = {"b": {"y": 9, "z": 3}, "l": [9]}
     out = _deep_merge(base, over)
-    assert out == {"a": 1, "b": {"x": 1, "y": 9, "z": 3}, "l": [9]}   # nested merge, list replace
+    assert out == {"a": 1, "b": {"x": 1, "y": 9, "z": 3}, "l": [9]}  # nested merge, list replace

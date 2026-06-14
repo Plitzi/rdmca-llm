@@ -12,27 +12,30 @@ tokenizer_info.json) so they never collide with text ids. The foundational model
 then consumes one flat token stream — the same next-token objective for every
 modality (Era 3b).
 """
+
 from __future__ import annotations
+
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import numpy as np
 
 from src.config import load_tokenizer_info
-from src.modalities.text import TextTokenizer
-from src.modalities.image import ImageVQVAE
 from src.modalities.audio import AudioVQVAE
+from src.modalities.image import ImageVQVAE
+from src.modalities.text import TextTokenizer
 
 IMAGE_VQVAE_PATH = "dist/tokenizer/image_vqvae.npz"
 AUDIO_VQVAE_PATH = "dist/tokenizer/audio_vqvae.npz"
 
 
 class MultimodalPerception:
-    def __init__(self,
-                 text_tok: Optional[TextTokenizer] = None,
-                 image_tok: Optional[ImageVQVAE] = None,
-                 audio_tok: Optional[AudioVQVAE] = None,
-                 info: Optional[dict] = None):
+    def __init__(
+        self,
+        text_tok: TextTokenizer | None = None,
+        image_tok: ImageVQVAE | None = None,
+        audio_tok: AudioVQVAE | None = None,
+        info: dict | None = None,
+    ):
         self.text = text_tok or TextTokenizer()
         self.image = image_tok
         self.audio = audio_tok
@@ -43,16 +46,20 @@ class MultimodalPerception:
         # not a silent corruption when image/audio encoding is actually used.
         if "modality_layout" not in self.info:
             import warnings
-            warnings.warn("MultimodalPerception: no modality_layout in tokenizer_info "
-                          "— image/audio tokens will NOT be offset and will collide "
-                          "with text ids. Retrain the tokenizer before multimodal use.")
+
+            warnings.warn(
+                "MultimodalPerception: no modality_layout in tokenizer_info "
+                "— image/audio tokens will NOT be offset and will collide "
+                "with text ids. Retrain the tokenizer before multimodal use.",
+                stacklevel=2,
+            )
         self.img_offset = layout.get("image", {}).get("offset", 0)
         self.aud_offset = layout.get("audio", {}).get("offset", 0)
         mt = self.info.get("modality_tokens", {})
-        self.tok_mod_text  = mt.get("mod_text")
+        self.tok_mod_text = mt.get("mod_text")
         self.tok_mod_image = mt.get("mod_image")
         self.tok_mod_audio = mt.get("mod_audio")
-        self.tok_mod_end   = mt.get("mod_end")
+        self.tok_mod_end = mt.get("mod_end")
 
     # -- lazy tokenizer loading -----------------------------------------
     def _image(self) -> ImageVQVAE:
@@ -61,7 +68,8 @@ class MultimodalPerception:
         if self.image is None:
             raise RuntimeError(
                 "Image tokenizer not trained. Run: "
-                "python scripts/train_tokenizer.py --images-dir path/ (or --image-dataset)")
+                "python scripts/train_tokenizer.py --images-dir path/ (or --image-dataset)"
+            )
         return self.image
 
     def _audio(self) -> AudioVQVAE:
@@ -70,10 +78,11 @@ class MultimodalPerception:
         if self.audio is None:
             raise RuntimeError(
                 "Audio tokenizer not trained. Run: "
-                "python scripts/train_tokenizer.py --audio-dir path/")
+                "python scripts/train_tokenizer.py --audio-dir path/"
+            )
         return self.audio
 
-    def _wrap(self, start_tok: Optional[int], body: List[int]) -> List[int]:
+    def _wrap(self, start_tok: int | None, body: list[int]) -> list[int]:
         seq = []
         if start_tok is not None:
             seq.append(start_tok)
@@ -83,29 +92,28 @@ class MultimodalPerception:
         return seq
 
     # -- per-modality encoders ------------------------------------------
-    def encode_text(self, text: str, lang: str = "en",
-                    boundary: bool = False) -> List[int]:
+    def encode_text(self, text: str, lang: str = "en", boundary: bool = False) -> list[int]:
         ids = self.text.encode(text, lang=lang, add_bos=not boundary, add_eos=False)
         if boundary:
             return self._wrap(self.tok_mod_text, ids)
         return ids
 
-    def encode_image(self, image) -> List[int]:
+    def encode_image(self, image) -> list[int]:
         raw = self._image().encode_ids(image)
         return self._wrap(self.tok_mod_image, [self.img_offset + i for i in raw])
 
-    def encode_audio(self, wav) -> List[int]:
+    def encode_audio(self, wav) -> list[int]:
         raw = self._audio().encode_ids(wav)
         return self._wrap(self.tok_mod_audio, [self.aud_offset + i for i in raw])
 
     # -- sequence assembly ----------------------------------------------
-    def build_sequence(self, segments: List[Tuple]) -> List[int]:
+    def build_sequence(self, segments: list[tuple]) -> list[int]:
         """
         segments: list of tuples
           ("text", text, lang)   ("image", image_or_path)   ("audio", wav_or_path)
         Returns one interleaved unified-vocab token list.
         """
-        out: List[int] = []
+        out: list[int] = []
         for seg in segments:
             kind = seg[0]
             if kind == "text":
@@ -125,12 +133,14 @@ class MultimodalPerception:
 # File loaders (kept dependency-light)
 # ---------------------------------------------------------------------------
 
+
 def load_image(src):
     """Path/PIL/np → np [H,W,3]. Returns src unchanged if already an array."""
     if isinstance(src, np.ndarray):
         return src
     if isinstance(src, (str, Path)):
         from PIL import Image
+
         return np.asarray(Image.open(src).convert("RGB"))
     return np.asarray(src)
 
@@ -140,11 +150,12 @@ def _resample(wav: np.ndarray, file_sr: int, sr: int) -> np.ndarray:
     its native rate (e.g. 44.1 kHz) without this gives wrong mel frequencies."""
     if file_sr == sr or len(wav) == 0:
         return wav
-    n = int(round(len(wav) * sr / file_sr))
+    n = round(len(wav) * sr / file_sr)
     try:
         from scipy.signal import resample
+
         return resample(wav, n).astype(np.float32)
-    except ImportError:                                     # linear fallback (no scipy)
+    except ImportError:  # linear fallback (no scipy)
         x = np.linspace(0, len(wav), num=n, endpoint=False)
         return np.interp(x, np.arange(len(wav)), wav).astype(np.float32)
 
@@ -157,18 +168,21 @@ def load_audio(src, sr: int = 16_000):
     if isinstance(src, (str, Path)):
         try:
             import soundfile as sf
-            wav, file_sr = sf.read(str(src))                # keep the file's rate
+
+            wav, file_sr = sf.read(str(src))  # keep the file's rate
             wav = wav.mean(axis=1) if wav.ndim > 1 else wav
             return _resample(np.asarray(wav, dtype=np.float32), file_sr, sr)
         except ImportError:
-            if not str(src).lower().endswith(".wav"):       # wave only does .wav
+            if not str(src).lower().endswith(".wav"):  # wave only does .wav
                 raise RuntimeError(
                     f"Reading {src} needs `soundfile` (pip install soundfile); the "
-                    "built-in `wave` fallback only supports .wav files.")
+                    "built-in `wave` fallback only supports .wav files."
+                ) from None
             import wave
+
             with wave.open(str(src), "rb") as w:
                 file_sr = w.getframerate()
-                frames  = w.readframes(w.getnframes())
+                frames = w.readframes(w.getnframes())
             wav = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
             return _resample(wav, file_sr, sr)
     return np.asarray(src)

@@ -9,13 +9,19 @@ Tests for the ingestion normalization + garbage gate (src/data/textnorm.py):
   - the garbage filter drops clearly-broken text (mojibake, single-char/symbol spam)
     but keeps legitimate diverse/multilingual/code/short text.
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.textnorm import (normalize_text, is_garbage, clean_record_text,
-                               conversational_quality_ok)
 from src.data.loader import _split_turns
+from src.data.textnorm import (
+    clean_record_text,
+    conversational_quality_ok,
+    is_garbage,
+    normalize_text,
+)
 
 
 # ── normalization ─────────────────────────────────────────────────────────────
@@ -57,21 +63,21 @@ def test_transcript_structure_preserved_for_loader():
 
 # ── garbage filter ─────────────────────────────────────────────────────────────
 def test_garbage_detects_mojibake_and_spam():
-    assert is_garbage("real words here " + "�" * 30)   # mojibake dominates
-    assert is_garbage("a" * 40)                              # single-char spam
-    assert is_garbage("=" * 30 + " >>>>>>>>>>>>>>>")         # symbol soup
+    assert is_garbage("real words here " + "�" * 30)  # mojibake dominates
+    assert is_garbage("a" * 40)  # single-char spam
+    assert is_garbage("=" * 30 + " >>>>>>>>>>>>>>>")  # symbol soup
 
 
 def test_garbage_keeps_legitimate_text():
     assert not is_garbage("The quick brown fox jumps over the lazy dog today.")
     assert not is_garbage("El zorro marrón rápido salta sobre el perro perezoso.")
     assert not is_garbage("def add(a, b): return a + b  # sum two numbers")
-    assert not is_garbage("ok")                       # too short to judge → kept
+    assert not is_garbage("ok")  # too short to judge → kept
 
 
 def test_clean_record_text_normalizes_then_gates():
     assert clean_record_text("“Hello”   world") == '"Hello" world'
-    assert clean_record_text("�" * 50) == ""       # garbage → dropped
+    assert clean_record_text("�" * 50) == ""  # garbage → dropped
     assert clean_record_text("") == ""
 
 
@@ -82,16 +88,17 @@ def test_conversational_quality_keeps_clean_exchange():
 
 
 def test_conversational_quality_requires_real_exchange():
-    assert not conversational_quality_ok("User: hi\nUser: anyone?")      # no response role
+    assert not conversational_quality_ok("User: hi\nUser: anyone?")  # no response role
     assert not conversational_quality_ok("Assistant: hello\nAssistant: hi")  # no context role
 
 
 def test_conversational_quality_rejects_unlearnable():
     assert not conversational_quality_ok("User: code?\nAssistant: ```py\nprint(1)\n```")
     assert not conversational_quality_ok("User: hi\nAssistant: " + "word " * 200)  # too long
-    assert not conversational_quality_ok("User: \nAssistant: hi")          # empty turn
+    assert not conversational_quality_ok("User: \nAssistant: hi")  # empty turn
     assert not conversational_quality_ok(
-        "User: links\nAssistant: http://a.com http://b.com http://c.com")  # link dump
+        "User: links\nAssistant: http://a.com http://b.com http://c.com"
+    )  # link dump
 
 
 def test_conversational_quality_passes_prose_through():

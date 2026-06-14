@@ -2,26 +2,30 @@
 Training Dashboard — rich terminal UI for RDMCA stage training.
 Displays a live-updating panel with loss, speed, ETA, memory and gate status.
 """
+
 from __future__ import annotations
+
 import math
 import time
 from collections import deque
 from pathlib import Path
-from typing import Optional
 
-import src.backend as backend
-
+from rich import box
 from rich.console import Console, Group
-from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
-    BarColumn, MofNCompleteColumn, Progress,
-    SpinnerColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn,
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
 )
 from rich.table import Table
 from rich.text import Text
-from rich import box
+
+import src.backend as backend
 
 # Unicode sparkline chars (low → high)
 _SPARKS = " ▁▂▃▄▅▆▇█"
@@ -32,6 +36,7 @@ from src.training.stages import STAGE_NAMES
 
 def _sparkline(values: list[float], width: int = 12) -> str:
     import math
+
     # Drop non-finite values (e.g. NaN from an unstable fp16 run) so the
     # dashboard never crashes; show a marker if nothing finite remains.
     finite = [v for v in values if math.isfinite(v)]
@@ -49,7 +54,7 @@ def _mem_str() -> str:
     try:
         stats = backend.current().engine.memory_stats()
         active = stats.get("active", 0) / 1e9
-        peak   = stats.get("peak", 0) / 1e9
+        peak = stats.get("peak", 0) / 1e9
         if peak <= 0:
             return "─"
         return f"{active:.1f} GB active  /  {peak:.1f} GB peak"
@@ -75,27 +80,29 @@ class TrainingDashboard:
                 dash.update(step, tokens_seen, loss, lr, tps)
     """
 
-    def __init__(self,
-                 stage: int,
-                 n_tokens_target: int,
-                 resume_step: int = 0,
-                 resume_tokens: int = 0,
-                 params: int = 0,
-                 n_layers: int = 0,
-                 d_model: int = 0,
-                 plain: bool = False,
-                 log_path=None,
-                 loss_ce_weight: float = 1.0,
-                 append: bool = True,
-                 gate_baseline: float = None):
-        self.stage           = stage
+    def __init__(
+        self,
+        stage: int,
+        n_tokens_target: int,
+        resume_step: int = 0,
+        resume_tokens: int = 0,
+        params: int = 0,
+        n_layers: int = 0,
+        d_model: int = 0,
+        plain: bool = False,
+        log_path=None,
+        loss_ce_weight: float = 1.0,
+        append: bool = True,
+        gate_baseline: float | None = None,
+    ):
+        self.stage = stage
         # Per-stage ENTRY perplexity (the inherited checkpoint's val PP before this
         # stage trains). The gate's absolute PP carries an offset from the previous
         # stage + the rehearsal mix, so the meaningful signal is the DELTA from entry:
         # how much THIS stage moved its own starting point. Shown next to the gate.
         self.gate_baseline = gate_baseline
         self.n_tokens_target = n_tokens_target
-        self.stage_name      = STAGE_NAMES.get(stage, f"Stage {stage}")
+        self.stage_name = STAGE_NAMES.get(stage, f"Stage {stage}")
         # The training `loss` is a COMPOSITE: the MRL head mean (1 CE-unit) plus
         # `mtp_loss_weight` per MTP head. exp(composite) wildly OVERSTATES perplexity
         # (e.g. exp(12)=184K at init, when the true per-token PP ≈ exp(9)=vocab size).
@@ -108,9 +115,14 @@ class TrainingDashboard:
         # panel and (b) clears any text selection mid-copy (the "flickering"). Plain
         # mode trades the pretty panel for a full, selectable, persistent scrollback.
         import os
-        self._plain = bool(plain) or os.environ.get("RDMCA_PLAIN_LOGS", "").lower() \
-            in ("1", "true", "yes", "on")
-        self._plain_last = -1                  # last step printed in plain mode
+
+        self._plain = bool(plain) or os.environ.get("RDMCA_PLAIN_LOGS", "").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self._plain_last = -1  # last step printed in plain mode
 
         # Persistent plain-text log of the WHOLE run (loss evolution, gates,
         # checkpoints), independent of the live panel — so nothing scrolls out of
@@ -127,13 +139,15 @@ class TrainingDashboard:
         if log_path is not None:
             try:
                 Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-                self._flog = open(log_path, _mode, encoding="utf-8")
+                self._flog = open(log_path, _mode, encoding="utf-8")  # noqa: SIM115 (instance handle, closed in close())
                 mpath = Path(log_path).with_name("metrics.csv")
                 new = (_mode == "w") or not mpath.exists() or mpath.stat().st_size == 0
-                self._metrics = open(mpath, _mode, encoding="utf-8")
+                self._metrics = open(mpath, _mode, encoding="utf-8")  # noqa: SIM115 (instance handle, closed in close())
                 if new:
-                    self._metrics.write("kind,step,tokens_m,loss,ppl,lr,tps,grad_norm,"
-                                        "val_ppl,best_val_ppl,passed,replay,entry_ppl\n")
+                    self._metrics.write(
+                        "kind,step,tokens_m,loss,ppl,lr,tps,grad_norm,"
+                        "val_ppl,best_val_ppl,passed,replay,entry_ppl\n"
+                    )
                     self._metrics.flush()
             except OSError as e:
                 self._console.print(f"[yellow][log] could not open {log_path}: {e}[/yellow]")
@@ -142,14 +156,14 @@ class TrainingDashboard:
         # is: throughput is compute-bound, and per-token compute ≈ 6·N (fwd+bwd, the
         # Kaplan/Chinchilla rule) scales with depth. Doubling layers ⇒ ~proportionally
         # more FLOP/tok ⇒ fewer tok/s on the same hardware (not a regression).
-        self.params          = params
-        self.n_layers        = n_layers
-        self.d_model         = d_model
-        self._flops_per_tok  = 6 * params          # train fwd+bwd ≈ 6N FLOP/token
+        self.params = params
+        self.n_layers = n_layers
+        self.d_model = d_model
+        self._flops_per_tok = 6 * params  # train fwd+bwd ≈ 6N FLOP/token
 
-        self._console      = Console()
-        self._live: Optional[Live] = None
-        self._is_tty       = self._console.is_terminal      # animate only on a TTY
+        self._console = Console()
+        self._live: Live | None = None
+        self._is_tty = self._console.is_terminal  # animate only on a TTY
         # Recent log lines shown UNDER the pinned dashboard (one redraw region, so
         # switching terminals/tmux panes never leaves the panel half-drawn). On a
         # non-TTY (piped to a file) we print lines normally so the file keeps them.
@@ -157,18 +171,18 @@ class TrainingDashboard:
 
         # Stats history
         self._loss_hist: deque[float] = deque(maxlen=50)
-        self._tps_hist:  deque[float] = deque(maxlen=20)
-        self._prev_loss: Optional[float] = None
+        self._tps_hist: deque[float] = deque(maxlen=20)
+        self._prev_loss: float | None = None
 
         # Gate evaluation result (updated externally). The gate is a PERPLEXITY proxy
         # (LOWER is better), ratcheting toward `gate_best` and floored at `gate_floor`.
-        self.gate_score:  Optional[float] = None
+        self.gate_score: float | None = None
         self.gate_passed: bool = False
-        self.gate_floor:  Optional[float] = None   # per-stage perplexity floor (≤)
-        self.gate_best:   Optional[float] = None   # running best (the ratchet bar)
+        self.gate_floor: float | None = None  # per-stage perplexity floor (≤)
+        self.gate_best: float | None = None  # running best (the ratchet bar)
 
         # Last checkpoint info
-        self.last_ckpt_step: Optional[int] = None
+        self.last_ckpt_step: int | None = None
 
         # Progress bar
         self._progress = Progress(
@@ -187,13 +201,13 @@ class TrainingDashboard:
             completed=resume_tokens,
         )
 
-        self._step   = resume_step
+        self._step = resume_step
         self._tokens = resume_tokens
-        self._loss   = 0.0
-        self._lr     = 0.0
-        self._tps    = 0.0
-        self._grad_norm: Optional[float] = None
-        self._passes: Optional[int] = None
+        self._loss = 0.0
+        self._lr = 0.0
+        self._tps = 0.0
+        self._grad_norm: float | None = None
+        self._passes: int | None = None
         self._best_loss = float("inf")
         self._t_start = time.time()
         # With rehearsal the per-step loss is BIMODAL — narrow-skill batches sit near 0
@@ -201,20 +215,28 @@ class TrainingDashboard:
         # then looks like wild "spikes" (it's just alternating populations). Track a
         # smoothed EMA per batch type so the trend is readable and forgetting is visible
         # (the rehearsal EMA climbing = conversation being eroded).
-        self._ema_primary: Optional[float] = None
-        self._ema_replay:  Optional[float] = None
+        self._ema_primary: float | None = None
+        self._ema_replay: float | None = None
         self._last_replay = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def update(self, step: int, tokens_seen: int, loss: float,
-               lr: float, tps: float, grad_norm: float | None = None,
-               passes: int | None = None, replay: bool | None = None) -> None:
-        self._step   = step
+    def update(
+        self,
+        step: int,
+        tokens_seen: int,
+        loss: float,
+        lr: float,
+        tps: float,
+        grad_norm: float | None = None,
+        passes: int | None = None,
+        replay: bool | None = None,
+    ) -> None:
+        self._step = step
         self._tokens = tokens_seen
-        self._loss   = loss
-        self._lr     = lr
-        self._tps    = tps
+        self._loss = loss
+        self._lr = lr
+        self._tps = tps
         if grad_norm is not None:
             self._grad_norm = grad_norm
         if passes is not None:
@@ -223,13 +245,15 @@ class TrainingDashboard:
             self._best_loss = loss
         if replay is not None:
             self._last_replay = bool(replay)
-            a = 0.1                                   # EMA smoothing factor
+            a = 0.1  # EMA smoothing factor
             if replay:
-                self._ema_replay = loss if self._ema_replay is None \
-                    else (1 - a) * self._ema_replay + a * loss
+                self._ema_replay = (
+                    loss if self._ema_replay is None else (1 - a) * self._ema_replay + a * loss
+                )
             else:
-                self._ema_primary = loss if self._ema_primary is None \
-                    else (1 - a) * self._ema_primary + a * loss
+                self._ema_primary = (
+                    loss if self._ema_primary is None else (1 - a) * self._ema_primary + a * loss
+                )
         self._loss_hist.append(loss)
         self._tps_hist.append(tps)
         self._progress.update(self._task, completed=tokens_seen)
@@ -241,27 +265,33 @@ class TrainingDashboard:
         if (self._plain or self._flog) and step != self._plain_last:
             self._plain_last = step
             ppl = math.exp(min(loss / self._loss_ce_weight, 20)) if loss > 0 else float("nan")
-            gn  = f" | gnorm={self._grad_norm:.2f}" if self._grad_norm is not None else ""
+            gn = f" | gnorm={self._grad_norm:.2f}" if self._grad_norm is not None else ""
             # Smoothed per-type EMA so the bimodal rehearsal sawtooth reads as two stable
             # trends, not "spikes". Only shown once both populations have been seen.
             ema = ""
             if self._ema_primary is not None and self._ema_replay is not None:
-                ema = (f" | ema[skill {self._ema_primary:.2f} · "
-                       f"rehearsal {self._ema_replay:.2f}]")
-            line = (f"[step {step:>7,}] {tokens_seen/1e6:8.1f}M tok | loss={loss:.4f} "
-                    f"| ppl~{ppl:6.2f} | lr={lr:.2e} | {tps:6.0f} tok/s "
-                    f"| best={self._best_loss:.4f}{gn}{ema}")
+                ema = f" | ema[skill {self._ema_primary:.2f} · rehearsal {self._ema_replay:.2f}]"
+            line = (
+                f"[step {step:>7,}] {tokens_seen / 1e6:8.1f}M tok | loss={loss:.4f} "
+                f"| ppl~{ppl:6.2f} | lr={lr:.2e} | {tps:6.0f} tok/s "
+                f"| best={self._best_loss:.4f}{gn}{ema}"
+            )
             if self._plain:
                 # markup=False so the literal "[step N]" brackets aren't parsed as
                 # rich markup tags (which would silently drop them).
                 self._console.print(line, highlight=False, markup=False)
             self._record(line)
-            self._metric_row("train", step=step, tokens_m=f"{tokens_seen/1e6:.3f}",
-                             loss=f"{loss:.4f}", ppl=f"{ppl:.4f}", lr=f"{lr:.3e}",
-                             tps=f"{tps:.0f}",
-                             grad_norm=("" if self._grad_norm is None
-                                        else f"{self._grad_norm:.3f}"),
-                             replay=int(self._last_replay))
+            self._metric_row(
+                "train",
+                step=step,
+                tokens_m=f"{tokens_seen / 1e6:.3f}",
+                loss=f"{loss:.4f}",
+                ppl=f"{ppl:.4f}",
+                lr=f"{lr:.3e}",
+                tps=f"{tps:.0f}",
+                grad_norm=("" if self._grad_norm is None else f"{self._grad_norm:.3f}"),
+                replay=int(self._last_replay),
+            )
 
     def set_target(self, n_tokens_target: int) -> None:
         """Adjust the token target (and progress-bar total) mid-run — e.g. when the
@@ -272,37 +302,57 @@ class TrainingDashboard:
         if self._live:
             self._live.update(self._build_layout())
 
-    def set_gate_result(self, score: float, passed: bool,
-                        threshold: float = None, best: float = None) -> None:
-        self.gate_score  = score
+    def set_gate_result(
+        self, score: float, passed: bool, threshold: float | None = None, best: float | None = None
+    ) -> None:
+        self.gate_score = score
         self.gate_passed = passed
         if threshold is not None:
             self.gate_floor = threshold
         if best is not None and math.isfinite(best):
             self.gate_best = best
         self._record(f"[gate] score={score:.4f} -> {'NEW BEST' if passed else 'not a new best'}")
-        self._metric_row("gate", step=self._step, tokens_m=f"{self._tokens/1e6:.3f}",
-                         val_ppl=f"{score:.4f}",
-                         best_val_ppl=("" if self.gate_best is None else f"{self.gate_best:.4f}"),
-                         passed=int(bool(passed)),
-                         entry_ppl=("" if self.gate_baseline is None
-                                    else f"{self.gate_baseline:.4f}"))
+        self._metric_row(
+            "gate",
+            step=self._step,
+            tokens_m=f"{self._tokens / 1e6:.3f}",
+            val_ppl=f"{score:.4f}",
+            best_val_ppl=("" if self.gate_best is None else f"{self.gate_best:.4f}"),
+            passed=int(bool(passed)),
+            entry_ppl=("" if self.gate_baseline is None else f"{self.gate_baseline:.4f}"),
+        )
         if self._live:
             self._live.update(self._build_layout())
 
     def set_checkpoint(self, step: int) -> None:
         self.last_ckpt_step = step
 
-    def _metric_row(self, kind, *, step="", tokens_m="", loss="", ppl="", lr="", tps="",
-                    grad_norm="", val_ppl="", best_val_ppl="", passed="", replay="",
-                    entry_ppl="") -> None:
+    def _metric_row(
+        self,
+        kind,
+        *,
+        step="",
+        tokens_m="",
+        loss="",
+        ppl="",
+        lr="",
+        tps="",
+        grad_norm="",
+        val_ppl="",
+        best_val_ppl="",
+        passed="",
+        replay="",
+        entry_ppl="",
+    ) -> None:
         """Append one machine-readable row to metrics.csv (if any) — see plot_metrics.py."""
         if self._metrics is None:
             return
         try:
-            self._metrics.write(f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
-                                f"{grad_norm},{val_ppl},{best_val_ppl},{passed},{replay},"
-                                f"{entry_ppl}\n")
+            self._metrics.write(
+                f"{kind},{step},{tokens_m},{loss},{ppl},{lr},{tps},"
+                f"{grad_norm},{val_ppl},{best_val_ppl},{passed},{replay},"
+                f"{entry_ppl}\n"
+            )
             self._metrics.flush()
         except (OSError, ValueError):
             self._metrics = None
@@ -316,7 +366,7 @@ class TrainingDashboard:
             self._flog.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
             self._flog.flush()
         except (OSError, ValueError):
-            self._flog = None                  # don't let a logging error kill training
+            self._flog = None  # don't let a logging error kill training
 
     def print(self, msg: str) -> None:
         """Record a log line. On the live panel it appears in the panel's log area
@@ -331,11 +381,13 @@ class TrainingDashboard:
 
     # ── Context manager ───────────────────────────────────────────────────────
 
-    def __enter__(self) -> "TrainingDashboard":
-        self._record(f"=== Stage {self.stage} ({self.stage_name}) | "
-                     f"{self.params/1e6:.1f}M params | target {self.n_tokens_target/1e6:.0f}M tokens "
-                     f"| target_loss curve below ===")
-        if self._is_tty and not self._plain:    # animate only on a real terminal (not plain)
+    def __enter__(self) -> TrainingDashboard:
+        self._record(
+            f"=== Stage {self.stage} ({self.stage_name}) | "
+            f"{self.params / 1e6:.1f}M params | target {self.n_tokens_target / 1e6:.0f}M tokens "
+            f"| target_loss curve below ==="
+        )
+        if self._is_tty and not self._plain:  # animate only on a real terminal (not plain)
             self._live = Live(
                 self._build_layout(),
                 console=self._console,
@@ -372,25 +424,27 @@ class TrainingDashboard:
 
         # ── Stats table ───────────────────────────────────────────────────
         stats = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
-        stats.add_column("key",   style="bold cyan",  no_wrap=True, width=18)
-        stats.add_column("value", style="white",      no_wrap=False)
+        stats.add_column("key", style="bold cyan", no_wrap=True, width=18)
+        stats.add_column("value", style="white", no_wrap=False)
 
         loss_vals = list(self._loss_hist)
-        tps_vals  = list(self._tps_hist)
+        tps_vals = list(self._tps_hist)
 
         # Both averages use the last 20 samples (recent window). avg_tps drives the
         # ETA below, so a recent window keeps it responsive when throughput shifts
         # (quantization, load) instead of dragging an all-time average. Kept explicit
         # so it stays correct even if _tps_hist's maxlen changes.
         avg_loss = sum(loss_vals[-20:]) / max(len(loss_vals[-20:]), 1)
-        avg_tps  = sum(tps_vals[-20:])  / max(len(tps_vals[-20:]), 1)
-        arr      = _arrow(self._loss, self._prev_loss)
+        avg_tps = sum(tps_vals[-20:]) / max(len(tps_vals[-20:]), 1)
+        arr = _arrow(self._loss, self._prev_loss)
         self._prev_loss = self._loss
 
         def _fmt_tok(n: int) -> str:
-            if n >= 1_000_000_000: return f"{n/1e9:.2f}B"
-            if n >= 1_000_000:     return f"{n/1e6:.1f}M"
-            return f"{n/1e3:.0f}K"
+            if n >= 1_000_000_000:
+                return f"{n / 1e9:.2f}B"
+            if n >= 1_000_000:
+                return f"{n / 1e6:.1f}M"
+            return f"{n / 1e3:.0f}K"
 
         # Train perplexity proxy and best-loss-so-far. Divide the COMPOSITE loss by
         # its CE-unit weight first (see _loss_ce_weight) so this is a faithful
@@ -406,37 +460,40 @@ class TrainingDashboard:
         remaining = max(self.n_tokens_target - self._tokens, 0)
         eta = _fmt_time(remaining / avg_tps) if avg_tps > 0 and remaining else "─"
 
-        stats.add_row("Step",       f"{self._step:,}")
-        stats.add_row("Tokens",     f"{_fmt_tok(self._tokens)}  /  {_fmt_tok(self.n_tokens_target)}")
-        stats.add_row("Loss",       f"{self._loss:.4f}  {arr}  "
-                                    f"[dim]{_sparkline(loss_vals)}[/dim]")
+        stats.add_row("Step", f"{self._step:,}")
+        stats.add_row("Tokens", f"{_fmt_tok(self._tokens)}  /  {_fmt_tok(self.n_tokens_target)}")
+        stats.add_row("Loss", f"{self._loss:.4f}  {arr}  [dim]{_sparkline(loss_vals)}[/dim]")
         stats.add_row("Loss (avg)", f"{avg_loss:.4f}  [dim](last 20{best})[/dim]")
         stats.add_row("Perplexity", f"{ppl:.1f}  [dim]per-token est.[/dim]")
-        stats.add_row("LR",         f"{self._lr:.2e}")
-        stats.add_row("Speed",      f"{self._tps/1000:.1f} K tok/s  "
-                                    f"[dim](avg {avg_tps/1000:.1f} K)[/dim]")
+        stats.add_row("LR", f"{self._lr:.2e}")
+        stats.add_row(
+            "Speed", f"{self._tps / 1000:.1f} K tok/s  [dim](avg {avg_tps / 1000:.1f} K)[/dim]"
+        )
         # Why this speed: it's compute-bound. Per-token cost ≈ 6·N FLOP scales with
         # depth, so tok/s ≈ achieved_FLOP/s ÷ (6N). Showing N's geometry + MFLOP/tok +
         # the achieved TFLOP/s makes clear that e.g. 8 layers vs 6 (+33% FLOP/tok) is
         # WHY tok/s dropped — the hardware is saturated, not a regression.
         if self._flops_per_tok:
             mflop = self._flops_per_tok / 1e6
-            tflops = self._tps * self._flops_per_tok / 1e12      # tok/s × FLOP/tok
-            stats.add_row("Compute",
-                          f"{self.n_layers}L×{self.d_model}d · {self.params/1e6:.1f}M params · "
-                          f"[dim]≈{mflop:.0f} MFLOP/tok · {tflops:.2f} TFLOP/s[/dim]")
+            tflops = self._tps * self._flops_per_tok / 1e12  # tok/s × FLOP/tok
+            stats.add_row(
+                "Compute",
+                f"{self.n_layers}L×{self.d_model}d · {self.params / 1e6:.1f}M params · "
+                f"[dim]≈{mflop:.0f} MFLOP/tok · {tflops:.2f} TFLOP/s[/dim]",
+            )
         if self._grad_norm is not None:
             stats.add_row("Grad norm", f"{self._grad_norm:.3f}")
-        stats.add_row("Elapsed",    _fmt_time(elapsed))
-        stats.add_row("ETA",        eta)
+        stats.add_row("Elapsed", _fmt_time(elapsed))
+        stats.add_row("ETA", eta)
         if self._passes is not None:
             stats.add_row("Corpus passes", f"{self._passes}")
         stats.add_row("GPU memory", _mem_str())
 
         if self.last_ckpt_step is not None:
             steps_ago = self._step - self.last_ckpt_step
-            stats.add_row("Last ckpt", f"step {self.last_ckpt_step:,}  "
-                                       f"[dim]({steps_ago:,} steps ago)[/dim]")
+            stats.add_row(
+                "Last ckpt", f"step {self.last_ckpt_step:,}  [dim]({steps_ago:,} steps ago)[/dim]"
+            )
 
         # ── Gate row ──────────────────────────────────────────────────────
         # The live gate is a PERPLEXITY proxy (LOWER is better), ratcheting toward the
@@ -446,7 +503,7 @@ class TrainingDashboard:
         if self.gate_score is None:
             gate_val = Text("not evaluated yet", style="dim")
         else:
-            best_s  = f"  ·  best {self.gate_best:.2f}" if self.gate_best is not None else ""
+            best_s = f"  ·  best {self.gate_best:.2f}" if self.gate_best is not None else ""
             floor_s = f"  ·  floor ≤ {self.gate_floor:.1f}" if self.gate_floor is not None else ""
             # Compared to the stage's STARTING ppl (the inherited baseline): show the
             # start value + an arrow so direction is unambiguous — ↓ = improved (ppl
@@ -457,17 +514,21 @@ class TrainingDashboard:
                 arrow = "↓" if d < 0 else ("↑" if d > 0 else "=")
                 entry_s = f"  ·  start {self.gate_baseline:.1f} {arrow}{abs(d):.0f}%"
             if self.gate_passed:
-                gate_val = Text(f"ppl {self.gate_score:.2f}  ✓  new best{best_s}{entry_s}{floor_s}",
-                                style="bold green")
+                gate_val = Text(
+                    f"ppl {self.gate_score:.2f}  ✓  new best{best_s}{entry_s}{floor_s}",
+                    style="bold green",
+                )
             else:
-                gate_val = Text(f"ppl {self.gate_score:.2f}  ·  not a new best{best_s}{entry_s}{floor_s}",
-                                style="yellow")
+                gate_val = Text(
+                    f"ppl {self.gate_score:.2f}  ·  not a new best{best_s}{entry_s}{floor_s}",
+                    style="yellow",
+                )
         stats.add_row(f"Gate ({gate_name})", gate_val)
 
         # ── Progress bar ──────────────────────────────────────────────────
-        pct  = min(self._tokens / max(self.n_tokens_target, 1) * 100, 100)
+        pct = min(self._tokens / max(self.n_tokens_target, 1) * 100, 100)
         bars = int(pct / 2.5)
-        bar  = ("█" * bars + "░" * (40 - bars))
+        bar = "█" * bars + "░" * (40 - bars)
         progress_line = Text()
         progress_line.append(bar, style="green" if pct >= 100 else "cyan")
         progress_line.append(f"  {pct:.1f}%")
@@ -478,10 +539,8 @@ class TrainingDashboard:
         layout.add_row("")
         layout.add_row(stats)
 
-        title = (f"[bold]Stage {self.stage}[/bold]  "
-                 f"[dim]{self.stage_name}[/dim]")
-        panel = Panel(layout, title=title, border_style="bright_blue",
-                      padding=(0, 1))
+        title = f"[bold]Stage {self.stage}[/bold]  [dim]{self.stage_name}[/dim]"
+        panel = Panel(layout, title=title, border_style="bright_blue", padding=(0, 1))
 
         # Dashboard pinned ON TOP; recent log lines BELOW it — both in one Group so
         # the whole block redraws together (robust to terminal/pane switches).
@@ -489,8 +548,9 @@ class TrainingDashboard:
             return panel
         # Render logs as plain Text (no markup parsing) so literal tags like
         # "[ckpt]"/"[gate]" are shown verbatim instead of being eaten as styles.
-        log_panel = Panel(Text("\n".join(self._log)), title="[dim]log[/dim]",
-                          border_style="dim", padding=(0, 1))
+        log_panel = Panel(
+            Text("\n".join(self._log)), title="[dim]log[/dim]", border_style="dim", padding=(0, 1)
+        )
         return Group(panel, log_panel)
 
 

@@ -8,14 +8,17 @@ tool-use transcripts (stage 7, "Action and tool use"). `text` mode leaves
 generation untouched; `json` mode primes the model toward a JSON object and
 parses the result into a structured payload.
 """
+
 from __future__ import annotations
+
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
+from typing import Any
 
-from src.modalities.vocab import REASONING_SPECIALS
 from src.modalities.moods import mood_system_phrase
+from src.modalities.vocab import REASONING_SPECIALS
 
 OUTPUT_FORMATS = ("text", "json")
 
@@ -25,7 +28,7 @@ _JSON_PRIMER = "\nRespond with a single JSON object.\n"
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def normalize_format(fmt: Optional[str]) -> str:
+def normalize_format(fmt: str | None) -> str:
     """Validate/normalize an output-format name."""
     fmt = (fmt or "text").lower()
     if fmt not in OUTPUT_FORMATS:
@@ -33,7 +36,7 @@ def normalize_format(fmt: Optional[str]) -> str:
     return fmt
 
 
-def system_preamble(system: Optional[str], mood: str = "neutral") -> str:
+def system_preamble(system: str | None, mood: str = "neutral") -> str:
     """Build the `System:` line that opens a conversation, the SAME way the training
     data is framed (`System: <persona> (mood: <mood>)`). The mood rides on this same
     channel and is neutral-by-default (adds nothing), so an ordinary chat is
@@ -86,9 +89,9 @@ def parse_output(text: str, fmt: str) -> dict:
     """
     if normalize_format(fmt) == "text":
         return {"format": "text", "text": clean_answer(text)}
-    text = strip_thinking(text)                 # never parse JSON out of a scratchpad
+    text = strip_thinking(text)  # never parse JSON out of a scratchpad
     obj, valid = None, False
-    m = _JSON_OBJ_RE.search(text)               # first {...} span in the output
+    m = _JSON_OBJ_RE.search(text)  # first {...} span in the output
     if m:
         try:
             obj = json.loads(m.group(0))
@@ -106,8 +109,8 @@ def parse_output(text: str, fmt: str) -> dict:
 # all and how large a token budget the scratchpad gets — analogous to Claude's
 # reasoning effort. Same hook every consumer (chat / agent / future API) reuses.
 THINKING_LEVELS = ("off", "low", "medium", "high")
-THINK_OPEN, THINK_CLOSE = REASONING_SPECIALS   # single source of truth (vocab.py);
-                                               # also registered as tokenizer symbols.
+THINK_OPEN, THINK_CLOSE = REASONING_SPECIALS  # single source of truth (vocab.py);
+# also registered as tokenizer symbols.
 
 # Fraction of the per-turn token budget (`max_tokens`) the scratchpad may use.
 # off → no thinking; high → up to the full budget (it closes at </think> sooner
@@ -124,16 +127,16 @@ _THINK_BUDGET_FRAC = {"off": 0.0, "low": 0.25, "medium": 0.5, "high": 1.0}
 # A looping scratchpad is detected and closed early; the model then still answers.
 MAX_THINK_TOKENS = 4096
 
-THINK_INSTRUCTION = (f" First reason step by step inside {THINK_OPEN} {THINK_CLOSE}, "
-                     "then give the final answer.")
+THINK_INSTRUCTION = (
+    f" First reason step by step inside {THINK_OPEN} {THINK_CLOSE}, then give the final answer."
+)
 
 # A closed scratchpad, and an unterminated one (budget hit / EOS before close).
-_THINK_RE      = re.compile(re.escape(THINK_OPEN) + r"(.*?)" + re.escape(THINK_CLOSE),
-                            re.DOTALL)
+_THINK_RE = re.compile(re.escape(THINK_OPEN) + r"(.*?)" + re.escape(THINK_CLOSE), re.DOTALL)
 _THINK_OPEN_RE = re.compile(re.escape(THINK_OPEN) + r".*", re.DOTALL)
 
 
-def normalize_thinking(level: Optional[str]) -> str:
+def normalize_thinking(level: str | None) -> str:
     """Validate/normalize a thinking-level name."""
     level = (level or "off").lower()
     if level not in THINKING_LEVELS:
@@ -156,7 +159,7 @@ def split_thinking(text: str) -> tuple:
     present."""
     m = _THINK_RE.search(text)
     if m:
-        answer = (text[:m.start()] + text[m.end():]).strip()
+        answer = (text[: m.start()] + text[m.end() :]).strip()
         return m.group(1).strip(), answer
     return None, text
 
@@ -195,9 +198,16 @@ def visible_stream_text(text: str) -> str:
 # tend to "keep going" and echo these, so we trim at a turn boundary.
 _ROLES = "User|Assistant|System|Tools?|Observation|Client|Server"
 # Newline-anchored boundary that starts a NEW turn → everything after it is leak.
-ANSWER_STOP_STRINGS = ("\nUser:", "\nAssistant:", "\nSystem:", "\nTools:",
-                       "\nObservation:", "\nClient:", "\nServer:")
-_LEADING_ROLE_RE  = re.compile(r"^\s*(?:" + _ROLES + r")\s*:\s*", re.IGNORECASE)
+ANSWER_STOP_STRINGS = (
+    "\nUser:",
+    "\nAssistant:",
+    "\nSystem:",
+    "\nTools:",
+    "\nObservation:",
+    "\nClient:",
+    "\nServer:",
+)
+_LEADING_ROLE_RE = re.compile(r"^\s*(?:" + _ROLES + r")\s*:\s*", re.IGNORECASE)
 # A turn boundary is a role tag — newline-anchored OR inline. Small/undertrained
 # models echo the next turn mid-line ("...not sure. User: ...") without a newline,
 # so a \n-anchored match alone leaves the whole run-on blob in the reply. Matched
@@ -215,12 +225,11 @@ def clean_answer(text: str) -> str:
     text = _LEADING_ROLE_RE.sub("", text.lstrip(), count=1)
     m = _ROLE_BOUNDARY_RE.search(text)
     if m:
-        text = text[:m.start()]
+        text = text[: m.start()]
     return text.strip()
 
 
-_ROLE_NAMES = ("User", "Assistant", "System", "Tools", "Tool",
-               "Observation", "Client", "Server")
+_ROLE_NAMES = ("User", "Assistant", "System", "Tools", "Tool", "Observation", "Client", "Server")
 
 
 def safe_stream_len(text: str) -> int:
@@ -234,13 +243,13 @@ def safe_stream_len(text: str) -> int:
         for k in range(min(len(tag), len(text)), 0, -1):
             if text.endswith(tag[:k]):
                 j = len(text) - k
-                if j == 0 or not text[j - 1].isalnum():   # sits on a word boundary
+                if j == 0 or not text[j - 1].isalnum():  # sits on a word boundary
                     longest = max(longest, k)
                 break
     return len(text) - longest
 
 
-def first_stop_index(text: str, stops=ANSWER_STOP_STRINGS) -> Optional[int]:
+def first_stop_index(text: str, stops=ANSWER_STOP_STRINGS) -> int | None:
     """Char index of the earliest turn-boundary in `text`, or None. Lets a streaming
     generator halt (and not print past) a turn-boundary leak as soon as it forms —
     including an inline `User:`/`Assistant:` the model echoes without a newline. A
@@ -259,9 +268,11 @@ def first_stop_index(text: str, stops=ANSWER_STOP_STRINGS) -> Optional[int]:
 # Skills (Claude-style SKILL.md) are injected as extra context. Same hook a
 # serving API will reuse — see [[uses/api]].
 
-AGENT_SYSTEM = ('You can use tools. To call one, output a line '
-                'Action: {"name": <tool>, "input": {<args>}}; you then receive an '
-                'Observation with the result. Otherwise answer the user directly.')
+AGENT_SYSTEM = (
+    "You can use tools. To call one, output a line "
+    'Action: {"name": <tool>, "input": {<args>}}; you then receive an '
+    "Observation with the result. Otherwise answer the user directly."
+)
 
 _ACTION_RE = re.compile(r"Action:\s*(\{.*\})", re.DOTALL)
 
@@ -269,20 +280,25 @@ _ACTION_RE = re.compile(r"Action:\s*(\{.*\})", re.DOTALL)
 @dataclass
 class Tool:
     """An executable tool. `run(input_dict)` returns any JSON-serializable result."""
+
     name: str
     description: str
     input_schema: dict
     run: Callable[[dict], Any]
 
 
-def tools_spec(tools: List[Tool]) -> str:
+def tools_spec(tools: list[Tool]) -> str:
     """Claude-style tool definitions (name/description/input_schema) as JSON."""
-    return json.dumps([{"name": t.name, "description": t.description,
-                        "input_schema": t.input_schema} for t in tools],
-                      ensure_ascii=False)
+    return json.dumps(
+        [
+            {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+            for t in tools
+        ],
+        ensure_ascii=False,
+    )
 
 
-def parse_action(text: str) -> Optional[dict]:
+def parse_action(text: str) -> dict | None:
     """Extract a tool call from a model turn, or None. Accepts an `Action:` line
     or a bare JSON object carrying a `name`. Any <think> scratchpad is stripped
     first so reasoning is never mistaken for a tool call."""
@@ -305,15 +321,20 @@ def parse_action(text: str) -> Optional[dict]:
     return None
 
 
-def build_agent_prompt(tools: List[Tool], user: str,
-                       skill_md: Optional[str] = None, think: str = "off",
-                       system: Optional[str] = None, memory: str = "") -> str:
+def build_agent_prompt(
+    tools: list[Tool],
+    user: str,
+    skill_md: str | None = None,
+    think: str = "off",
+    system: str | None = None,
+    memory: str = "",
+) -> str:
     """Assemble the initial agentic prompt (memory + system + tools + optional skill
     + user). An optional `system` persona is prepended to the tool-use instructions
     so the same system-prompt channel works in the agent as in the chat. Recalled
     `memory` (if any) leads the prompt as a `<mem>…</mem>` block — same as the chat,
     so the agent recalls past context too."""
-    base   = AGENT_SYSTEM + (THINK_INSTRUCTION if normalize_thinking(think) != "off" else "")
+    base = AGENT_SYSTEM + (THINK_INSTRUCTION if normalize_thinking(think) != "off" else "")
     system = f"{system.strip()} {base}" if system and system.strip() else base
     parts = []
     mem = memory_block(memory)
@@ -329,13 +350,22 @@ def build_agent_prompt(tools: List[Tool], user: str,
     return "\n".join(parts)
 
 
-def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
-              skill_md: Optional[str] = None, max_steps: int = 6,
-              think: str = "off", max_context_chars: int = 8000,
-              system: Optional[str] = None, memory: str = "",
-              context_mgr=None, encode=None, decode=None,
-              should_stop: Optional[Callable[[], bool]] = None,
-              get_steering: Optional[Callable[[], List[str]]] = None) -> dict:
+def run_agent(
+    generate_fn: Callable[[str], str],
+    tools: list[Tool],
+    user: str,
+    skill_md: str | None = None,
+    max_steps: int = 6,
+    think: str = "off",
+    max_context_chars: int = 8000,
+    system: str | None = None,
+    memory: str = "",
+    context_mgr=None,
+    encode=None,
+    decode=None,
+    should_stop: Callable[[], bool] | None = None,
+    get_steering: Callable[[], list[str]] | None = None,
+) -> dict:
     """Drive the tool loop — multiple think→act→observe rounds until the model
     answers (Claude Code-style). `generate_fn(prompt_text) -> response_text`
     wraps the model; it may return a `<think>…</think>` scratchpad before the
@@ -356,7 +386,7 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
         tail from the slots. Same mechanism the chat uses for its history body, so
         the agent recalls/forgets context the same way every other surface does."""
     registry = {t.name: t for t in tools}
-    header   = build_agent_prompt(tools, user, skill_md, think, system=system, memory=memory)
+    header = build_agent_prompt(tools, user, skill_md, think, system=system, memory=memory)
     steps: list = []
 
     # STR slots need a tokenizer round-trip (the manager works in token space); the
@@ -375,36 +405,39 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
         if not steering:
             return prompt
         prompt = prompt.rstrip()
-        if prompt.endswith("Assistant:"):                  # drop the stale cue
-            prompt = prompt[:-len("Assistant:")].rstrip()
+        if prompt.endswith("Assistant:"):  # drop the stale cue
+            prompt = prompt[: -len("Assistant:")].rstrip()
         return prompt + "".join(f"\nUser: {m}" for m in steering) + "\nAssistant:"
 
     def _block(st: dict) -> str:
-        return (f"\nAction: {json.dumps(st['action'], ensure_ascii=False)}"
-                f"\nObservation: {json.dumps(st['observation'], ensure_ascii=False)}"
-                f"\nAssistant:")
+        return (
+            f"\nAction: {json.dumps(st['action'], ensure_ascii=False)}"
+            f"\nObservation: {json.dumps(st['observation'], ensure_ascii=False)}"
+            f"\nAssistant:"
+        )
 
     def _transcript() -> str:
-        if use_slots:                           # §12 sector slots assemble the tail
+        if use_slots:  # §12 sector slots assemble the tail
             cap = max(64, context_mgr.context_len - header_budget - 128)
             return header + decode(context_mgr.assemble(cap))
         kept, total = [], len(header)
-        for st in reversed(steps):              # keep the most recent steps that fit
+        for st in reversed(steps):  # keep the most recent steps that fit
             b = _block(st)
             if kept and total + len(b) > max_context_chars:
                 break
-            kept.append(b); total += len(b)
+            kept.append(b)
+            total += len(b)
         return header + "".join(reversed(kept))
 
     for _ in range(max_steps):
-        if should_stop is not None and should_stop():       # user aborted the run
+        if should_stop is not None and should_stop():  # user aborted the run
             return {"final": None, "steps": steps, "thinking": None, "note": "interrupted"}
-        if get_steering is not None:                         # pull queued corrections
+        if get_steering is not None:  # pull queued corrections
             steering.extend(m for m in get_steering() if m.strip())
         out = generate_fn(_apply_steering(_transcript()))
         thinking, answer = split_thinking(out)
         action = parse_action(answer)
-        if action is None:                          # no tool call → final answer
+        if action is None:  # no tool call → final answer
             return {"final": answer.strip(), "thinking": thinking, "steps": steps}
         tool = registry.get(action["name"])
         if tool is None:
@@ -412,9 +445,9 @@ def run_agent(generate_fn: Callable[[str], str], tools: List[Tool], user: str,
         else:
             try:
                 obs = tool.run(action.get("input", {}) or {})
-            except Exception as e:                  # tools must never crash the loop
+            except Exception as e:  # tools must never crash the loop
                 obs = {"error": str(e)}
         steps.append({"thinking": thinking, "action": action, "observation": obs})
-        if use_slots:                           # route this step's block to its slot(s)
+        if use_slots:  # route this step's block to its slot(s)
             context_mgr.add(encode(_block(steps[-1])))
     return {"final": None, "steps": steps, "note": "max steps reached"}

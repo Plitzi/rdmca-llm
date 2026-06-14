@@ -42,8 +42,11 @@ Examples:
   python scripts/purge.py --all --hf-cache --yes     # wipe everything incl. HF cache
   python scripts/purge.py --hf-cache --dry-run       # preview just the HF cache
 """
+
 from __future__ import annotations
+
 import argparse
+import contextlib
 import os
 from pathlib import Path
 
@@ -60,8 +63,11 @@ def _hf_cache_paths() -> list[Path]:
     """HuggingFace dataset + hub cache dirs, honoring HF env vars."""
     hf_home = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache/huggingface"))
     datasets = Path(os.environ.get("HF_DATASETS_CACHE") or (hf_home / "datasets"))
-    hub = Path(os.environ.get("HF_HUB_CACHE")
-               or os.environ.get("HUGGINGFACE_HUB_CACHE") or (hf_home / "hub"))
+    hub = Path(
+        os.environ.get("HF_HUB_CACHE")
+        or os.environ.get("HUGGINGFACE_HUB_CACHE")
+        or (hf_home / "hub")
+    )
     return [datasets, hub]
 
 
@@ -72,9 +78,9 @@ def _paths_for(target: str, level: int | None) -> list[Path]:
         if lvl:
             return [REPO / "dist/checkpoints" / lvl]
         return [REPO / "dist/checkpoints", REPO / "dist/snapshots"]
-    if target == "tokenizer":                       # global (trained per level into one dir)
+    if target == "tokenizer":  # global (trained per level into one dir)
         return [REPO / "dist/tokenizer", *sorted((REPO / "dist").glob("tokenizer*.bak"))]
-    if target == "data":                            # prepared corpora only — keep benchmarks/runtime
+    if target == "data":  # prepared corpora only — keep benchmarks/runtime
         if lvl:
             return [REPO / "data" / lvl]
         return sorted((REPO / "data").glob("level*"))
@@ -82,7 +88,7 @@ def _paths_for(target: str, level: int | None) -> list[Path]:
         return [REPO / "data/runtime"]
     if target == "logs":
         return [REPO / "logs"]
-    if target == "hf_cache":                         # shared, outside the repo
+    if target == "hf_cache":  # shared, outside the repo
         return _hf_cache_paths()
     return []
 
@@ -98,15 +104,14 @@ def _remove(path: Path) -> None:
         if path.name != ".gitkeep":
             try:
                 path.unlink()
-            except OSError as e:                # read-only file etc. — skip, keep going
+            except OSError as e:  # read-only file etc. — skip, keep going
                 print(f"  [skip] could not remove {_display(path)}: {e}")
         return
     for child in path.iterdir():
         _remove(child)
-    try:
-        path.rmdir()            # succeeds only if now empty (no .gitkeep kept)
-    except OSError:
-        pass                    # a .gitkeep (or kept subdir) remains → keep the folder
+    with contextlib.suppress(OSError):
+        path.rmdir()  # succeeds only if now empty (no .gitkeep kept)
+        # OSError → a .gitkeep (or kept subdir) remains → keep the folder
 
 
 def _display(p: Path) -> str:
@@ -126,10 +131,8 @@ def _size_bytes(path: Path) -> int:
     total = 0
     for p in path.rglob("*"):
         if p.is_file() and not p.is_symlink():
-            try:
+            with contextlib.suppress(OSError):
                 total += p.stat().st_size
-            except OSError:
-                pass
     return total
 
 
@@ -145,30 +148,44 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Purge generated artifacts for a fresh training run.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__)
+        epilog=__doc__,
+    )
     ap.add_argument("--all", action="store_true", help="Purge every repo target (not the HF cache)")
     for t in TARGET_NAMES:
         ap.add_argument(f"--{t}", action="store_true", help=f"Purge {t}")
-    ap.add_argument("--hf-cache", dest="hf_cache", action="store_true",
-                    help="Also delete the shared HuggingFace download cache "
-                         "(datasets + hub). Opt-in only — NOT included in --all; slow to refill.")
-    ap.add_argument("--keep-data", action="store_true",
-                    help="With --all, do NOT purge prepared corpora (data/level*) — "
-                         "re-use the already-prepared data and skip re-preparing.")
-    ap.add_argument("--level", type=int, default=None,
-                    help="Limit --checkpoints/--data to one level (else all levels)")
+    ap.add_argument(
+        "--hf-cache",
+        dest="hf_cache",
+        action="store_true",
+        help="Also delete the shared HuggingFace download cache "
+        "(datasets + hub). Opt-in only — NOT included in --all; slow to refill.",
+    )
+    ap.add_argument(
+        "--keep-data",
+        action="store_true",
+        help="With --all, do NOT purge prepared corpora (data/level*) — "
+        "re-use the already-prepared data and skip re-preparing.",
+    )
+    ap.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        help="Limit --checkpoints/--data to one level (else all levels)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Preview only; delete nothing")
     ap.add_argument("--yes", "-y", action="store_true", help="Skip the confirmation prompt")
     args = ap.parse_args()
 
     selected = [t for t in TARGET_NAMES if args.all or getattr(args, t)]
-    if args.keep_data:                               # explicit opt-out of data purge
+    if args.keep_data:  # explicit opt-out of data purge
         selected = [t for t in selected if t != "data"]
-    if args.hf_cache:                                # opt-in, never via --all
+    if args.hf_cache:  # opt-in, never via --all
         selected.append("hf_cache")
     if not selected:
-        ap.error("nothing selected — pass --all, --hf-cache, or one or more of: "
-                 + ", ".join(f"--{t}" for t in TARGET_NAMES))
+        ap.error(
+            "nothing selected — pass --all, --hf-cache, or one or more of: "
+            + ", ".join(f"--{t}" for t in TARGET_NAMES)
+        )
 
     # Resolve and de-duplicate existing paths, remembering which targets are empty.
     plan: list[tuple[str, Path, int]] = []

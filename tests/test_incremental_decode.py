@@ -4,8 +4,10 @@ must return EXACTLY the same text as a full re-decode at every prefix, across th
 tricky cases (multi-char pieces, SentencePiece leading-space, byte-fallback splits),
 and must actually re-decode less than the naive whole-sequence approach.
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
@@ -24,14 +26,19 @@ def _assert_matches(decode_fn, ids, keep=4):
 
 # ── 1. one char per token ────────────────────────────────────────────────────
 def test_single_char_tokens():
-    decode = lambda xs: "".join(chr(ord('a') + (i % 26)) for i in xs)
+    def decode(xs):
+        return "".join(chr(ord("a") + (i % 26)) for i in xs)
+
     _assert_matches(decode, list(range(50)))
 
 
 # ── 2. variable-length multi-char pieces ─────────────────────────────────────
 def test_multichar_pieces():
     vocab = {0: "hello", 1: " world", 2: "!", 3: "ABC", 4: "x", 5: "..."}
-    decode = lambda xs: "".join(vocab[i] for i in xs)
+
+    def decode(xs):
+        return "".join(vocab[i] for i in xs)
+
     ids = [0, 1, 2, 3, 4, 5, 0, 4, 4, 1, 2, 3, 5, 0, 1] * 3
     _assert_matches(decode, ids)
 
@@ -41,8 +48,10 @@ def test_sentencepiece_leading_space():
     # pieces use ▁ for a leading space; decode joins, maps ▁→space, strips the
     # single leading space (exactly what SentencePiece does).
     vocab = {0: "▁the", 1: "▁cat", 2: "s", 3: "▁sat", 4: ".", 5: "▁a", 6: "▁dog"}
+
     def decode(xs):
         return "".join(vocab[i] for i in xs).replace("▁", " ").lstrip()
+
     ids = [0, 1, 2, 3, 4, 5, 6, 3, 4, 0, 1, 3, 4, 5, 6] * 3
     _assert_matches(decode, ids, keep=3)
 
@@ -56,10 +65,14 @@ def test_byte_fallback_split():
     def decode(xs):
         out = bytearray()
         for i in xs:
-            if i == 10: out += b"\xc3"
-            elif i == 11: out += b"\xa9"          # 0xC3 0xA9 = 'é'
-            else: out.append(ord('a') + (i % 26))
+            if i == 10:
+                out += b"\xc3"
+            elif i == 11:
+                out += b"\xa9"  # 0xC3 0xA9 = 'é'
+            else:
+                out.append(ord("a") + (i % 26))
         return out.decode("utf-8", errors="replace")
+
     ids = [0, 1, 10, 11, 2, 3, 10, 11, 4, 5, 6, 10, 11, 7, 8] * 2
     _assert_matches(decode, ids, keep=2)
 
@@ -68,13 +81,18 @@ def test_byte_fallback_split():
 def test_real_tokenizer_roundtrip():
     try:
         from src.modalities.text import TextTokenizer
+
         tok = TextTokenizer()
     except Exception:
         pytest.skip("tokenizer not available")
     if not getattr(tok, "ready", False):
         pytest.skip("tokenizer not trained")
-    ids = tok.encode("The quick brown fox jumps over the lazy dog. "
-                     "Hello, world! ¿Cómo estás?", lang="en", add_bos=False, add_eos=False)
+    ids = tok.encode(
+        "The quick brown fox jumps over the lazy dog. Hello, world! ¿Cómo estás?",
+        lang="en",
+        add_bos=False,
+        add_eos=False,
+    )
     _assert_matches(tok.decode, ids, keep=4)
 
 
@@ -82,10 +100,12 @@ def test_real_tokenizer_roundtrip():
 def test_decodes_less_than_naive():
     calls = {"n": 0, "chars": 0}
     base = {i: f"tok{i}_" for i in range(30)}
+
     def decode(xs):
         calls["n"] += 1
         calls["chars"] += sum(len(base[i]) for i in xs)
         return "".join(base[i] for i in xs)
+
     ids = list(range(30))
     inc = IncrementalDecoder(decode, keep=4)
     for t in ids:

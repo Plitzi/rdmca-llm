@@ -23,6 +23,7 @@ a warm-started core. Built only when `cfg.ple_dim > 0`, so the default path is
 untouched. (`ops.embedding` does not exist in our backend surface; we use one
 `nn.Embedding` per layer for the lookup.)
 """
+
 from __future__ import annotations
 
 import src.backend as backend
@@ -40,28 +41,32 @@ class PerLayerEmbeddings(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.n_layers = cfg.n_layers
-        self.gated    = cfg.ple_gated
+        self.gated = cfg.ple_gated
         d_ple = cfg.ple_dim
-        self.emb = nn.ModuleList([nn.Embedding(cfg.vocab_size, d_ple)
-                                  for _ in range(cfg.n_layers)])           # lookup
-        self.ctx = nn.ModuleList([nn.Linear(cfg.d_model, d_ple, bias=False)
-                                  for _ in range(cfg.n_layers)])           # context
-        self.up  = nn.ModuleList([nn.Linear(d_ple, cfg.d_model, bias=False)
-                                  for _ in range(cfg.n_layers)])           # inject
+        self.emb = nn.ModuleList(
+            [nn.Embedding(cfg.vocab_size, d_ple) for _ in range(cfg.n_layers)]
+        )  # lookup
+        self.ctx = nn.ModuleList(
+            [nn.Linear(cfg.d_model, d_ple, bias=False) for _ in range(cfg.n_layers)]
+        )  # context
+        self.up = nn.ModuleList(
+            [nn.Linear(d_ple, cfg.d_model, bias=False) for _ in range(cfg.n_layers)]
+        )  # inject
         if self.gated:
-            self.gate = nn.ModuleList([nn.Linear(cfg.d_model, d_ple, bias=False)
-                                       for _ in range(cfg.n_layers)])
+            self.gate = nn.ModuleList(
+                [nn.Linear(cfg.d_model, d_ple, bias=False) for _ in range(cfg.n_layers)]
+            )
         # Zero-init the up-projection → PLE injects 0 at start (a no-op) and ramps
         # up as it trains, so turning PLE on never perturbs step 0 / a warm core.
         for up in self.up:
             up.weight = nn.Parameter(ops.zeros(up.weight.shape))
 
     def __call__(self, token_ids, hidden, layer_idx: int):
-        raw = self.emb[layer_idx](token_ids)            # [B,S,d_ple] token identity
-        ctx = self.ctx[layer_idx](hidden)               # [B,S,d_ple] context-aware
+        raw = self.emb[layer_idx](token_ids)  # [B,S,d_ple] token identity
+        ctx = self.ctx[layer_idx](hidden)  # [B,S,d_ple] context-aware
         if self.gated:
-            g   = ops.sigmoid(self.gate[layer_idx](hidden))
-            mix = g * raw + (1.0 - g) * ctx             # learn when to trust identity
+            g = ops.sigmoid(self.gate[layer_idx](hidden))
+            mix = g * raw + (1.0 - g) * ctx  # learn when to trust identity
         else:
             mix = raw + ctx
-        return self.up[layer_idx](mix)                  # [B,S,d_model] → residual add
+        return self.up[layer_idx](mix)  # [B,S,d_model] → residual add

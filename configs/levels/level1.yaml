@@ -77,14 +77,14 @@ resources:
   min_ram_gb: 3                # informational minimum to run comfortably.
 
 # ── Curriculum — per-stage DATA only (stage name + entry_level come from _base.yaml;
-#    data_dir defaults to data/level{L}/stage{N}). `sources` = where the data comes from;
-#    `filter` caps complexity (null = none). See scripts/prepare_data.py. ───────────────
+#    each stage owns its data folder in src/stages/stageNN_<slug>/data/level{L}/).
+#    `sources` = where the data comes from; `filter` caps complexity (null = none).
+#    See scripts/prepare_data.py. ───────────────────────────────────────────────────────
 curriculum:
   stage1:
     n_tokens: 200_000_000      # ~19× tokens/params — the run plateaued at ~80M on the
                                # OLD narrow data; broader data + more tokens is what
                                # makes L1 actually usable (its whole purpose as a base).
-    data_dir: "data/level1/stage1"
     data:
       # RICH but BASIC variety — the four registers a usable base needs:
       #   tinystories      → simple narrative / literature (grammar, story flow)
@@ -134,56 +134,47 @@ curriculum:
         max_word_len: 16
   stage2:
     n_tokens: 20_000_000
-    data_dir: "data/level1/stage2"
     data:
       sources: [analogies]       # synthetic simple analogies/sequences.
       filter: null               # already simple by construction.
   stage3:
     n_tokens: 30_000_000
-    data_dir: "data/level1/stage3"
     data:
       sources: [arithmetic]
       filter:
         arithmetic_level: 1        # 1 = single-digit + / − only (e.g. "3 + 4 = 7").
   stage4:
     n_tokens: 15_000_000
-    data_dir: "data/level1/stage4"
     data:
       sources: [causal_synth]  # synthetic cause→effect (e-CARE), simple by construction.
       filter: null
   stage8:
     n_tokens: 200_000_000         # was 20M — 1.9 tok/param was severely under-budgeted; 200M ≈ 19 tok/param
-    data_dir: "data/level1/stage8"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null             # JSON tool transcripts — appropriate by construction.
   stage9:
     n_tokens: 15_000_000
-    data_dir: "data/level1/stage9"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
   stage10:
     n_tokens: 15_000_000
-    data_dir: "data/level1/stage10"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
   stage5:
     n_tokens: 25_000_000
-    data_dir: "data/level1/stage5"
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
   stage6:
     n_tokens: 15_000_000
-    data_dir: "data/level1/stage6"
     data:
       sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
       filter: null
   stage7:
     n_tokens: 10_000_000
-    data_dir: "data/level1/stage7"
     data:
       sources: [ethics]
       filter: null

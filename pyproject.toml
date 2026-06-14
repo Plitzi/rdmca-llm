@@ -1,0 +1,43 @@
+[tool.ruff]
+# Equivalente Python de Prettier + ESLint en una sola herramienta.
+#   ruff format .   -> formatea (como Prettier)
+#   ruff check .    -> lint    (como ESLint)
+#   ruff check --fix .  -> autocorrige lo que se pueda
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    ".venv",
+    "dist",
+    "data",
+    "snapshots",
+    "logs",
+    "experiments",
+]
+
+[tool.ruff.lint]
+# Conjunto de reglas (cada "select" es un grupo, como los plugins de ESLint):
+#   E/W  pycodestyle   F  pyflakes      I  isort (orden de imports)
+#   UP   pyupgrade     B  bugbear       C4 comprehensions
+#   SIM  simplify      RUF reglas propias de ruff
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # largo de línea: lo gestiona el formateador, no el linter
+    "B008",    # llamadas en defaults de argumentos (común en factories)
+    "E402",    # import no al inicio: deliberado tras sys.path / dotenv
+    "E701",    # varios statements en una línea con ':' (estilo compacto del repo)
+    "E702",    # varios statements en una línea con ';' (estilo compacto del repo)
+    "E741",    # nombres de variable ambiguos (l, I) usados a propósito
+    "RUF001",  # carácter Unicode "ambiguo" en string  -> falso positivo (español)
+    "RUF002",  # carácter Unicode "ambiguo" en docstring -> falso positivo (español)
+    "RUF003",  # carácter Unicode "ambiguo" en comentario -> falso positivo (español)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Los tests pueden tener imports/fixtures que parecen "sin usar".
+"tests/**" = ["F401", "F811"]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false

@@ -14,8 +14,9 @@ Design notes:
     the last micro-batch's gradient remains (matching the current MLX loop,
     which overwrites its `grads` variable each iteration).
 """
+
 from __future__ import annotations
-import math
+
 import os
 from types import SimpleNamespace
 
@@ -25,7 +26,6 @@ import torch.nn as torch_nn
 import torch.nn.functional as F
 
 from src.backend.base import Backend
-
 
 _PRECISION = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}
 
@@ -39,7 +39,7 @@ def _pick_device() -> torch.device:
 
 
 DEVICE = _pick_device()
-_GRAD_SENTINEL = object()   # torch keeps grads on tensors; engine returns this
+_GRAD_SENTINEL = object()  # torch keeps grads on tensors; engine returns this
 
 
 # ───────────────────────── nn namespace ──────────────────────────────────────
@@ -52,8 +52,9 @@ _nn = SimpleNamespace(
     Conv2d=torch_nn.Conv2d,
     ConvTranspose1d=torch_nn.ConvTranspose1d,
     ConvTranspose2d=torch_nn.ConvTranspose2d,
-    Parameter=lambda a: torch_nn.Parameter(a if isinstance(a, torch.Tensor)
-                                           else torch.as_tensor(a, device=DEVICE)),
+    Parameter=lambda a: torch_nn.Parameter(
+        a if isinstance(a, torch.Tensor) else torch.as_tensor(a, device=DEVICE)
+    ),
     ModuleList=lambda items: torch_nn.ModuleList(items),
     ModuleDict=lambda d: torch_nn.ModuleDict(d),
 )
@@ -61,10 +62,7 @@ _nn = SimpleNamespace(
 
 # ───────────────────────── ops namespace ─────────────────────────────────────
 def _array(x, dtype=None):
-    if isinstance(x, torch.Tensor):
-        t = x.to(DEVICE)
-    else:
-        t = torch.as_tensor(x, device=DEVICE)
+    t = x.to(DEVICE) if isinstance(x, torch.Tensor) else torch.as_tensor(x, device=DEVICE)
     return t.to(dtype) if dtype is not None else t
 
 
@@ -87,44 +85,56 @@ _ops = SimpleNamespace(
     ones=lambda shape, dtype=None: torch.ones(shape, device=DEVICE, dtype=dtype),
     full=lambda shape, val: torch.full(tuple(shape), float(val), device=DEVICE),
     randn=lambda shape: torch.randn(tuple(shape), device=DEVICE),
-    cos=torch.cos, sin=torch.sin, sqrt=torch.sqrt, sigmoid=torch.sigmoid,
-    mean=_mean, sum=_sum,
+    cos=torch.cos,
+    sin=torch.sin,
+    sqrt=torch.sqrt,
+    sigmoid=torch.sigmoid,
+    mean=_mean,
+    sum=_sum,
     concatenate=lambda arrays, axis=0: torch.cat(list(arrays), dim=axis),
     outer=torch.outer,
     softmax=lambda x, axis=-1: torch.softmax(x, dim=axis),
     # Fused scaled-dot-product attention (selects Flash / mem-efficient kernels).
     # q:[B,H,S,Hd], k/v:[B,Hkv,T,Hd] — enable_gqa handles Hkv<H natively. Uses the
     # built-in causal mask when `is_causal` (and no explicit additive mask).
-    sdpa=lambda q, k, v, scale, is_causal=False, attn_mask=None:
-        F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, scale=scale,
-            is_causal=(is_causal and attn_mask is None),
-            enable_gqa=(q.shape[1] != k.shape[1])),
+    sdpa=lambda q, k, v, scale, is_causal=False, attn_mask=None: F.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        attn_mask=attn_mask,
+        scale=scale,
+        is_causal=(is_causal and attn_mask is None),
+        enable_gqa=(q.shape[1] != k.shape[1]),
+    ),
     triu=lambda x, k=0: torch.triu(x, diagonal=k),
     argmax=lambda x, axis=-1: torch.argmax(x, dim=axis),
     argmin=lambda x, axis=-1: torch.argmin(x, dim=axis),
     transpose=lambda x, axes: x.permute(*axes),
     astype=lambda x, dtype: x.to(dtype),
     stop_gradient=lambda x: x.detach(),
-    topk=lambda x, k, axis=-1: torch.topk(x, k, dim=axis),          # -> (values, indices)
+    topk=lambda x, k, axis=-1: torch.topk(x, k, dim=axis),  # -> (values, indices)
     take_along_axis=lambda x, idx, axis: torch.take_along_dim(x, idx, dim=axis),
     index_select=lambda x, idx, axis=0: x.index_select(axis, idx),
     index_add=lambda out, idx, vals, axis=0: out.index_add(axis, idx.long(), vals),
     nonzero=lambda mask: torch.nonzero(mask, as_tuple=False).flatten(),
     cumsum=lambda x, axis=0: torch.cumsum(x, dim=axis),
     where=lambda cond, a, b: torch.where(cond, a, b),
-    int_=torch.int32,    # match MLX so `ops.int_` means the same on both backends
-                         # (torch promotes int32 indices fine; only the MLX static
-                         #  capacity path actually consumes ops.int_).
+    int_=torch.int32,  # match MLX so `ops.int_` means the same on both backends
+    # (torch promotes int32 indices fine; only the MLX static
+    #  capacity path actually consumes ops.int_).
     silu=F.silu,
     relu=F.relu,
     cross_entropy=lambda logits, targets, reduction="mean": F.cross_entropy(
-        logits, targets.long(), reduction=reduction),
+        logits, targets.long(), reduction=reduction
+    ),
     bce_with_logits=lambda logits, labels, reduction="mean": F.binary_cross_entropy_with_logits(
-        logits, labels.to(logits.dtype), reduction=reduction),
+        logits, labels.to(logits.dtype), reduction=reduction
+    ),
     to_numpy=lambda x: x.detach().to(torch.float32).cpu().numpy(),
     from_numpy=lambda a: torch.as_tensor(a, device=DEVICE),
-    float32=torch.float32, bfloat16=torch.bfloat16, float16=torch.float16,
+    float32=torch.float32,
+    bfloat16=torch.bfloat16,
+    float16=torch.float16,
 )
 
 
@@ -135,6 +145,7 @@ def _value_and_grad(model, fn):
         loss = fn(*args)
         loss.backward()
         return loss.detach(), _GRAD_SENTINEL
+
     return run
 
 
@@ -168,15 +179,14 @@ def _grad_norm(model, grads) -> float:
     for p in model.parameters():
         if p.grad is not None:
             sq += float(p.grad.detach().pow(2).sum().item())
-    return sq ** 0.5
+    return sq**0.5
 
 
 def _accumulate_grads(running, grads, model):
     """True gradient accumulation. `grads` is the sentinel; the real gradients are
     on p.grad (just produced by this micro-batch's backward, which value_and_grad
     zeroed at its start). Snapshot and sum them across micro-batches into a dict."""
-    snap = {n: p.grad.detach().clone()
-            for n, p in model.named_parameters() if p.grad is not None}
+    snap = {n: p.grad.detach().clone() for n, p in model.named_parameters() if p.grad is not None}
     if running is None:
         return snap
     for n, v in snap.items():
@@ -256,8 +266,9 @@ class _QuantLinear(torch_nn.Module):
         self.bits, self.group_size = bits, group_size
         self.out_features, self.in_features = child.out_features, child.in_features
         q, scale, zero = _quantize_affine(child.weight.detach(), bits, group_size)
-        self.register_buffer("qweight", _pack4(q.reshape(q.shape[0], -1)) if bits == 4
-                             else q.reshape(q.shape[0], -1))
+        self.register_buffer(
+            "qweight", _pack4(q.reshape(q.shape[0], -1)) if bits == 4 else q.reshape(q.shape[0], -1)
+        )
         self.register_buffer("scale", scale)
         self.register_buffer("zero", zero)
         self.register_buffer("bias", child.bias.detach() if child.bias is not None else None)
@@ -271,7 +282,9 @@ class _QuantLinear(torch_nn.Module):
 
     def forward(self, x):
         w = self._weight().to(x.dtype)
-        return torch_nn.functional.linear(x, w, self.bias.to(x.dtype) if self.bias is not None else None)
+        return torch_nn.functional.linear(
+            x, w, self.bias.to(x.dtype) if self.bias is not None else None
+        )
 
     __call__ = forward
 
@@ -282,8 +295,9 @@ class _QuantEmbedding(torch_nn.Module):
         self.bits, self.group_size = bits, group_size
         self.num_embeddings, self.embedding_dim = child.num_embeddings, child.embedding_dim
         q, scale, zero = _quantize_affine(child.weight.detach(), bits, group_size)
-        self.register_buffer("qweight", _pack4(q.reshape(q.shape[0], -1)) if bits == 4
-                             else q.reshape(q.shape[0], -1))
+        self.register_buffer(
+            "qweight", _pack4(q.reshape(q.shape[0], -1)) if bits == 4 else q.reshape(q.shape[0], -1)
+        )
         self.register_buffer("scale", scale)
         self.register_buffer("zero", zero)
 
@@ -300,8 +314,7 @@ class _QuantEmbedding(torch_nn.Module):
     __call__ = forward
 
 
-def _quantize(model, bits: int = 4, group_size: int = 64,
-              skip_names: tuple = ("embed",)) -> None:
+def _quantize(model, bits: int = 4, group_size: int = 64, skip_names: tuple = ("embed",)) -> None:
     """In-place weight-only quantization of Linear/Embedding submodules. Layers
     whose feature dim isn't divisible by `group_size`, or whose last path
     component is in `skip_names` (by default `embed` — weight-tied as the output
@@ -327,17 +340,18 @@ def _quantize(model, bits: int = 4, group_size: int = 64,
     for parent, cname, child, kind in targets:
         setattr(parent, cname, kind(child, bits, group_size).to(DEVICE))
     if skipped:
-        print(f"  [quant] {skipped} layer(s) not divisible by group_size={group_size} "
-              f"kept in float dtype")
+        print(
+            f"  [quant] {skipped} layer(s) not divisible by group_size={group_size} "
+            f"kept in float dtype"
+        )
 
 
 def _save_weights(model, path: str) -> None:
     """Neutral checkpoint: float32 numpy .npz keyed by state_dict names —
     identical naming to the MLX backend, so checkpoints are cross-loadable."""
-    flat = {k: v.detach().to(torch.float32).cpu().numpy()
-            for k, v in model.state_dict().items()}
-    tmp = str(path) + ".tmp"           # atomic: write fully, then rename into place
-    with open(tmp, "wb") as f:         # file object → np.savez does NOT append .npz
+    flat = {k: v.detach().to(torch.float32).cpu().numpy() for k, v in model.state_dict().items()}
+    tmp = str(path) + ".tmp"  # atomic: write fully, then rename into place
+    with open(tmp, "wb") as f:  # file object → np.savez does NOT append .npz
         np.savez(f, **flat)
     os.replace(tmp, str(path))
 
@@ -346,16 +360,19 @@ def _load_weights(model, path: str) -> None:
     data = np.load(str(path))
     sd = {k: torch.as_tensor(data[k]) for k in data.files}
     from src.backend.base import warn_load_mismatch
-    warn_load_mismatch({n: tuple(p.shape) for n, p in model.state_dict().items()},
-                       {k: tuple(data[k].shape) for k in data.files}, str(path))
+
+    warn_load_mismatch(
+        {n: tuple(p.shape) for n, p in model.state_dict().items()},
+        {k: tuple(data[k].shape) for k in data.files},
+        str(path),
+    )
     model.load_state_dict(sd, strict=False)
     model.to(DEVICE)
 
 
 def _state_dict(module) -> dict:
     """Module params as a {name: float32 numpy} dict (neutral, cross-backend)."""
-    return {k: v.detach().to(torch.float32).cpu().numpy()
-            for k, v in module.state_dict().items()}
+    return {k: v.detach().to(torch.float32).cpu().numpy() for k, v in module.state_dict().items()}
 
 
 def _load_state_dict(module, mapping: dict) -> None:
@@ -388,8 +405,11 @@ def _register_submodules(parent, name, modules) -> None:
     ml = torch_nn.ModuleList(list(modules))
     setattr(parent, name, ml)
     try:
-        ref = next(p for p in parent.parameters() if p.numel() and id(p) not in
-                   {id(q) for q in ml.parameters()})
+        ref = next(
+            p
+            for p in parent.parameters()
+            if p.numel() and id(p) not in {id(q) for q in ml.parameters()}
+        )
         ml.to(device=ref.device, dtype=ref.dtype)
     except StopIteration:
         ml.to(DEVICE)
@@ -409,8 +429,7 @@ def _align_module(module, model) -> None:
 
 def _memory_stats() -> dict:
     if torch.cuda.is_available():
-        return {"peak": torch.cuda.max_memory_allocated(),
-                "active": torch.cuda.memory_allocated()}
+        return {"peak": torch.cuda.max_memory_allocated(), "active": torch.cuda.memory_allocated()}
     return {"peak": 0, "active": 0}
 
 
@@ -430,15 +449,18 @@ def _make_optimizer(model, lr, weight_decay, states=None):
         reason = None
         try:
             import bitsandbytes as bnb
+
             if torch.cuda.is_available():
-                return bnb.optim.AdamW8bit(model.parameters(), lr=lr,
-                                           weight_decay=weight_decay)
+                return bnb.optim.AdamW8bit(model.parameters(), lr=lr, weight_decay=weight_decay)
             reason = "no CUDA device"
-        except Exception as e:                       # not installed / import error
+        except Exception as e:  # not installed / import error
             reason = f"bitsandbytes unavailable ({e})"
         import warnings
-        warnings.warn(f"optimizer_states='int8' requested but unused ({reason}); "
-                      "using bf16-state AdamW.")
+
+        warnings.warn(
+            f"optimizer_states='int8' requested but unused ({reason}); using bf16-state AdamW.",
+            stacklevel=2,
+        )
     return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 
@@ -452,6 +474,7 @@ def _checkpoint(module, *args):
     (inference)."""
     if torch.is_grad_enabled():
         import torch.utils.checkpoint as _ckpt
+
         return _ckpt.checkpoint(module, *args, use_reentrant=False)
     return module(*args)
 
@@ -460,6 +483,7 @@ def _set_seed(seed: int) -> None:
     """Seed every RNG that affects a training run (Python, numpy, torch CPU+CUDA),
     so weight init + dropout + sampling are reproducible across runs."""
     import random as _random
+
     _random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

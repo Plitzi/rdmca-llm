@@ -7,10 +7,11 @@ The set of languages is NOT hardcoded here: it is decided in the config
 wrapper reads that metadata so the language-id prefix is always consistent with
 the trained tokenizer.
 """
+
 from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Dict, List
 
 PAD_ID = 0
 UNK_ID = 1
@@ -26,13 +27,14 @@ class TextTokenizer:
     def __init__(self, model_path: str = "dist/tokenizer/rdmca_spm.model"):
         self.model_path = Path(model_path)
         self._sp = None
-        self.lang_tokens: Dict[str, int] = {}
-        self.control_tokens: Dict[str, int] = {}
+        self.lang_tokens: dict[str, int] = {}
+        self.control_tokens: dict[str, int] = {}
         self.text_vocab_size: int = DEFAULT_VOCAB_SIZE
         self._non_text_ids: set = set()
 
         if self.model_path.exists():
             import sentencepiece as spm
+
             self._sp = spm.SentencePieceProcessor()
             self._sp.Load(str(self.model_path))
             self.text_vocab_size = self._sp.GetPieceSize()
@@ -47,40 +49,38 @@ class TextTokenizer:
             info = json.loads(info_path.read_text())
         except (json.JSONDecodeError, OSError):
             return
-        self.lang_tokens = {k: int(v) for k, v in
-                            (info.get("lang_token_ids") or {}).items()}
+        self.lang_tokens = {k: int(v) for k, v in (info.get("lang_token_ids") or {}).items()}
         # Control delimiters (<think>, <tool_call>, …) — read stable ids from the
         # persisted info instead of relying on the private sp.PieceToId order.
-        self.control_tokens = {k: int(v) for k, v in
-                               (info.get("control_token_ids") or {}).items()}
+        self.control_tokens = {k: int(v) for k, v in (info.get("control_token_ids") or {}).items()}
         # IDs stripped before decoding to readable text: language tags +
         # modality boundary tokens (user-defined symbols that would otherwise
         # decode to their literal "<...>" string).
         self._non_text_ids = set(self.lang_tokens.values())
-        self._non_text_ids |= set(
-            int(v) for v in (info.get("modality_tokens") or {}).values())
+        self._non_text_ids |= {int(v) for v in (info.get("modality_tokens") or {}).values()}
 
     @property
     def ready(self) -> bool:
         return self._sp is not None
 
-    def encode(self, text: str, lang: str = "en",
-               add_bos: bool = True, add_eos: bool = True) -> List[int]:
+    def encode(
+        self, text: str, lang: str = "en", add_bos: bool = True, add_eos: bool = True
+    ) -> list[int]:
         if not self._sp:
             raise RuntimeError(
-                f"Tokenizer not found at {self.model_path}. "
-                "Run: python scripts/train_tokenizer.py")
+                f"Tokenizer not found at {self.model_path}. Run: python scripts/train_tokenizer.py"
+            )
         ids = self._sp.EncodeAsIds(text)
-        prefix: List[int] = []
+        prefix: list[int] = []
         if add_bos:
             prefix.append(BOS_ID)
         if lang in self.lang_tokens:
             prefix.append(self.lang_tokens[lang])
         if add_eos:
-            ids = ids + [EOS_ID]
+            ids = [*ids, EOS_ID]
         return prefix + ids
 
-    def encode_raw(self, text: str) -> List[int]:
+    def encode_raw(self, text: str) -> list[int]:
         """Pieces ONLY — no BOS/EOS and no `<lang:XX>` prefix. Use when encoding a
         mid-sequence fragment (e.g. the `<think>` delimiters in the chat loop):
         encode() always injects the language token for a known language, which
@@ -90,15 +90,16 @@ class TextTokenizer:
             raise RuntimeError("Tokenizer not loaded")
         return list(self._sp.EncodeAsIds(text))
 
-    def decode(self, ids: List[int]) -> str:
+    def decode(self, ids: list[int]) -> str:
         if not self._sp:
             raise RuntimeError("Tokenizer not loaded")
         # Drop control/specials, language tags, modality boundaries and any
         # non-text (image/audio) token that sits above the text vocab range.
-        filtered = [i for i in ids
-                    if i > EOS_ID
-                    and i < self.text_vocab_size
-                    and i not in self._non_text_ids]
+        filtered = [
+            i
+            for i in ids
+            if i > EOS_ID and i < self.text_vocab_size and i not in self._non_text_ids
+        ]
         return self._sp.DecodeIds(filtered)
 
     def vocab_size(self) -> int:

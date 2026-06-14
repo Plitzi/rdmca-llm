@@ -50,7 +50,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_
 ```
 
 `pillow`/`soundfile` are only needed for the multimodal parts (loading images/audio).
-The main scripts (`train_stage.py`, `uses/chat/run_chat.py`, `consolidation_daemon.py`) re-exec
+The main scripts (`scripts/train.py`, `uses/chat/run_chat.py`, `scripts/consolidation_daemon.py`) re-exec
 themselves with the venv's Python if you run them without activating it.
 
 ## 3. Backend & precision
@@ -80,7 +80,7 @@ training:
 - **Lower precision → bigger levels fit.** The resource guard's memory estimate is
   precision-aware, so dropping `fp32 → bf16` roughly halves weights/grads/activations
   and a heavier level may now fit on the same hardware. Override per run without
-  editing the config: `python train_stage.py --level 4 --stage 1 --precision bf16`
+  editing the config: `python scripts/train.py --level 4 --stage 1 --precision bf16`
   (the guard recomputes with the chosen dtype; the announce prints it).
 - **Inference quantization** — for running (not training) on limited hardware, chat/agent
   take `--quant N` for any 2–8 bit width (e.g. `int4`, `8`): real grouped-affine
@@ -172,28 +172,28 @@ are saved automatically; `--resume` continues.
 
 ```bash
 # Frozen cognitive core (stages 1-7):
-python train_stage.py --level 4 --stage 1      # Language
-python train_stage.py --level 4 --stage 2      # Perception / patterns
-python train_stage.py --level 4 --stage 3      # Abstraction / arithmetic
-python train_stage.py --level 4 --stage 4      # Causal / procedural
-python train_stage.py --level 4 --stage 5      # Reasoning (chain-of-thought)
-python train_stage.py --level 4 --stage 6      # Memory management (recall & use context)
-python train_stage.py --level 4 --stage 7      # Ethics + BCF  → freezes the core
+python scripts/train.py --level 4 --stage 1      # Language
+python scripts/train.py --level 4 --stage 2      # Perception / patterns
+python scripts/train.py --level 4 --stage 3      # Abstraction / arithmetic
+python scripts/train.py --level 4 --stage 4      # Causal / procedural
+python scripts/train.py --level 4 --stage 5      # Reasoning (chain-of-thought)
+python scripts/train.py --level 4 --stage 6      # Memory management (recall & use context)
+python scripts/train.py --level 4 --stage 7      # Ethics + BCF  → freezes the core
 # Behavioral interfaces, trained on the frozen core as LoRA sectors (stages 8-10):
-python train_stage.py --level 4 --stage 8      # Tool use
-python train_stage.py --level 4 --stage 9      # MCP
-python train_stage.py --level 4 --stage 10     # Skills
+python scripts/train.py --level 4 --stage 8      # Tool use
+python scripts/train.py --level 4 --stage 9      # MCP
+python scripts/train.py --level 4 --stage 10     # Skills
 
 # Resume after Ctrl+C (fast-forwards the data stream to where it stopped)
-python train_stage.py --level 4 --stage 1 --resume
+python scripts/train.py --level 4 --stage 1 --resume
 
 # Plain scrolling logs (selectable/copyable, no flicker); a full train.log is
 # written to the stage's checkpoint dir regardless of mode.
-python train_stage.py --level 4 --stage 1 --plain
+python scripts/train.py --level 4 --stage 1 --plain
 ```
 
 Same 10 stages at every level — the smaller levels just learn each faculty more
-shallowly. `train_stage.py` suggests the next stage and enforces prerequisites.
+shallowly. `scripts/train.py` suggests the next stage and enforces prerequisites.
 
 | Stage | Gate metric | Threshold |
 |---|---|---|
@@ -207,7 +207,7 @@ shallowly. `train_stage.py` suggests the next stage and enforces prerequisites.
 | 8-10 Tool/MCP/Skills | val perplexity (post-freeze LoRA sectors) | per level |
 
 > Gates use **validation perplexity** as the operative proxy. To use real benchmarks
-> (BLiMP/ARC/GSM8K), replace `evaluate_gate` in `train_stage.py`.
+> (BLiMP/ARC/GSM8K), replace `evaluate_gate` in `scripts/train.py`.
 
 Checkpoints live in `dist/checkpoints/level<N>/stage<N>/` (`step_*.npz`, `latest.json`,
 `final.npz`, `stage_complete.json`).
@@ -267,7 +267,7 @@ cognition + memory + values) is **frozen permanently** and saved to
 `dist/checkpoints/level<N>/foundational/theta_f_frozen.npz`. If
 `data/benchmarks/bcf_probes.jsonl` exists (one `{"text": "...", "label": 0|1}` per line),
 the BCF safety head is also trained and saved as `bcf_head.npz`. This happens
-automatically inside `train_stage.py --stage 7` (driven by `BCF_STAGE = 7`).
+automatically inside `scripts/train.py --stage 7` (driven by `BCF_STAGE = 7`).
 
 From here the core is never touched again: all learning is through consolidation.
 
@@ -320,8 +320,8 @@ experience updates several sectors (multi-sectorial), while **S7 (safety) stays 
 `aux_loss_weight`).
 
 ```bash
-python consolidation_daemon.py --level 3 --once    # one cycle, then exit
-python consolidation_daemon.py --level 3           # daemon (waits for idle)
+python scripts/consolidation_daemon.py --level 3 --once    # one cycle, then exit
+python scripts/consolidation_daemon.py --level 3           # daemon (waits for idle)
 ```
 
 Updated sectors are saved to `dist/checkpoints/level<N>/sectors.npz`; long-term memory
@@ -343,16 +343,16 @@ python scripts/prepare_data.py    --level 1 --stage all
 python scripts/train_tokenizer.py --level 1
 
 # 3) Train, in order — the SAME 10 stages as every level (just smaller)
-python train_stage.py --level 1 --stage 1      # Language / conversation
-python train_stage.py --level 1 --stage 2      # Perception / patterns
-python train_stage.py --level 1 --stage 3      # Abstraction / arithmetic
-python train_stage.py --level 1 --stage 4      # Causal / procedural
-python train_stage.py --level 1 --stage 5      # Reasoning (chain-of-thought)
-python train_stage.py --level 1 --stage 6      # Memory management
-python train_stage.py --level 1 --stage 7      # Ethics + BCF  → freezes the core
-python train_stage.py --level 1 --stage 8      # Tool use      (LoRA sector)
-python train_stage.py --level 1 --stage 9      # MCP           (LoRA sector)
-python train_stage.py --level 1 --stage 10     # Skills        (LoRA sector)
+python scripts/train.py --level 1 --stage 1      # Language / conversation
+python scripts/train.py --level 1 --stage 2      # Perception / patterns
+python scripts/train.py --level 1 --stage 3      # Abstraction / arithmetic
+python scripts/train.py --level 1 --stage 4      # Causal / procedural
+python scripts/train.py --level 1 --stage 5      # Reasoning (chain-of-thought)
+python scripts/train.py --level 1 --stage 6      # Memory management
+python scripts/train.py --level 1 --stage 7      # Ethics + BCF  → freezes the core
+python scripts/train.py --level 1 --stage 8      # Tool use      (LoRA sector)
+python scripts/train.py --level 1 --stage 9      # MCP           (LoRA sector)
+python scripts/train.py --level 1 --stage 10     # Skills        (LoRA sector)
 
 # 4) Chat with it (most complete checkpoint)
 python uses/chat/run_chat.py --level 1 --stage 10
@@ -369,7 +369,7 @@ them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a 
 *sectors*, the MoE gate and daily consolidation activate at the **freeze point**
 (ethics+BCF, **stage 7**), so they're available once you train through stage 7 even at L1
 (they just have little to route at this scale). To exercise MoE routing + consolidation,
-train through stage 7+ and run `consolidation_daemon.py --level N --once`.
+train through stage 7+ and run `scripts/consolidation_daemon.py --level N --once`.
 
 ## 12. Cleanup / fresh start
 

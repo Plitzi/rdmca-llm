@@ -14,30 +14,37 @@ else builds on. Covers the failure modes behind the Level-1 stages 3–7 collaps
 
 Self-contained: a fake tokenizer + temp dirs, no trained tokenizer/checkpoints.
 """
-import sys, json
+
+import json
+import sys
 from pathlib import Path
+from typing import ClassVar
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import itertools
 
 import numpy as np
 import pytest
 
-import train_stage as T
-from src.data.loader import TextDataset, DataLoader
+from src.data.loader import DataLoader, TextDataset
 from src.modalities.text import BOS_ID, EOS_ID
+from src.training import trainer as T
 
 
 # ─────────────────────────── fakes / helpers ────────────────────────────────
 class FakeTok:
     """Deterministic char→id tokenizer (no SentencePiece needed)."""
+
     ready = True
-    lang_tokens = {"en": 5, "es": 6}
+    lang_tokens: ClassVar[dict] = {"en": 5, "es": 6}
 
     def encode(self, text, lang="en", add_bos=False, add_eos=False):
         ids = [ord(c) % 900 + 100 for c in text]
         if add_bos:
-            ids = [BOS_ID] + ids
+            ids = [BOS_ID, *ids]
         if add_eos:
-            ids = ids + [EOS_ID]
+            ids = [*ids, EOS_ID]
         return ids
 
     def encode_raw(self, text):
@@ -88,10 +95,13 @@ def test_loader_interleaves_sources_no_single_source_block(tmp_path):
     the model trains a whole distribution then forgets it (the file-boundary bug)."""
     _write_jsonl(tmp_path / "aaa.jsonl", [f"A{i}" for i in range(400)])
     _write_jsonl(tmp_path / "bbb.jsonl", [f"B{i}" for i in range(400)])
-    ds = TextDataset(str(tmp_path), FakeTok(), seq_len=8, batch_size=2,
-                     shuffle=True, shuffle_buffer=16)
-    first = [r["text"][0] for r in (rec for rec, _ in zip(ds._iter_records(), range(80)))]
-    assert "A" in first[:40] and "B" in first[:40]          # both appear early
+    ds = TextDataset(
+        str(tmp_path), FakeTok(), seq_len=8, batch_size=2, shuffle=True, shuffle_buffer=16
+    )
+    first = [
+        r["text"][0] for r in (rec for rec, _ in zip(ds._iter_records(), range(80), strict=False))
+    ]
+    assert "A" in first[:40] and "B" in first[:40]  # both appear early
     # neither source forms a long contiguous run at the start
     assert first[:40].count("A") < 38 and first[:40].count("B") < 38
 
@@ -101,15 +111,19 @@ def test_rehearsal_weight_favours_largest_corpus(tmp_path):
     (the largest earlier stage) dominates rehearsal instead of being tied with a
     tiny arithmetic corpus (the uniform-selection forgetting bug)."""
     big, small = tmp_path / "big", tmp_path / "small"
-    big.mkdir(); small.mkdir()
+    big.mkdir()
+    small.mkdir()
     _write_jsonl(big / "d.jsonl", [f"big {i}" for i in range(2000)])
     _write_jsonl(small / "d.jsonl", ["tiny"])
     dbig = TextDataset(str(big), FakeTok(), seq_len=8, batch_size=2)
-    dsm  = TextDataset(str(small), FakeTok(), seq_len=8, batch_size=2)
-    ld = DataLoader(TextDataset(str(big), FakeTok(), seq_len=8, batch_size=2),
-                    replay=[dbig, dsm], replay_fraction=0.5)
+    dsm = TextDataset(str(small), FakeTok(), seq_len=8, batch_size=2)
+    ld = DataLoader(
+        TextDataset(str(big), FakeTok(), seq_len=8, batch_size=2),
+        replay=[dbig, dsm],
+        replay_fraction=0.5,
+    )
     w = ld._replay_weights
-    assert w[0] / sum(w) > 0.95                              # big corpus ~all the weight
+    assert w[0] / sum(w) > 0.95  # big corpus ~all the weight
 
 
 def test_rehearsal_fraction_controls_replay_mixing(tmp_path):
@@ -117,21 +131,26 @@ def test_rehearsal_fraction_controls_replay_mixing(tmp_path):
     Distinguishable vocab ('1' primary vs '9' replay) proves rehearsal is wired, so
     a later stage actually keeps refreshing earlier skills."""
     prim, rep = tmp_path / "prim", tmp_path / "rep"
-    prim.mkdir(); rep.mkdir()
+    prim.mkdir()
+    rep.mkdir()
     _write_jsonl(prim / "d.jsonl", ["111111111"] * 200)
     _write_jsonl(rep / "d.jsonl", ["999999999"] * 200)
     rds = TextDataset(str(rep), FakeTok(), seq_len=8, batch_size=2)
 
     def chars(frac):
-        ld = DataLoader(TextDataset(str(prim), FakeTok(), seq_len=8, batch_size=2),
-                        replay=[rds], replay_fraction=frac, seed=3)
+        ld = DataLoader(
+            TextDataset(str(prim), FakeTok(), seq_len=8, batch_size=2),
+            replay=[rds],
+            replay_fraction=frac,
+            seed=3,
+        )
         seen = set()
         for _ in range(20):
             seen |= set(FakeTok().decode(ld.next_batch().ravel().tolist()))
         return seen
 
-    assert chars(0.0) == {"1"}                               # no rehearsal → primary only
-    assert "9" in chars(1.0)                                 # full rehearsal → replay drawn
+    assert chars(0.0) == {"1"}  # no rehearsal → primary only
+    assert "9" in chars(1.0)  # full rehearsal → replay drawn
 
 
 # ════════════════════════ 3. completion-only masking ════════════════════════
@@ -147,7 +166,7 @@ def test_completion_masking_trains_only_assistant(tmp_path):
     assert mask[-1] == 1 and ids[-1] == EOS_ID
     # the user span (before "Assistant") is fully masked
     tok = FakeTok()
-    user_len = 1 + 1 + len(tok.encode_raw("User: hi there"))   # BOS + lang + user block
+    user_len = 1 + 1 + len(tok.encode_raw("User: hi there"))  # BOS + lang + user block
     assert all(m == 0 for m in mask[:user_len])
     # at least one assistant token is trained
     assert any(m == 1 for m in mask[user_len:])
@@ -155,7 +174,7 @@ def test_completion_masking_trains_only_assistant(tmp_path):
 
 def test_record_with_no_response_is_dropped(tmp_path):
     """A transcript with only a User turn carries no training signal → empty."""
-    _write_jsonl(tmp_path / "d.jsonl", ["placeholder"])     # dir must be non-empty
+    _write_jsonl(tmp_path / "d.jsonl", ["placeholder"])  # dir must be non-empty
     ds = TextDataset(str(tmp_path), FakeTok(), seq_len=64, batch_size=1, with_mask=True)
     ids, mask = ds._encode_record({"text": "User: just a question?", "lang": "en"})
     assert ids == [] and mask == []
@@ -177,8 +196,7 @@ def test_seeded_skip_reproduces_stream(tmp_path):
     _write_jsonl(tmp_path / "d.jsonl", [f"row number {i} content" for i in range(500)])
 
     def fresh():
-        ds = TextDataset(str(tmp_path), FakeTok(), seq_len=8, batch_size=2,
-                         shuffle=True, seed=7)
+        ds = TextDataset(str(tmp_path), FakeTok(), seq_len=8, batch_size=2, shuffle=True, seed=7)
         return DataLoader(ds, seed=99)
 
     a = fresh()
@@ -193,7 +211,7 @@ def test_val_loader_reads_only_val_files(tmp_path):
     _write_jsonl(tmp_path / "d.jsonl", [f"train {i}" for i in range(50)])
     _write_jsonl(tmp_path / "d.val.jsonl", [f"heldout {i}" for i in range(50)])
     train = TextDataset(str(tmp_path), FakeTok(), val=False)
-    val   = TextDataset(str(tmp_path), FakeTok(), val=True)
+    val = TextDataset(str(tmp_path), FakeTok(), val=True)
     assert all(not f.name.endswith(".val.jsonl") for f in train._files)
     assert val._files and all(f.name.endswith(".val.jsonl") for f in val._files)
 
@@ -209,7 +227,7 @@ def test_empty_corpus_stops_instead_of_hanging(tmp_path):
 def test_sub_batch_corpus_still_yields(tmp_path):
     """A corpus SMALLER than one batch must still produce batches (by cycling),
     not hang — only a truly empty corpus stops."""
-    _write_jsonl(tmp_path / "d.jsonl", ["hi"])              # ~few tokens << one batch
+    _write_jsonl(tmp_path / "d.jsonl", ["hi"])  # ~few tokens << one batch
     ds = TextDataset(str(tmp_path), FakeTok(), seq_len=8, batch_size=2)
     batch = DataLoader(ds).next_batch()
     assert batch.shape == (2, 9)
@@ -218,15 +236,15 @@ def test_sub_batch_corpus_still_yields(tmp_path):
 # ════════════════════════ 7. cosine LR schedule ═════════════════════════════
 def test_cosine_lr_warmup_then_decay_to_floor():
     base, lo, warm, total = 3e-4, 5e-5, 100, 1000
-    assert T.cosine_lr(0, base, lo, warm, total) == 0.0           # ramp starts at 0
-    assert T.cosine_lr(warm, base, lo, warm, total) == pytest.approx(base)   # peak at warmup end
+    assert T.cosine_lr(0, base, lo, warm, total) == 0.0  # ramp starts at 0
+    assert T.cosine_lr(warm, base, lo, warm, total) == pytest.approx(base)  # peak at warmup end
     mid = T.cosine_lr(550, base, lo, warm, total)
-    assert lo < mid < base                                        # decaying through the middle
+    assert lo < mid < base  # decaying through the middle
     end = T.cosine_lr(total, base, lo, warm, total)
-    assert end == pytest.approx(lo, abs=1e-9)                     # floor at the end
+    assert end == pytest.approx(lo, abs=1e-9)  # floor at the end
     # monotonic non-increasing after warmup
     xs = [T.cosine_lr(s, base, lo, warm, total) for s in range(warm, total + 1, 50)]
-    assert all(a >= b - 1e-12 for a, b in zip(xs, xs[1:]))
+    assert all(a >= b - 1e-12 for a, b in itertools.pairwise(xs))
 
 
 def test_cosine_lr_no_div_by_zero_when_total_le_warmup():
@@ -239,37 +257,65 @@ def test_cosine_lr_no_div_by_zero_when_total_le_warmup():
 def test_write_stage_audit_captures_full_context(tmp_path):
     """Each stage must persist a COMPLETE, auditable context: hyperparameters, data
     provenance (per-source tokens), rehearsal mix + weights, model geometry, env."""
-    ddir = tmp_path / "data"; ddir.mkdir()
+    ddir = tmp_path / "data"
+    ddir.mkdir()
     (ddir / "src.meta.json").write_text(json.dumps({"tokens": 1234567, "exhausted": False}))
 
     class FakeCfgObj:
-        d_model = 256; n_heads = 4; n_layers = 6; vocab_size = 8192
-        context_len = 512; mrl_dims = [128, 256]
+        d_model = 256
+        n_heads = 4
+        n_layers = 6
+        vocab_size = 8192
+        context_len = 512
+        mrl_dims: ClassVar[list] = [128, 256]
 
     class FakeModel:
         cfg = FakeCfgObj()
-        def count_params(self): return 11_000_000
+
+        def count_params(self):
+            return 11_000_000
 
     class FakeLoader:
-        replay_dirs = ["data/level1/stage1", "data/level1/stage2"]
+        replay_dirs: ClassVar[list] = ["data/level1/stage1", "data/level1/stage2"]
         replay_fraction = 0.15
-        _replay_weights = [900.0, 100.0]
+        _replay_weights: ClassVar[list] = [900.0, 100.0]
 
-    cfg = {"level": 1, "backend": "mlx",
-           "curriculum": {"stage5": {"name": "Reasoning", "data_dir": str(ddir)}}}
-    tcfg = {"lr": 3e-4, "lr_min": 5e-5, "batch_size": 16, "grad_accumulation": 1,
-            "warmup_steps": 500, "max_corpus_passes": 4, "clip_grad_norm": 1.0,
-            "save_every": 500, "eval_every": 500}
+    cfg = {
+        "level": 1,
+        "backend": "mlx",
+        "curriculum": {"stage5": {"name": "Reasoning", "data_dir": str(ddir)}},
+    }
+    tcfg = {
+        "lr": 3e-4,
+        "lr_min": 5e-5,
+        "batch_size": 16,
+        "grad_accumulation": 1,
+        "warmup_steps": 500,
+        "max_corpus_passes": 4,
+        "clip_grad_norm": 1.0,
+        "save_every": 500,
+        "eval_every": 500,
+    }
     rec = T.write_stage_audit(
-        tmp_path, stage=5, cfg=cfg, model=FakeModel(), model_cfg=FakeCfgObj(), tcfg=tcfg,
-        data_loader=FakeLoader(), target=25_000_000, total_steps=3000, precision="bf16",
-        seed=1234, hparams_extra={"early_stop_patience": 4, "early_stop_min_delta": 0.005})
+        tmp_path,
+        stage=5,
+        cfg=cfg,
+        model=FakeModel(),
+        model_cfg=FakeCfgObj(),
+        tcfg=tcfg,
+        data_loader=FakeLoader(),
+        target=25_000_000,
+        total_steps=3000,
+        precision="bf16",
+        seed=1234,
+        hparams_extra={"early_stop_patience": 4, "early_stop_min_delta": 0.005},
+    )
 
     saved = json.loads((tmp_path / "audit.json").read_text())
-    assert saved == rec                                          # persisted verbatim
+    assert saved == rec  # persisted verbatim
     assert saved["stage"] == 5 and saved["seed"] == 1234
     assert saved["model"]["params"] == 11_000_000
     assert saved["hparams"]["lr"] == 3e-4 and saved["hparams"]["early_stop_patience"] == 4
-    assert saved["data"]["sources"][0]["tokens"] == 1234567     # per-source provenance
-    assert saved["rehearsal"]["weights_pct"] == [90.0, 10.0]    # size-weighted mix
+    assert saved["data"]["sources"][0]["tokens"] == 1234567  # per-source provenance
+    assert saved["rehearsal"]["weights_pct"] == [90.0, 10.0]  # size-weighted mix
     assert "command" in saved and "started" in saved

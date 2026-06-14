@@ -6,13 +6,14 @@ instances of the SAME relation, so the model sees each relation generalize acros
 pairs. Guards: every analogy's two pairs share one relation, the generated set is far more
 varied than a fixed tuple list, and the completion Q&A form teaches the analogy skill.
 """
+
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.graded import gen_analogies, _ANALOGY_RELATIONS
+from src.data.graded import _ANALOGY_RELATIONS, gen_analogies
 
 
 def _pair_to_relation():
@@ -32,10 +33,10 @@ def test_analogies_are_relation_consistent_and_varied():
         t = r["text"]
         m = re.search(r"([a-z]+) is to ([a-z]+) as ([a-z]+) is to (?:what\?|([a-z]+))", t)
         if not m:
-            continue   # numeric pattern
+            continue  # numeric pattern
         a, b, c = m[1], m[2], m[3]
         d = m[4]
-        if d is None:                                   # completion Q&A: answer on next line
+        if d is None:  # completion Q&A: answer on next line
             d = re.search(r"Assistant: ([a-z]+)\.", t)[1]
             completions += 1
         rel_ab, rel_cd = idx.get((a, b)), idx.get((c, d))

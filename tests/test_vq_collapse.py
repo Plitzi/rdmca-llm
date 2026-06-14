@@ -3,12 +3,14 @@ Tests for VQ-VAE codebook-collapse prevention (EMA + dead-code reset) in
 src/modalities/vq.py. Default (ema=False) must be unchanged; ema=True must move the
 codebook toward the data and recycle dead entries instead of letting them die.
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import numpy as np
 import mlx.core as mx
+import numpy as np
 
 from src.modalities.vq import VectorQuantizer
 
@@ -16,13 +18,13 @@ from src.modalities.vq import VectorQuantizer
 def test_default_behavior_unchanged():
     """ema=False keeps the original loss (codebook_loss + commitment) and ema_update
     is a no-op — no regression for the existing image/audio tokenizers."""
-    vq = VectorQuantizer(16, 4)                       # ema defaults to False
+    vq = VectorQuantizer(16, 4)  # ema defaults to False
     z = mx.array(np.random.randn(2, 5, 4).astype(np.float32))
     cb_before = np.asarray(vq.codebook).copy()
     z_q, idx, loss = vq(z)
     assert z_q.shape == z.shape and idx.shape == (2, 5)
     assert float(loss) > 0
-    vq.ema_update(z)                                  # no-op when ema=False
+    vq.ema_update(z)  # no-op when ema=False
     assert np.array_equal(np.asarray(vq.codebook), cb_before)
 
 
@@ -32,10 +34,10 @@ def test_ema_forward_drops_codebook_loss():
     np.random.seed(0)
     z = mx.array(np.random.randn(3, 4).astype(np.float32))
     vq_full = VectorQuantizer(16, 4, ema=False)
-    vq_ema  = VectorQuantizer(16, 4, ema=True)
-    vq_ema.codebook = vq_full.codebook                # same codebook → compare losses
+    vq_ema = VectorQuantizer(16, 4, ema=True)
+    vq_ema.codebook = vq_full.codebook  # same codebook → compare losses
     _, _, l_full = vq_full(z)
-    _, _, l_ema  = vq_ema(z)
+    _, _, l_ema = vq_ema(z)
     assert float(l_ema) < float(l_full)
 
 
@@ -54,7 +56,7 @@ def test_ema_moves_codebook_toward_data():
     for _ in range(40):
         vq.ema_update(data)
     cb1 = np.asarray(vq.codebook)
-    d1 = float((( cb1[np.argmin(((cb1 - center) ** 2).sum(1))] - center) ** 2).sum())
+    d1 = float(((cb1[np.argmin(((cb1 - center) ** 2).sum(1))] - center) ** 2).sum())
     assert d1 < d0, f"codebook did not move toward data ({d1} !< {d0})"
 
 
@@ -81,6 +83,7 @@ def test_perplexity_improves_with_ema_and_reset():
     actually used (collapse is mitigated)."""
     np.random.seed(3)
     centers = np.array([[3, 0], [-3, 0], [0, 3], [0, -3]], dtype=np.float32)
+
     def batch():
         c = centers[np.random.randint(0, 4, size=128)]
         return mx.array((c + 0.05 * np.random.randn(128, 2)).astype(np.float32))
@@ -90,5 +93,5 @@ def test_perplexity_improves_with_ema_and_reset():
     for _ in range(60):
         vq.ema_update(batch())
     ppl_after = vq.perplexity(batch())
-    assert ppl_after >= ppl_before    # usage should not collapse; typically improves
-    assert ppl_after > 2.0            # at least a few codes meaningfully used
+    assert ppl_after >= ppl_before  # usage should not collapse; typically improves
+    assert ppl_after > 2.0  # at least a few codes meaningfully used

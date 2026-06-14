@@ -23,22 +23,28 @@ Routing is pluggable so it can use the cheapest available trained signal:
 Additive and OPT-IN: the default chat/agent path is unchanged unless a manager is
 supplied, so an untuned router can never make the base worse than today.
 """
+
 from __future__ import annotations
-from typing import Callable, Dict, List, Optional, Tuple
+
+from collections.abc import Callable
 
 import numpy as np
 
-from src.routing.semantic_router import SemanticTokenRouter, Chunk, NUM_SECTORS
 from src.memory.episodic_buffer import EpisodicBuffer, Experience
+from src.routing.semantic_router import NUM_SECTORS, Chunk, SemanticTokenRouter
 
 
 class ContextManager:
-    def __init__(self, d_model: int, context_len: int = 2048,
-                 slot_len: Optional[int] = None,
-                 buffer: Optional[EpisodicBuffer] = None,
-                 embed_fn: Optional[Callable[[List[int]], np.ndarray]] = None,
-                 route_fn: Optional[Callable[[List[int]], List[Tuple[int, float]]]] = None,
-                 decode_fn: Optional[Callable[[List[int]], str]] = None):
+    def __init__(
+        self,
+        d_model: int,
+        context_len: int = 2048,
+        slot_len: int | None = None,
+        buffer: EpisodicBuffer | None = None,
+        embed_fn: Callable[[list[int]], np.ndarray] | None = None,
+        route_fn: Callable[[list[int]], list[tuple[int, float]]] | None = None,
+        decode_fn: Callable[[list[int]], str] | None = None,
+    ):
         self.context_len = context_len
         self.decode_fn = decode_fn
         # Per-sector slot bound W_s. Default splits the window so a few active
@@ -50,34 +56,36 @@ class ContextManager:
         self.route_fn = route_fn
         # Insertion order across slots, so assembly can preserve conversational
         # recency instead of a fixed sector order (which would scramble a dialogue).
-        self._order: List[Tuple[int, int]] = []      # (sector_id, chunk_seq)
-        self._chunks: Dict[int, List[int]] = {}       # chunk_seq -> tokens
+        self._order: list[tuple[int, int]] = []  # (sector_id, chunk_seq)
+        self._chunks: dict[int, list[int]] = {}  # chunk_seq -> tokens
         self._seq = 0
 
     # ------------------------------------------------------------------
-    def add(self, tokens: List[int]) -> None:
+    def add(self, tokens: list[int]) -> None:
         """Segment `tokens`, route each chunk to its sector slot(s), evict overflow
         to the episodic buffer."""
         for chunk in self.str.segment(tokens):
             for sid, _ in self._route(chunk):
                 self._add_to_slot(sid, chunk.tokens)
 
-    def _route(self, chunk: Chunk) -> List[Tuple[int, float]]:
+    def _route(self, chunk: Chunk) -> list[tuple[int, float]]:
         if self.route_fn is not None:
             routed = self.route_fn(chunk.tokens)
             if routed:
                 return routed
         if self.embed_fn is not None:
             import src.backend as backend
+
             emb = self.embed_fn(chunk.tokens)
             if emb is not None:
-                routed = self.str.route(chunk, backend.current().ops.array(
-                    np.asarray(emb, dtype=np.float32)))
+                routed = self.str.route(
+                    chunk, backend.current().ops.array(np.asarray(emb, dtype=np.float32))
+                )
                 if routed:
                     return routed
-        return [(1, 1.0)]                              # no router → single slot (flat-ish)
+        return [(1, 1.0)]  # no router → single slot (flat-ish)
 
-    def _add_to_slot(self, sid: int, tokens: List[int]) -> None:
+    def _add_to_slot(self, sid: int, tokens: list[int]) -> None:
         buf = self.str._contexts[sid]
         self._seq += 1
         self._order.append((sid, self._seq))
@@ -89,7 +97,7 @@ class ContextManager:
             del buf[:overflow]
             self._evict(sid, evicted)
 
-    def _evict(self, sid: int, tokens: List[int]) -> None:
+    def _evict(self, sid: int, tokens: list[int]) -> None:
         """Overflowed chunk → episodic buffer (T1) for consolidation, not discarded.
         Decode the tokens back to TEXT when a decoder is available — an evicted chunk
         with `text=""` is dead weight in the consolidation pipeline (nothing to
@@ -100,20 +108,23 @@ class ContextManager:
         if emb is None:
             emb = np.zeros((1,), dtype=np.float32)
         text = self.decode_fn(tokens) if self.decode_fn is not None else ""
-        self.buffer.add(Experience(text=text, embedding=np.asarray(emb, dtype=np.float32),
-                                   sector_assignment=sid))
+        self.buffer.add(
+            Experience(
+                text=text, embedding=np.asarray(emb, dtype=np.float32), sector_assignment=sid
+            )
+        )
 
     # ------------------------------------------------------------------
-    def assemble(self, max_len: Optional[int] = None) -> List[int]:
+    def assemble(self, max_len: int | None = None) -> list[int]:
         """The active context: chunks across all slots in insertion (recency) order,
         capped to `max_len` (keeping the most recent)."""
         cap = max_len or self.context_len
-        seq: List[int] = []
+        seq: list[int] = []
         for _, cseq in self._order:
             seq.extend(self._chunks.get(cseq, []))
         return seq[-cap:]
 
-    def active_sectors(self) -> List[int]:
+    def active_sectors(self) -> list[int]:
         return [s for s in range(1, NUM_SECTORS + 1) if self.str.get_context(s)]
 
     def clear(self) -> None:
@@ -123,25 +134,27 @@ class ContextManager:
         self._seq = 0
 
 
-def build_context_manager(model, tokenizer=None, context_len: Optional[int] = None,
-                          buffer: Optional[EpisodicBuffer] = None) -> ContextManager:
+def build_context_manager(
+    model, tokenizer=None, context_len: int | None = None, buffer: EpisodicBuffer | None = None
+) -> ContextManager:
     """Wire a ContextManager to a loaded model. `embed_fn` is the model's last-token
     hidden state (same signal as recall/consolidation). `route_fn` uses the TRAINED
     MoE gate aggregated over the chunk when sectors are attached (the aligned routing
     source); otherwise it returns None and the manager falls back to the STR
     classifier / a single slot, so a base-only model degrades gracefully."""
     import src.backend as backend
+
     ops = backend.current().ops
     ctx = context_len or model.cfg.context_len
 
-    def embed_fn(tokens: List[int]):
+    def embed_fn(tokens: list[int]):
         if not tokens:
             return None
         toks = ops.array(np.asarray([tokens[-ctx:]], dtype=np.int64))
         h = model(toks)
         return np.asarray(ops.to_numpy(h))[0, -1, :].astype(np.float32)
 
-    def route_fn(tokens: List[int]):
+    def route_fn(tokens: list[int]):
         # Aggregate the trained gate's expert affinity over the chunk → dominant
         # sector(s). Only available once sectors + gate are attached.
         gate = getattr(model, "gate", None)
@@ -149,15 +162,21 @@ def build_context_manager(model, tokenizer=None, context_len: Optional[int] = No
             return None
         toks = ops.array(np.asarray([tokens[-ctx:]], dtype=np.int64))
         h = model(toks)
-        _, _, logits = gate(h)                              # [1, S, n_experts]
+        _, _, logits = gate(h)  # [1, S, n_experts]
         aff = np.asarray(ops.to_numpy(ops.softmax(logits, axis=-1)))[0].mean(axis=0)
         from src.routing.semantic_router import MIN_AFFINITY
-        routed = [(model._expert_ids[i], float(a))
-                  for i, a in enumerate(aff) if a >= MIN_AFFINITY]
+
+        routed = [(model._expert_ids[i], float(a)) for i, a in enumerate(aff) if a >= MIN_AFFINITY]
         return sorted(routed, key=lambda x: -x[1]) or None
 
     # Decode evicted chunks back to text so consolidation has real content (not "").
     decode_fn = getattr(tokenizer, "decode", None) if tokenizer is not None else None
 
-    return ContextManager(model.cfg.d_model, context_len=ctx, buffer=buffer,
-                          embed_fn=embed_fn, route_fn=route_fn, decode_fn=decode_fn)
+    return ContextManager(
+        model.cfg.d_model,
+        context_len=ctx,
+        buffer=buffer,
+        embed_fn=embed_fn,
+        route_fn=route_fn,
+        decode_fn=decode_fn,
+    )

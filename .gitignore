@@ -30,8 +30,13 @@ dist/tokenizer/*.json
 *.bak/
 
 # ── Training data (large downloads) ───────────────────────────────────────────
+# Each stage owns its generated corpus inside its plugin package; the legacy
+# data/ layout is kept ignored too for older checkouts.
 data/**/*.jsonl
 data/**/*.meta.json
+src/stages/**/data/**/*.jsonl
+src/stages/**/data/**/*.meta.json
+src/stages/**/data/**/*.val.jsonl
 
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log

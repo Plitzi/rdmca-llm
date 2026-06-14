@@ -9,7 +9,9 @@ Self-contained (no network). To add your own tool, copy this file: expose a
 `TOOL` of type `src.agent.Tool` with a name, description, JSON input_schema and a
 `run(input: dict)` function returning a JSON-serializable result.
 """
+
 from __future__ import annotations
+
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -21,10 +23,10 @@ def _get_current_time(inp: dict) -> dict:
     if tz.lower() in ("", "utc"):
         now = datetime.now(timezone.utc)
     else:
-        try:                                    # IANA name, e.g. "America/New_York"
+        try:  # IANA name, e.g. "America/New_York"
             now = datetime.now(ZoneInfo(tz))
         except (ZoneInfoNotFoundError, ValueError):
-            now = datetime.now()                # unknown zone → machine local time
+            now = datetime.now()  # unknown zone → machine local time
     return {
         "iso": now.isoformat(timespec="seconds"),
         "date": now.strftime("%Y-%m-%d"),
@@ -39,8 +41,11 @@ TOOL = Tool(
     input_schema={
         "type": "object",
         "properties": {
-            "timezone": {"type": "string", "description": "Optional; 'utc' (default), "
-                         "'local', or an IANA name like 'America/New_York'."}
+            "timezone": {
+                "type": "string",
+                "description": "Optional; 'utc' (default), "
+                "'local', or an IANA name like 'America/New_York'.",
+            }
         },
         "required": [],
     },

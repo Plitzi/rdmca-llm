@@ -1,225 +1,242 @@
 {
   "0": {
+    "level": 0,
+    "name": "Pruebas (smoke)",
     "backend": "mlx",
-    "curriculum": {
-      "stage1": {
-        "data": {
-          "filter": {
-            "max_grade": 4,
-            "max_word_len": 14
-          },
-          "sources": [
-            "tinystories",
-            "dialogue"
-          ]
-        },
-        "data_dir": "data/level0/stage1",
-        "entry_level": 0,
-        "n_tokens": 4000000,
-        "name": "Language and communication"
-      },
-      "stage10": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "skills"
-          ]
-        },
-        "data_dir": "data/level0/stage10",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Skills"
-      },
-      "stage2": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "analogies"
-          ]
-        },
-        "data_dir": "data/level0/stage2",
-        "entry_level": 0,
-        "n_tokens": 2000000,
-        "name": "Perception and pattern recognition"
-      },
-      "stage3": {
-        "data": {
-          "filter": {
-            "arithmetic_level": 1
-          },
-          "sources": [
-            "arithmetic"
-          ]
-        },
-        "data_dir": "data/level0/stage3",
-        "entry_level": 0,
-        "n_tokens": 3000000,
-        "name": "Abstraction and symbolic composition"
-      },
-      "stage4": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "causal_synth"
-          ]
-        },
-        "data_dir": "data/level0/stage4",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Causal and procedural reasoning"
-      },
-      "stage5": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "reasoning"
-          ]
-        },
-        "data_dir": "data/level0/stage5",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Reasoning"
-      },
-      "stage6": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "memory"
-          ]
-        },
-        "data_dir": "data/level0/stage6",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Memory management"
-      },
-      "stage7": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "ethics"
-          ]
-        },
-        "data_dir": "data/level0/stage7",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Cognitive ethics and BCF"
-      },
-      "stage8": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "agentic"
-          ]
-        },
-        "data_dir": "data/level0/stage8",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Action and tool use"
-      },
-      "stage9": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "mcp"
-          ]
-        },
-        "data_dir": "data/level0/stage9",
-        "entry_level": 0,
-        "n_tokens": 1000000,
-        "name": "Model Context Protocol (MCP)"
+    "tier": "edge",
+    "information": {
+      "summary": "Nivel de pruebas: verifica el pipeline completo en minutos (no es calidad real).",
+      "areas": {
+        "1": "Lenguaje: diálogo y frases muy simples.",
+        "2": "Patrones: analogías sintéticas.",
+        "3": "Aritmética: sumas/restas de un dígito.",
+        "4": "Causalidad: causa→efecto muy simple (sintético).",
+        "5": "Razonamiento: pensar paso a paso (cadena de pensamiento).",
+        "6": "Memoria: recordar y usar un hecho inyectado (probe mínimo).",
+        "7": "Ética/BCF: probe mínimo (estructura, no calidad)."
       }
     },
-    "information": {
-      "areas": {
-        "1": "Lenguaje: di\u00e1logo y frases muy simples.",
-        "2": "Patrones: analog\u00edas sint\u00e9ticas.",
-        "3": "Aritm\u00e9tica: sumas/restas de un d\u00edgito.",
-        "4": "Causalidad: causa\u2192efecto muy simple (sint\u00e9tico).",
-        "5": "Razonamiento: pensar paso a paso (cadena de pensamiento).",
-        "6": "Memoria: recordar y usar un hecho inyectado (probe m\u00ednimo).",
-        "7": "\u00c9tica/BCF: probe m\u00ednimo (estructura, no calidad)."
-      },
-      "summary": "Nivel de pruebas: verifica el pipeline completo en minutos (no es calidad real)."
-    },
-    "level": 0,
     "model": {
-      "context_len": 64,
       "d_model": 64,
-      "dropout": 0.1,
+      "n_layers": 2,
+      "n_heads": 2,
+      "n_kv_heads": 1,
       "ffn_dim": 256,
-      "languages": [
-        "en"
-      ],
+      "context_len": 64,
+      "vocab_size": 4096,
       "mrl_dims": [
         32,
         64
       ],
+      "dropout": 0.1,
+      "rope_theta": 10000.0,
+      "n_mtp_heads": 1,
       "mtp_hidden_dim": 32,
       "mtp_loss_weight": 0.3,
-      "n_heads": 2,
-      "n_kv_heads": 1,
-      "n_layers": 2,
-      "n_mtp_heads": 1,
       "ple_dim": 8,
       "ple_gated": true,
-      "rope_theta": 10000.0,
-      "vocab_size": 4096
+      "languages": [
+        "en"
+      ]
     },
-    "moe": {
-      "aux_loss_weight": 0.01,
-      "capacity_factor": 1.25,
-      "enabled": true,
-      "experts": 6,
-      "top_k": 2
+    "training": {
+      "precision": "bf16",
+      "lr": 0.0005,
+      "lr_min": 5e-05,
+      "weight_decay": 0.1,
+      "batch_size": 16,
+      "grad_accumulation": 2,
+      "warmup_steps": 50,
+      "save_every": 400,
+      "eval_every": 100000,
+      "clip_grad_norm": 1.0
     },
-    "name": "Pruebas (smoke)",
     "resources": {
-      "est_infer_mem_gb": 0.1,
       "est_params_m": 1,
       "est_train_mem_gb": 0.1,
+      "est_infer_mem_gb": 0.1,
       "min_ram_gb": 1
     },
     "skip_gate": true,
-    "tier": "edge",
-    "training": {
-      "batch_size": 16,
-      "clip_grad_norm": 1.0,
-      "eval_every": 100000,
-      "grad_accumulation": 2,
-      "lr": 0.0005,
-      "lr_min": 5e-05,
-      "precision": "bf16",
-      "save_every": 400,
-      "warmup_steps": 50,
-      "weight_decay": 0.1
+    "curriculum": {
+      "stage1": {
+        "name": "Language and communication",
+        "entry_level": 0,
+        "n_tokens": 4000000,
+        "data": {
+          "sources": [
+            "tinystories",
+            "dialogue"
+          ],
+          "filter": {
+            "max_grade": 4,
+            "max_word_len": 14
+          }
+        }
+      },
+      "stage2": {
+        "name": "Perception and pattern recognition",
+        "entry_level": 0,
+        "n_tokens": 2000000,
+        "data": {
+          "sources": [
+            "analogies"
+          ],
+          "filter": null
+        }
+      },
+      "stage3": {
+        "name": "Abstraction and symbolic composition",
+        "entry_level": 0,
+        "n_tokens": 3000000,
+        "data": {
+          "sources": [
+            "arithmetic"
+          ],
+          "filter": {
+            "arithmetic_level": 1
+          }
+        }
+      },
+      "stage4": {
+        "name": "Causal and procedural reasoning",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "causal_synth"
+          ],
+          "filter": null
+        }
+      },
+      "stage8": {
+        "name": "Action and tool use",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "agentic"
+          ],
+          "filter": null
+        }
+      },
+      "stage9": {
+        "name": "Model Context Protocol (MCP)",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "mcp"
+          ],
+          "filter": null
+        }
+      },
+      "stage10": {
+        "name": "Skills",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "skills"
+          ],
+          "filter": null
+        }
+      },
+      "stage5": {
+        "name": "Reasoning",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "reasoning"
+          ],
+          "filter": null
+        }
+      },
+      "stage6": {
+        "name": "Memory management",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "memory"
+          ],
+          "filter": null
+        }
+      },
+      "stage7": {
+        "name": "Cognitive ethics and BCF",
+        "entry_level": 0,
+        "n_tokens": 1000000,
+        "data": {
+          "sources": [
+            "ethics"
+          ],
+          "filter": null
+        }
+      }
+    },
+    "moe": {
+      "enabled": true,
+      "experts": 6,
+      "top_k": 2,
+      "aux_loss_weight": 0.01,
+      "capacity_factor": 1.25
     }
   },
   "1": {
     "backend": "mlx",
+    "skip_gate": false,
+    "training": {
+      "precision": "bf16",
+      "grad_accumulation": 1,
+      "clip_grad_norm": 1.0,
+      "lr": 0.0003,
+      "lr_min": 5e-05,
+      "weight_decay": 0.01,
+      "batch_size": 16,
+      "warmup_steps": 500,
+      "save_every": 500,
+      "eval_every": 500,
+      "max_corpus_passes": 4,
+      "rehearsal_fraction": 0.15
+    },
+    "model": {
+      "rope_theta": 10000.0,
+      "mtp_loss_weight": 0.3,
+      "ple_gated": true,
+      "d_model": 256,
+      "n_layers": 6,
+      "n_heads": 4,
+      "n_kv_heads": 2,
+      "ffn_dim": 1024,
+      "context_len": 512,
+      "vocab_size": 8192,
+      "mrl_dims": [
+        128,
+        256
+      ],
+      "dropout": 0.05,
+      "n_mtp_heads": 1,
+      "mtp_hidden_dim": 128,
+      "ple_dim": 32,
+      "languages": [
+        "en"
+      ]
+    },
+    "moe": {
+      "enabled": true,
+      "experts": 6,
+      "top_k": 2,
+      "aux_loss_weight": 0.01,
+      "capacity_factor": 1.25
+    },
     "curriculum": {
       "stage1": {
+        "name": "Language and communication",
+        "entry_level": 1,
+        "n_tokens": 200000000,
         "data": {
-          "filter": {
-            "max_grade": 7,
-            "max_word_len": 16
-          },
-          "source_budgets_m": {
-            "basic_chat": 6,
-            "definitions": 6,
-            "dialogue": 70,
-            "grammar": 10,
-            "instruct": 50,
-            "simple_wikipedia": 25,
-            "tinystories": 30
-          },
-          "source_weights": {
-            "basic_chat": 1.5,
-            "definitions": 1.5,
-            "dialogue": 3.0,
-            "grammar": 2.0,
-            "instruct": 3.0,
-            "simple_wikipedia": 1.5
-          },
           "sources": [
             "tinystories",
             "dialogue",
@@ -228,320 +245,337 @@
             "definitions",
             "basic_chat",
             "grammar"
-          ]
-        },
-        "data_dir": "data/level1/stage1",
-        "entry_level": 1,
-        "n_tokens": 200000000,
-        "name": "Language and communication"
-      },
-      "stage10": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "skills"
-          ]
-        },
-        "data_dir": "data/level1/stage10",
-        "entry_level": 0,
-        "n_tokens": 15000000,
-        "name": "Skills"
+          ],
+          "source_budgets_m": {
+            "dialogue": 70,
+            "tinystories": 30,
+            "instruct": 50,
+            "simple_wikipedia": 25,
+            "definitions": 6,
+            "basic_chat": 6,
+            "grammar": 10
+          },
+          "source_weights": {
+            "dialogue": 3.0,
+            "instruct": 3.0,
+            "simple_wikipedia": 1.5,
+            "basic_chat": 1.5,
+            "definitions": 1.5,
+            "grammar": 2.0
+          },
+          "filter": {
+            "max_grade": 7,
+            "max_word_len": 16
+          }
+        }
       },
       "stage2": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "analogies"
-          ]
-        },
-        "data_dir": "data/level1/stage2",
+        "name": "Perception and pattern recognition",
         "entry_level": 1,
         "n_tokens": 20000000,
-        "name": "Perception and pattern recognition"
+        "data": {
+          "sources": [
+            "analogies"
+          ],
+          "filter": null
+        }
       },
       "stage3": {
-        "data": {
-          "filter": {
-            "arithmetic_level": 1
-          },
-          "sources": [
-            "arithmetic"
-          ]
-        },
-        "data_dir": "data/level1/stage3",
+        "name": "Abstraction and symbolic composition",
         "entry_level": 1,
         "n_tokens": 30000000,
-        "name": "Abstraction and symbolic composition"
+        "data": {
+          "sources": [
+            "arithmetic"
+          ],
+          "filter": {
+            "arithmetic_level": 1
+          }
+        }
       },
       "stage4": {
+        "name": "Causal and procedural reasoning",
+        "entry_level": 1,
+        "n_tokens": 15000000,
         "data": {
-          "filter": null,
           "sources": [
             "causal_synth"
-          ]
-        },
-        "data_dir": "data/level1/stage4",
-        "entry_level": 1,
-        "n_tokens": 15000000,
-        "name": "Causal and procedural reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage5": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "reasoning"
-          ]
-        },
-        "data_dir": "data/level1/stage5",
+        "name": "Reasoning",
         "entry_level": 0,
         "n_tokens": 25000000,
-        "name": "Reasoning"
+        "data": {
+          "sources": [
+            "reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage6": {
+        "name": "Memory management",
+        "entry_level": 1,
+        "n_tokens": 15000000,
         "data": {
-          "filter": null,
           "sources": [
             "memory"
-          ]
-        },
-        "data_dir": "data/level1/stage6",
-        "entry_level": 1,
-        "n_tokens": 15000000,
-        "name": "Memory management"
+          ],
+          "filter": null
+        }
       },
       "stage7": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "ethics"
-          ]
-        },
-        "data_dir": "data/level1/stage7",
+        "name": "Cognitive ethics and BCF",
         "entry_level": 1,
         "n_tokens": 10000000,
-        "name": "Cognitive ethics and BCF"
+        "data": {
+          "sources": [
+            "ethics"
+          ],
+          "filter": null
+        }
       },
       "stage8": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "agentic"
-          ]
-        },
-        "data_dir": "data/level1/stage8",
+        "name": "Action and tool use",
         "entry_level": 0,
         "n_tokens": 200000000,
-        "name": "Action and tool use"
+        "data": {
+          "sources": [
+            "agentic"
+          ],
+          "filter": null
+        }
       },
       "stage9": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "mcp"
-          ]
-        },
-        "data_dir": "data/level1/stage9",
+        "name": "Model Context Protocol (MCP)",
         "entry_level": 0,
         "n_tokens": 15000000,
-        "name": "Model Context Protocol (MCP)"
+        "data": {
+          "sources": [
+            "mcp"
+          ],
+          "filter": null
+        }
+      },
+      "stage10": {
+        "name": "Skills",
+        "entry_level": 0,
+        "n_tokens": 15000000,
+        "data": {
+          "sources": [
+            "skills"
+          ],
+          "filter": null
+        }
       }
     },
+    "level": 1,
+    "name": "Preescolar",
+    "tier": "edge",
     "information": {
+      "summary": "Conversación muy básica, vocabulario de niño pequeño y aritmética simple (contar, +/− de un dígito).",
       "areas": {
-        "1": "Lenguaje: palabras y frases cortas, di\u00e1logo simple \u2014 puede conversar.",
-        "2": "Patrones: secuencias y analog\u00edas muy simples (esto va con esto).",
-        "3": "Aritm\u00e9tica: contar y sumar/restar n\u00fameros de un solo d\u00edgito.",
-        "4": "Causalidad: causa\u2192efecto muy simple (esto pas\u00f3 porque\u2026).",
+        "1": "Lenguaje: palabras y frases cortas, diálogo simple — puede conversar.",
+        "2": "Patrones: secuencias y analogías muy simples (esto va con esto).",
+        "3": "Aritmética: contar y sumar/restar números de un solo dígito.",
+        "4": "Causalidad: causa→efecto muy simple (esto pasó porque…).",
         "5": "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder.",
         "6": "Memoria: recordar un hecho simple dado en el contexto y usarlo.",
-        "7": "\u00c9tica/BCF: nociones muy b\u00e1sicas de bien/mal (probe peque\u00f1o)."
-      },
-      "summary": "Conversaci\u00f3n muy b\u00e1sica, vocabulario de ni\u00f1o peque\u00f1o y aritm\u00e9tica simple (contar, +/\u2212 de un d\u00edgito)."
+        "7": "Ética/BCF: nociones muy básicas de bien/mal (probe pequeño)."
+      }
     },
-    "level": 1,
-    "model": {
-      "context_len": 512,
-      "d_model": 256,
-      "dropout": 0.05,
-      "ffn_dim": 1024,
-      "languages": [
-        "en"
-      ],
-      "mrl_dims": [
-        128,
-        256
-      ],
-      "mtp_hidden_dim": 128,
-      "mtp_loss_weight": 0.3,
-      "n_heads": 4,
-      "n_kv_heads": 2,
-      "n_layers": 6,
-      "n_mtp_heads": 1,
-      "ple_dim": 32,
-      "ple_gated": true,
-      "rope_theta": 10000.0,
-      "vocab_size": 8192
-    },
-    "moe": {
-      "aux_loss_weight": 0.01,
-      "capacity_factor": 1.25,
-      "enabled": true,
-      "experts": 6,
-      "top_k": 2
-    },
-    "name": "Preescolar",
     "resources": {
-      "est_infer_mem_gb": 0.2,
       "est_params_m": 10,
       "est_train_mem_gb": 0.6,
+      "est_infer_mem_gb": 0.2,
       "min_ram_gb": 3
-    },
-    "skip_gate": false,
-    "tier": "edge",
-    "training": {
-      "batch_size": 16,
-      "clip_grad_norm": 1.0,
-      "eval_every": 500,
-      "grad_accumulation": 1,
-      "lr": 0.0003,
-      "lr_min": 5e-05,
-      "max_corpus_passes": 4,
-      "precision": "bf16",
-      "rehearsal_fraction": 0.15,
-      "save_every": 500,
-      "warmup_steps": 500,
-      "weight_decay": 0.01
     }
   },
   "2": {
     "backend": "mlx",
+    "skip_gate": false,
+    "training": {
+      "precision": "bf16",
+      "grad_accumulation": 4,
+      "clip_grad_norm": 1.0,
+      "lr": 0.0004,
+      "lr_min": 4e-05,
+      "weight_decay": 0.1,
+      "batch_size": 12,
+      "warmup_steps": 500,
+      "save_every": 1000,
+      "eval_every": 2000
+    },
+    "model": {
+      "rope_theta": 10000.0,
+      "mtp_loss_weight": 0.3,
+      "ple_gated": true,
+      "d_model": 256,
+      "n_layers": 8,
+      "n_heads": 4,
+      "n_kv_heads": 2,
+      "ffn_dim": 1024,
+      "context_len": 768,
+      "vocab_size": 8192,
+      "mrl_dims": [
+        128,
+        256
+      ],
+      "dropout": 0.1,
+      "n_mtp_heads": 1,
+      "mtp_hidden_dim": 128,
+      "ple_dim": 32,
+      "languages": [
+        "en"
+      ]
+    },
+    "moe": {
+      "enabled": true,
+      "experts": 6,
+      "top_k": 2,
+      "aux_loss_weight": 0.01,
+      "capacity_factor": 1.25
+    },
     "curriculum": {
       "stage1": {
+        "name": "Language and communication",
+        "entry_level": 1,
+        "n_tokens": 300000000,
         "data": {
-          "filter": {
-            "max_grade": 5,
-            "max_word_len": 16
-          },
           "sources": [
             "simple_wikipedia",
             "dialogue"
-          ]
-        },
-        "data_dir": "data/level2/stage1",
-        "entry_level": 1,
-        "n_tokens": 300000000,
-        "name": "Language and communication"
-      },
-      "stage10": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "skills"
-          ]
-        },
-        "data_dir": "data/level2/stage10",
-        "entry_level": 0,
-        "n_tokens": 18000000,
-        "name": "Skills"
+          ],
+          "filter": {
+            "max_grade": 5,
+            "max_word_len": 16
+          }
+        }
       },
       "stage2": {
+        "name": "Perception and pattern recognition",
+        "entry_level": 1,
+        "n_tokens": 25000000,
         "data": {
-          "filter": null,
           "sources": [
             "analogies"
-          ]
-        },
-        "data_dir": "data/level2/stage2",
-        "entry_level": 1,
-        "n_tokens": 25000000,
-        "name": "Perception and pattern recognition"
+          ],
+          "filter": null
+        }
       },
       "stage3": {
-        "data": {
-          "filter": {
-            "arithmetic_level": 2
-          },
-          "sources": [
-            "arithmetic"
-          ]
-        },
-        "data_dir": "data/level2/stage3",
+        "name": "Abstraction and symbolic composition",
         "entry_level": 1,
         "n_tokens": 45000000,
-        "name": "Abstraction and symbolic composition"
+        "data": {
+          "sources": [
+            "arithmetic"
+          ],
+          "filter": {
+            "arithmetic_level": 2
+          }
+        }
       },
       "stage4": {
+        "name": "Causal and procedural reasoning",
+        "entry_level": 1,
+        "n_tokens": 25000000,
         "data": {
-          "filter": null,
           "sources": [
             "causal_synth"
-          ]
-        },
-        "data_dir": "data/level2/stage4",
-        "entry_level": 1,
-        "n_tokens": 25000000,
-        "name": "Causal and procedural reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage5": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "reasoning"
-          ]
-        },
-        "data_dir": "data/level2/stage5",
+        "name": "Reasoning",
         "entry_level": 0,
         "n_tokens": 35000000,
-        "name": "Reasoning"
+        "data": {
+          "sources": [
+            "reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage6": {
+        "name": "Memory management",
+        "entry_level": 1,
+        "n_tokens": 25000000,
         "data": {
-          "filter": null,
           "sources": [
             "memory"
-          ]
-        },
-        "data_dir": "data/level2/stage6",
-        "entry_level": 1,
-        "n_tokens": 25000000,
-        "name": "Memory management"
+          ],
+          "filter": null
+        }
       },
       "stage7": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "ethics"
-          ]
-        },
-        "data_dir": "data/level2/stage7",
+        "name": "Cognitive ethics and BCF",
         "entry_level": 1,
         "n_tokens": 15000000,
-        "name": "Cognitive ethics and BCF"
+        "data": {
+          "sources": [
+            "ethics"
+          ],
+          "filter": null
+        }
       },
       "stage8": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "agentic"
-          ]
-        },
-        "data_dir": "data/level2/stage8",
+        "name": "Action and tool use",
         "entry_level": 0,
         "n_tokens": 25000000,
-        "name": "Action and tool use"
+        "data": {
+          "sources": [
+            "agentic"
+          ],
+          "filter": null
+        }
       },
       "stage9": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "mcp"
-          ]
-        },
-        "data_dir": "data/level2/stage9",
+        "name": "Model Context Protocol (MCP)",
         "entry_level": 0,
         "n_tokens": 18000000,
-        "name": "Model Context Protocol (MCP)"
+        "data": {
+          "sources": [
+            "mcp"
+          ],
+          "filter": null
+        }
+      },
+      "stage10": {
+        "name": "Skills",
+        "entry_level": 0,
+        "n_tokens": 18000000,
+        "data": {
+          "sources": [
+            "skills"
+          ],
+          "filter": null
+        }
       }
+    },
+    "level": 2,
+    "name": "Primaria",
+    "tier": "edge",
+    "information": {
+      "summary": "Frases y párrafos, vocabulario cotidiano más amplio, aritmética de dos dígitos y patrones simples.",
+      "areas": {
+        "1": "Lenguaje: oraciones y párrafos, vocabulario cotidiano; conversa con más fluidez.",
+        "2": "Patrones: analogías y secuencias con más variedad.",
+        "3": "Aritmética: +, −, × de dos dígitos.",
+        "4": "Causalidad: causa→efecto y procedimientos simples.",
+        "5": "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder.",
+        "6": "Memoria: usar hechos recuperados e ignorar distractores simples.",
+        "7": "Ética/BCF: nociones de bien/mal aplicadas a situaciones simples."
+      }
+    },
+    "resources": {
+      "est_params_m": 11,
+      "est_train_mem_gb": 0.5,
+      "est_infer_mem_gb": 0.1,
+      "min_ram_gb": 4
     },
     "gate": {
       "max_perplexity": {
@@ -553,201 +587,192 @@
         "6": 45.0,
         "7": 45.0
       }
-    },
-    "information": {
-      "areas": {
-        "1": "Lenguaje: oraciones y p\u00e1rrafos, vocabulario cotidiano; conversa con m\u00e1s fluidez.",
-        "2": "Patrones: analog\u00edas y secuencias con m\u00e1s variedad.",
-        "3": "Aritm\u00e9tica: +, \u2212, \u00d7 de dos d\u00edgitos.",
-        "4": "Causalidad: causa\u2192efecto y procedimientos simples.",
-        "5": "Razonamiento: pensar paso a paso (cadena de pensamiento) antes de responder.",
-        "6": "Memoria: usar hechos recuperados e ignorar distractores simples.",
-        "7": "\u00c9tica/BCF: nociones de bien/mal aplicadas a situaciones simples."
-      },
-      "summary": "Frases y p\u00e1rrafos, vocabulario cotidiano m\u00e1s amplio, aritm\u00e9tica de dos d\u00edgitos y patrones simples."
-    },
-    "level": 2,
-    "model": {
-      "context_len": 768,
-      "d_model": 256,
-      "dropout": 0.1,
-      "ffn_dim": 1024,
-      "languages": [
-        "en"
-      ],
-      "mrl_dims": [
-        128,
-        256
-      ],
-      "mtp_hidden_dim": 128,
-      "mtp_loss_weight": 0.3,
-      "n_heads": 4,
-      "n_kv_heads": 2,
-      "n_layers": 8,
-      "n_mtp_heads": 1,
-      "ple_dim": 32,
-      "ple_gated": true,
-      "rope_theta": 10000.0,
-      "vocab_size": 8192
-    },
-    "moe": {
-      "aux_loss_weight": 0.01,
-      "capacity_factor": 1.25,
-      "enabled": true,
-      "experts": 6,
-      "top_k": 2
-    },
-    "name": "Primaria",
-    "resources": {
-      "est_infer_mem_gb": 0.1,
-      "est_params_m": 11,
-      "est_train_mem_gb": 0.5,
-      "min_ram_gb": 4
-    },
-    "skip_gate": false,
-    "tier": "edge",
-    "training": {
-      "batch_size": 12,
-      "clip_grad_norm": 1.0,
-      "eval_every": 2000,
-      "grad_accumulation": 4,
-      "lr": 0.0004,
-      "lr_min": 4e-05,
-      "precision": "bf16",
-      "save_every": 1000,
-      "warmup_steps": 500,
-      "weight_decay": 0.1
     }
   },
   "3": {
     "backend": "mlx",
+    "skip_gate": false,
+    "training": {
+      "precision": "bf16",
+      "grad_accumulation": 6,
+      "clip_grad_norm": 1.0,
+      "lr": 0.00035,
+      "lr_min": 3.5e-05,
+      "weight_decay": 0.1,
+      "batch_size": 8,
+      "warmup_steps": 1000,
+      "save_every": 2000,
+      "eval_every": 5000
+    },
+    "model": {
+      "rope_theta": 10000.0,
+      "mtp_loss_weight": 0.3,
+      "ple_gated": true,
+      "d_model": 384,
+      "n_layers": 8,
+      "n_heads": 8,
+      "n_kv_heads": 4,
+      "ffn_dim": 1536,
+      "context_len": 1280,
+      "vocab_size": 16384,
+      "mrl_dims": [
+        128,
+        256,
+        384
+      ],
+      "dropout": 0.1,
+      "n_mtp_heads": 1,
+      "mtp_hidden_dim": 192,
+      "ple_dim": 48,
+      "languages": [
+        "en"
+      ]
+    },
+    "moe": {
+      "enabled": true,
+      "experts": 6,
+      "top_k": 2,
+      "aux_loss_weight": 0.01,
+      "capacity_factor": 1.25
+    },
     "curriculum": {
       "stage1": {
+        "name": "Language and communication",
+        "entry_level": 1,
+        "n_tokens": 450000000,
         "data": {
+          "sources": [
+            "wikipedia"
+          ],
           "filter": {
             "max_grade": 9,
             "max_word_len": 20
-          },
-          "sources": [
-            "wikipedia"
-          ]
-        },
-        "data_dir": "data/level3/stage1",
-        "entry_level": 1,
-        "n_tokens": 450000000,
-        "name": "Language and communication"
-      },
-      "stage10": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "skills"
-          ]
-        },
-        "data_dir": "data/level3/stage10",
-        "entry_level": 0,
-        "n_tokens": 30000000,
-        "name": "Skills"
+          }
+        }
       },
       "stage2": {
+        "name": "Perception and pattern recognition",
+        "entry_level": 1,
+        "n_tokens": 60000000,
         "data": {
-          "filter": null,
           "sources": [
             "analogies",
             "arc_easy"
-          ]
-        },
-        "data_dir": "data/level3/stage2",
-        "entry_level": 1,
-        "n_tokens": 60000000,
-        "name": "Perception and pattern recognition"
+          ],
+          "filter": null
+        }
       },
       "stage3": {
-        "data": {
-          "filter": {
-            "arithmetic_level": 3
-          },
-          "sources": [
-            "arithmetic"
-          ]
-        },
-        "data_dir": "data/level3/stage3",
+        "name": "Abstraction and symbolic composition",
         "entry_level": 1,
         "n_tokens": 110000000,
-        "name": "Abstraction and symbolic composition"
+        "data": {
+          "sources": [
+            "arithmetic"
+          ],
+          "filter": {
+            "arithmetic_level": 3
+          }
+        }
       },
       "stage4": {
+        "name": "Causal and procedural reasoning",
+        "entry_level": 1,
+        "n_tokens": 90000000,
         "data": {
-          "filter": null,
           "sources": [
             "causal_synth"
-          ]
-        },
-        "data_dir": "data/level3/stage4",
-        "entry_level": 1,
-        "n_tokens": 90000000,
-        "name": "Causal and procedural reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage5": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "reasoning"
-          ]
-        },
-        "data_dir": "data/level3/stage5",
+        "name": "Reasoning",
         "entry_level": 0,
         "n_tokens": 80000000,
-        "name": "Reasoning"
+        "data": {
+          "sources": [
+            "reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage6": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "memory"
-          ]
-        },
-        "data_dir": "data/level3/stage6",
+        "name": "Memory management",
         "entry_level": 1,
         "n_tokens": 90000000,
-        "name": "Memory management"
+        "data": {
+          "sources": [
+            "memory"
+          ],
+          "filter": null
+        }
       },
       "stage7": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "ethics"
-          ]
-        },
-        "data_dir": "data/level3/stage7",
+        "name": "Cognitive ethics and BCF",
         "entry_level": 1,
         "n_tokens": 50000000,
-        "name": "Cognitive ethics and BCF"
+        "data": {
+          "sources": [
+            "ethics"
+          ],
+          "filter": null
+        }
       },
       "stage8": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "agentic"
-          ]
-        },
-        "data_dir": "data/level3/stage8",
+        "name": "Action and tool use",
         "entry_level": 0,
         "n_tokens": 40000000,
-        "name": "Action and tool use"
+        "data": {
+          "sources": [
+            "agentic"
+          ],
+          "filter": null
+        }
       },
       "stage9": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "mcp"
-          ]
-        },
-        "data_dir": "data/level3/stage9",
+        "name": "Model Context Protocol (MCP)",
         "entry_level": 0,
         "n_tokens": 30000000,
-        "name": "Model Context Protocol (MCP)"
+        "data": {
+          "sources": [
+            "mcp"
+          ],
+          "filter": null
+        }
+      },
+      "stage10": {
+        "name": "Skills",
+        "entry_level": 0,
+        "n_tokens": 30000000,
+        "data": {
+          "sources": [
+            "skills"
+          ],
+          "filter": null
+        }
       }
+    },
+    "level": 3,
+    "name": "Secundaria",
+    "tier": "workstation",
+    "information": {
+      "summary": "Conocimiento general, aritmética multidígito/fracciones y álgebra simple, y razonamiento causal básico.",
+      "areas": {
+        "1": "Lenguaje: textos de conocimiento general (Wikipedia filtrada por legibilidad).",
+        "2": "Patrones: razonamiento por analogía más exigente (ARC-Easy).",
+        "3": "Matemáticas: multidígito, fracciones y álgebra simple.",
+        "4": "Causal: relaciones causa→efecto básicas.",
+        "5": "Razonamiento: cadena de pensamiento paso a paso sobre lo aprendido.",
+        "6": "Memoria: recuperar y usar memoria relevante entre distractores.",
+        "7": "Ética/BCF: razonamiento ético sobre dilemas simples."
+      }
+    },
+    "resources": {
+      "est_params_m": 32,
+      "est_train_mem_gb": 1.5,
+      "est_infer_mem_gb": 0.2,
+      "min_ram_gb": 8
     },
     "gate": {
       "max_perplexity": {
@@ -759,207 +784,199 @@
         "6": 40.0,
         "7": 40.0
       }
-    },
-    "information": {
-      "areas": {
-        "1": "Lenguaje: textos de conocimiento general (Wikipedia filtrada por legibilidad).",
-        "2": "Patrones: razonamiento por analog\u00eda m\u00e1s exigente (ARC-Easy).",
-        "3": "Matem\u00e1ticas: multid\u00edgito, fracciones y \u00e1lgebra simple.",
-        "4": "Causal: relaciones causa\u2192efecto b\u00e1sicas.",
-        "5": "Razonamiento: cadena de pensamiento paso a paso sobre lo aprendido.",
-        "6": "Memoria: recuperar y usar memoria relevante entre distractores.",
-        "7": "\u00c9tica/BCF: razonamiento \u00e9tico sobre dilemas simples."
-      },
-      "summary": "Conocimiento general, aritm\u00e9tica multid\u00edgito/fracciones y \u00e1lgebra simple, y razonamiento causal b\u00e1sico."
-    },
-    "level": 3,
-    "model": {
-      "context_len": 1280,
-      "d_model": 384,
-      "dropout": 0.1,
-      "ffn_dim": 1536,
-      "languages": [
-        "en"
-      ],
-      "mrl_dims": [
-        128,
-        256,
-        384
-      ],
-      "mtp_hidden_dim": 192,
-      "mtp_loss_weight": 0.3,
-      "n_heads": 8,
-      "n_kv_heads": 4,
-      "n_layers": 8,
-      "n_mtp_heads": 1,
-      "ple_dim": 48,
-      "ple_gated": true,
-      "rope_theta": 10000.0,
-      "vocab_size": 16384
-    },
-    "moe": {
-      "aux_loss_weight": 0.01,
-      "capacity_factor": 1.25,
-      "enabled": true,
-      "experts": 6,
-      "top_k": 2
-    },
-    "name": "Secundaria",
-    "resources": {
-      "est_infer_mem_gb": 0.2,
-      "est_params_m": 32,
-      "est_train_mem_gb": 1.5,
-      "min_ram_gb": 8
-    },
-    "skip_gate": false,
-    "tier": "workstation",
-    "training": {
-      "batch_size": 8,
-      "clip_grad_norm": 1.0,
-      "eval_every": 5000,
-      "grad_accumulation": 6,
-      "lr": 0.00035,
-      "lr_min": 3.5e-05,
-      "precision": "bf16",
-      "save_every": 2000,
-      "warmup_steps": 1000,
-      "weight_decay": 0.1
     }
   },
   "4": {
     "backend": "torch",
+    "skip_gate": false,
+    "training": {
+      "precision": "bf16",
+      "grad_accumulation": 8,
+      "clip_grad_norm": 1.0,
+      "lr": 0.0003,
+      "lr_min": 3e-05,
+      "weight_decay": 0.1,
+      "batch_size": 8,
+      "optimizer_states": "int8",
+      "warmup_steps": 2000,
+      "save_every": 5000,
+      "eval_every": 10000
+    },
+    "model": {
+      "rope_theta": 10000.0,
+      "mtp_loss_weight": 0.3,
+      "ple_gated": true,
+      "d_model": 512,
+      "n_layers": 12,
+      "n_heads": 8,
+      "n_kv_heads": 4,
+      "ffn_dim": 2048,
+      "context_len": 2048,
+      "vocab_size": 24576,
+      "mrl_dims": [
+        128,
+        256,
+        512
+      ],
+      "dropout": 0.1,
+      "n_mtp_heads": 2,
+      "mtp_hidden_dim": 256,
+      "ple_dim": 64,
+      "gradient_checkpointing": true,
+      "languages": [
+        "en"
+      ]
+    },
+    "moe": {
+      "enabled": true,
+      "experts": 6,
+      "top_k": 2,
+      "aux_loss_weight": 0.01,
+      "capacity_factor": 1.25
+    },
     "curriculum": {
       "stage1": {
+        "name": "Language and communication",
+        "entry_level": 1,
+        "n_tokens": 600000000,
         "data": {
+          "sources": [
+            "wikipedia"
+          ],
           "filter": {
             "max_grade": 13,
             "max_word_len": 28
-          },
-          "sources": [
-            "wikipedia"
-          ]
-        },
-        "data_dir": "data/level4/stage1",
-        "entry_level": 1,
-        "n_tokens": 600000000,
-        "name": "Language and communication"
-      },
-      "stage10": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "skills"
-          ]
-        },
-        "data_dir": "data/level4/stage10",
-        "entry_level": 0,
-        "n_tokens": 40000000,
-        "name": "Skills"
+          }
+        }
       },
       "stage2": {
+        "name": "Perception and pattern recognition",
+        "entry_level": 1,
+        "n_tokens": 140000000,
         "data": {
-          "filter": null,
           "sources": [
             "arc_easy",
             "arc_challenge"
-          ]
-        },
-        "data_dir": "data/level4/stage2",
-        "entry_level": 1,
-        "n_tokens": 140000000,
-        "name": "Perception and pattern recognition"
+          ],
+          "filter": null
+        }
       },
       "stage3": {
+        "name": "Abstraction and symbolic composition",
+        "entry_level": 1,
+        "n_tokens": 260000000,
         "data": {
-          "filter": {
-            "arithmetic_level": 4
-          },
           "sources": [
             "arithmetic",
             "gsm8k"
-          ]
-        },
-        "data_dir": "data/level4/stage3",
-        "entry_level": 1,
-        "n_tokens": 260000000,
-        "name": "Abstraction and symbolic composition"
+          ],
+          "filter": {
+            "arithmetic_level": 4
+          }
+        }
       },
       "stage4": {
+        "name": "Causal and procedural reasoning",
+        "entry_level": 1,
+        "n_tokens": 200000000,
         "data": {
-          "filter": {
-            "max_grade": 13,
-            "max_word_len": 28
-          },
           "sources": [
             "causal_synth",
             "wikipedia"
-          ]
-        },
-        "data_dir": "data/level4/stage4",
-        "entry_level": 1,
-        "n_tokens": 200000000,
-        "name": "Causal and procedural reasoning"
+          ],
+          "filter": {
+            "max_grade": 13,
+            "max_word_len": 28
+          }
+        }
       },
       "stage5": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "reasoning"
-          ]
-        },
-        "data_dir": "data/level4/stage5",
+        "name": "Reasoning",
         "entry_level": 0,
         "n_tokens": 180000000,
-        "name": "Reasoning"
+        "data": {
+          "sources": [
+            "reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage6": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "memory"
-          ]
-        },
-        "data_dir": "data/level4/stage6",
+        "name": "Memory management",
         "entry_level": 1,
         "n_tokens": 200000000,
-        "name": "Memory management"
+        "data": {
+          "sources": [
+            "memory"
+          ],
+          "filter": null
+        }
       },
       "stage7": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "ethics"
-          ]
-        },
-        "data_dir": "data/level4/stage7",
+        "name": "Cognitive ethics and BCF",
         "entry_level": 1,
         "n_tokens": 100000000,
-        "name": "Cognitive ethics and BCF"
+        "data": {
+          "sources": [
+            "ethics"
+          ],
+          "filter": null
+        }
       },
       "stage8": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "agentic"
-          ]
-        },
-        "data_dir": "data/level4/stage8",
+        "name": "Action and tool use",
         "entry_level": 0,
         "n_tokens": 50000000,
-        "name": "Action and tool use"
+        "data": {
+          "sources": [
+            "agentic"
+          ],
+          "filter": null
+        }
       },
       "stage9": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "mcp"
-          ]
-        },
-        "data_dir": "data/level4/stage9",
+        "name": "Model Context Protocol (MCP)",
         "entry_level": 0,
         "n_tokens": 40000000,
-        "name": "Model Context Protocol (MCP)"
+        "data": {
+          "sources": [
+            "mcp"
+          ],
+          "filter": null
+        }
+      },
+      "stage10": {
+        "name": "Skills",
+        "entry_level": 0,
+        "n_tokens": 40000000,
+        "data": {
+          "sources": [
+            "skills"
+          ],
+          "filter": null
+        }
       }
+    },
+    "level": 4,
+    "name": "Bachillerato",
+    "tier": "gpu",
+    "information": {
+      "summary": "Texto avanzado, problemas de palabra (GSM8K), razonamiento causal y procedural, y ética.",
+      "areas": {
+        "1": "Lenguaje: textos avanzados y especializados.",
+        "2": "Patrones: razonamiento abstracto exigente (ARC-Challenge).",
+        "3": "Matemáticas: problemas de palabra y aritmética avanzada (GSM8K).",
+        "4": "Causal/Procedural: cadenas causa→efecto y procedimientos paso a paso.",
+        "5": "Razonamiento: cadena de pensamiento que orquesta lenguaje, aritmética y causalidad.",
+        "6": "Memoria: recall/uso de memoria con más distractores y contexto largo.",
+        "7": "Ética: principios morales y restricciones de comportamiento (BCF) — aquí se congela la base."
+      }
+    },
+    "resources": {
+      "est_params_m": 76,
+      "est_train_mem_gb": 5,
+      "est_infer_mem_gb": 1,
+      "min_vram_gb": 16
     },
     "gate": {
       "max_perplexity": {
@@ -971,205 +988,195 @@
         "6": 36.0,
         "7": 36.0
       }
-    },
-    "information": {
-      "areas": {
-        "1": "Lenguaje: textos avanzados y especializados.",
-        "2": "Patrones: razonamiento abstracto exigente (ARC-Challenge).",
-        "3": "Matem\u00e1ticas: problemas de palabra y aritm\u00e9tica avanzada (GSM8K).",
-        "4": "Causal/Procedural: cadenas causa\u2192efecto y procedimientos paso a paso.",
-        "5": "Razonamiento: cadena de pensamiento que orquesta lenguaje, aritm\u00e9tica y causalidad.",
-        "6": "Memoria: recall/uso de memoria con m\u00e1s distractores y contexto largo.",
-        "7": "\u00c9tica: principios morales y restricciones de comportamiento (BCF) \u2014 aqu\u00ed se congela la base."
-      },
-      "summary": "Texto avanzado, problemas de palabra (GSM8K), razonamiento causal y procedural, y \u00e9tica."
-    },
-    "level": 4,
-    "model": {
-      "context_len": 2048,
-      "d_model": 512,
-      "dropout": 0.1,
-      "ffn_dim": 2048,
-      "gradient_checkpointing": true,
-      "languages": [
-        "en"
-      ],
-      "mrl_dims": [
-        128,
-        256,
-        512
-      ],
-      "mtp_hidden_dim": 256,
-      "mtp_loss_weight": 0.3,
-      "n_heads": 8,
-      "n_kv_heads": 4,
-      "n_layers": 12,
-      "n_mtp_heads": 2,
-      "ple_dim": 64,
-      "ple_gated": true,
-      "rope_theta": 10000.0,
-      "vocab_size": 24576
-    },
-    "moe": {
-      "aux_loss_weight": 0.01,
-      "capacity_factor": 1.25,
-      "enabled": true,
-      "experts": 6,
-      "top_k": 2
-    },
-    "name": "Bachillerato",
-    "resources": {
-      "est_infer_mem_gb": 1,
-      "est_params_m": 76,
-      "est_train_mem_gb": 5,
-      "min_vram_gb": 16
-    },
-    "skip_gate": false,
-    "tier": "gpu",
-    "training": {
-      "batch_size": 8,
-      "clip_grad_norm": 1.0,
-      "eval_every": 10000,
-      "grad_accumulation": 8,
-      "lr": 0.0003,
-      "lr_min": 3e-05,
-      "optimizer_states": "int8",
-      "precision": "bf16",
-      "save_every": 5000,
-      "warmup_steps": 2000,
-      "weight_decay": 0.1
     }
   },
   "5": {
     "backend": "torch",
+    "skip_gate": false,
+    "training": {
+      "precision": "bf16",
+      "grad_accumulation": 16,
+      "clip_grad_norm": 1.0,
+      "lr": 0.0003,
+      "lr_min": 3e-05,
+      "weight_decay": 0.1,
+      "batch_size": 8,
+      "optimizer_states": "int8",
+      "warmup_steps": 2000,
+      "save_every": 5000,
+      "eval_every": 10000
+    },
+    "model": {
+      "rope_theta": 10000.0,
+      "mtp_loss_weight": 0.3,
+      "ple_gated": true,
+      "d_model": 768,
+      "n_layers": 16,
+      "n_heads": 12,
+      "n_kv_heads": 4,
+      "ffn_dim": 3072,
+      "context_len": 3328,
+      "vocab_size": 32768,
+      "mrl_dims": [
+        256,
+        512,
+        768
+      ],
+      "dropout": 0.1,
+      "n_mtp_heads": 2,
+      "mtp_hidden_dim": 384,
+      "ple_dim": 96,
+      "gradient_checkpointing": true,
+      "languages": [
+        "en"
+      ]
+    },
+    "moe": {
+      "enabled": true,
+      "experts": 6,
+      "top_k": 2,
+      "aux_loss_weight": 0.01,
+      "capacity_factor": 1.25
+    },
     "curriculum": {
       "stage1": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "wikipedia"
-          ]
-        },
-        "data_dir": "data/level5/stage1",
+        "name": "Language and communication",
         "entry_level": 1,
         "n_tokens": 1500000000,
-        "name": "Language and communication"
-      },
-      "stage10": {
         "data": {
-          "filter": null,
           "sources": [
-            "skills"
-          ]
-        },
-        "data_dir": "data/level5/stage10",
-        "entry_level": 0,
-        "n_tokens": 100000000,
-        "name": "Skills"
+            "wikipedia"
+          ],
+          "filter": null
+        }
       },
       "stage2": {
+        "name": "Perception and pattern recognition",
+        "entry_level": 1,
+        "n_tokens": 500000000,
         "data": {
-          "filter": null,
           "sources": [
             "wikipedia",
             "arc_easy",
             "arc_challenge"
-          ]
-        },
-        "data_dir": "data/level5/stage2",
-        "entry_level": 1,
-        "n_tokens": 500000000,
-        "name": "Perception and pattern recognition"
+          ],
+          "filter": null
+        }
       },
       "stage3": {
+        "name": "Abstraction and symbolic composition",
+        "entry_level": 1,
+        "n_tokens": 1000000000,
         "data": {
-          "filter": null,
           "sources": [
             "wikipedia",
             "arithmetic",
             "gsm8k",
             "math"
-          ]
-        },
-        "data_dir": "data/level5/stage3",
-        "entry_level": 1,
-        "n_tokens": 1000000000,
-        "name": "Abstraction and symbolic composition"
+          ],
+          "filter": null
+        }
       },
       "stage4": {
+        "name": "Causal and procedural reasoning",
+        "entry_level": 1,
+        "n_tokens": 1000000000,
         "data": {
-          "filter": null,
           "sources": [
             "wikipedia",
             "causal_synth"
-          ]
-        },
-        "data_dir": "data/level5/stage4",
-        "entry_level": 1,
-        "n_tokens": 1000000000,
-        "name": "Causal and procedural reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage5": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "reasoning"
-          ]
-        },
-        "data_dir": "data/level5/stage5",
+        "name": "Reasoning",
         "entry_level": 0,
         "n_tokens": 100000000,
-        "name": "Reasoning"
+        "data": {
+          "sources": [
+            "reasoning"
+          ],
+          "filter": null
+        }
       },
       "stage6": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "memory"
-          ]
-        },
-        "data_dir": "data/level5/stage6",
+        "name": "Memory management",
         "entry_level": 1,
         "n_tokens": 1000000000,
-        "name": "Memory management"
+        "data": {
+          "sources": [
+            "memory"
+          ],
+          "filter": null
+        }
       },
       "stage7": {
+        "name": "Cognitive ethics and BCF",
+        "entry_level": 1,
+        "n_tokens": 500000000,
         "data": {
-          "filter": null,
           "sources": [
             "wikipedia",
             "ethics"
-          ]
-        },
-        "data_dir": "data/level5/stage7",
-        "entry_level": 1,
-        "n_tokens": 500000000,
-        "name": "Cognitive ethics and BCF"
+          ],
+          "filter": null
+        }
       },
       "stage8": {
+        "name": "Action and tool use",
+        "entry_level": 0,
+        "n_tokens": 100000000,
         "data": {
-          "filter": null,
           "sources": [
             "agentic"
-          ]
-        },
-        "data_dir": "data/level5/stage8",
-        "entry_level": 0,
-        "n_tokens": 100000000,
-        "name": "Action and tool use"
+          ],
+          "filter": null
+        }
       },
       "stage9": {
-        "data": {
-          "filter": null,
-          "sources": [
-            "mcp"
-          ]
-        },
-        "data_dir": "data/level5/stage9",
+        "name": "Model Context Protocol (MCP)",
         "entry_level": 0,
         "n_tokens": 100000000,
-        "name": "Model Context Protocol (MCP)"
+        "data": {
+          "sources": [
+            "mcp"
+          ],
+          "filter": null
+        }
+      },
+      "stage10": {
+        "name": "Skills",
+        "entry_level": 0,
+        "n_tokens": 100000000,
+        "data": {
+          "sources": [
+            "skills"
+          ],
+          "filter": null
+        }
       }
+    },
+    "level": 5,
+    "name": "Universidad",
+    "tier": "cluster",
+    "information": {
+      "summary": "Todo sin filtros: lenguaje completo, matemáticas de competición, razonamiento causal/procedural y ética completos.",
+      "areas": {
+        "1": "Lenguaje: Wikipedia completo, sin filtrar.",
+        "2": "Patrones: ARC completo (Easy + Challenge).",
+        "3": "Matemáticas: aritmética + GSM8K + matemáticas de competición (MATH).",
+        "4": "Causal/Procedural: corpus causal completo.",
+        "5": "Razonamiento: cadena de pensamiento sobre todo el conocimiento adquirido.",
+        "6": "Memoria: gestión de memoria a gran escala (relevancia entre mucho ruido).",
+        "7": "Ética: corpus de ética + sondas BCF completas — aquí se congela la base."
+      }
+    },
+    "resources": {
+      "est_params_m": 201,
+      "est_train_mem_gb": 24,
+      "est_infer_mem_gb": 3,
+      "min_vram_gb": 40
     },
     "gate": {
       "max_perplexity": {
@@ -1181,73 +1188,6 @@
         "6": 34.0,
         "7": 34.0
       }
-    },
-    "information": {
-      "areas": {
-        "1": "Lenguaje: Wikipedia completo, sin filtrar.",
-        "2": "Patrones: ARC completo (Easy + Challenge).",
-        "3": "Matem\u00e1ticas: aritm\u00e9tica + GSM8K + matem\u00e1ticas de competici\u00f3n (MATH).",
-        "4": "Causal/Procedural: corpus causal completo.",
-        "5": "Razonamiento: cadena de pensamiento sobre todo el conocimiento adquirido.",
-        "6": "Memoria: gesti\u00f3n de memoria a gran escala (relevancia entre mucho ruido).",
-        "7": "\u00c9tica: corpus de \u00e9tica + sondas BCF completas \u2014 aqu\u00ed se congela la base."
-      },
-      "summary": "Todo sin filtros: lenguaje completo, matem\u00e1ticas de competici\u00f3n, razonamiento causal/procedural y \u00e9tica completos."
-    },
-    "level": 5,
-    "model": {
-      "context_len": 3328,
-      "d_model": 768,
-      "dropout": 0.1,
-      "ffn_dim": 3072,
-      "gradient_checkpointing": true,
-      "languages": [
-        "en"
-      ],
-      "mrl_dims": [
-        256,
-        512,
-        768
-      ],
-      "mtp_hidden_dim": 384,
-      "mtp_loss_weight": 0.3,
-      "n_heads": 12,
-      "n_kv_heads": 4,
-      "n_layers": 16,
-      "n_mtp_heads": 2,
-      "ple_dim": 96,
-      "ple_gated": true,
-      "rope_theta": 10000.0,
-      "vocab_size": 32768
-    },
-    "moe": {
-      "aux_loss_weight": 0.01,
-      "capacity_factor": 1.25,
-      "enabled": true,
-      "experts": 6,
-      "top_k": 2
-    },
-    "name": "Universidad",
-    "resources": {
-      "est_infer_mem_gb": 3,
-      "est_params_m": 201,
-      "est_train_mem_gb": 24,
-      "min_vram_gb": 40
-    },
-    "skip_gate": false,
-    "tier": "cluster",
-    "training": {
-      "batch_size": 8,
-      "clip_grad_norm": 1.0,
-      "eval_every": 10000,
-      "grad_accumulation": 16,
-      "lr": 0.0003,
-      "lr_min": 3e-05,
-      "optimizer_states": "int8",
-      "precision": "bf16",
-      "save_every": 5000,
-      "warmup_steps": 2000,
-      "weight_decay": 0.1
     }
   }
 }

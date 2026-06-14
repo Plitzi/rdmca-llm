@@ -3,21 +3,23 @@ Phase 1 Acceptance Tests — Core Text Model
 Run after all 5 curriculum stages complete and the foundational core is frozen.
 All tests must pass before beginning Phase 2.
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import mlx.core as mx
 import numpy as np
 import pytest
-import mlx.core as mx
 
-from src.model.transformer import RDMCAFoundational, ModelConfig
+from src.model.transformer import ModelConfig, RDMCAFoundational
 from src.relevance.engine import RelevanceEngine
-
 
 # ---------------------------------------------------------------------------
 # Model sanity
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def model():
@@ -37,8 +39,9 @@ def test_mrl_loss_decreases(model):
     import mlx.nn as nn
     import mlx.optimizers as optim
 
-    np.random.seed(0); mx.random.seed(0)
-    opt   = optim.AdamW(learning_rate=1e-3)
+    np.random.seed(0)
+    mx.random.seed(0)
+    opt = optim.AdamW(learning_rate=1e-3)
     batch = mx.array(np.random.randint(1, 32000, (4, 33)))
 
     loss_and_grad = nn.value_and_grad(model, lambda m, t: m.mrl_loss(t))
@@ -55,10 +58,10 @@ def test_mrl_loss_decreases(model):
 
 def test_mrl_prefix_valid(model):
     """Truncating to 128 dims via the shared head must produce finite logits."""
-    batch   = mx.array(np.random.randint(0, 32000, (1, 32)))
-    h       = model(batch)
-    logits  = model.head_at_dim(h, 128)   # shared-head prefix projection
-    arr     = np.array(logits.tolist())
+    batch = mx.array(np.random.randint(0, 32000, (1, 32)))
+    h = model(batch)
+    logits = model.head_at_dim(h, 128)  # shared-head prefix projection
+    arr = np.array(logits.tolist())
     assert np.all(np.isfinite(arr)), "non-finite logits at 128-dim prefix"
 
 
@@ -74,16 +77,18 @@ def test_memory_footprint(model):
 # Relevance Engine
 # ---------------------------------------------------------------------------
 
+
 def test_re_latency():
     """RE scoring must be fast. Threshold is generous (25ms avg over 100 calls)
     so the test asserts 'not pathologically slow' without flaking on a loaded
     machine / cold CI — a real regression makes scoring orders slower, not 2x."""
     import time
+
     from src.memory.episodic_buffer import Experience
     from src.memory.ltss import LTSS
 
     ltss = LTSS(db_path=":memory:")
-    re   = RelevanceEngine(ltss=ltss)
+    re = RelevanceEngine(ltss=ltss)
 
     exp = Experience(
         text="Hello world",
@@ -101,8 +106,9 @@ def test_re_latency():
 def test_re_novelty():
     """Highly novel experience must score N > 0.7."""
     from src.relevance.engine import novelty
+
     e = np.random.randn(256).astype(np.float32)
-    s = -e   # opposite direction → max novelty
+    s = -e  # opposite direction → max novelty
     assert novelty(e, s) > 0.7
 
 
@@ -110,15 +116,18 @@ def test_re_novelty():
 # Sector wiring + isolation
 # ---------------------------------------------------------------------------
 
+
 def _small_model():
-    cfg = ModelConfig(vocab_size=512, d_model=64, n_layers=2,
-                      n_heads=2, ffn_dim=128, mrl_dims=[32, 64])
+    cfg = ModelConfig(
+        vocab_size=512, d_model=64, n_layers=2, n_heads=2, ffn_dim=128, mrl_dims=[32, 64]
+    )
     return RDMCAFoundational(cfg)
 
 
 def test_sector_zero_output_init():
     """Attaching zero-init sectors must not change logits (Guide §1.6.2)."""
     from src.model.lora import build_all_sectors
+
     m = _small_model()
     m.train(False)
     batch = mx.array(np.random.randint(1, 512, (2, 16)))
@@ -133,6 +142,7 @@ def test_sector_isolation():
     """An update to S1 must leave the core and S2-S7 bit-identical (§1.6.1)."""
     import mlx.optimizers as optim
     from mlx.utils import tree_flatten
+
     from src.model.lora import build_all_sectors, masked_sector_update
 
     m = _small_model()
@@ -145,16 +155,21 @@ def test_sector_isolation():
         model.set_active_sectors([(1, 1.0)])
         return model.mrl_loss(batch)
 
-    loss, gnorm = masked_sector_update(m, 1, loss_fn, optim.SGD(learning_rate=0.1))
+    _loss, _gnorm = masked_sector_update(m, 1, loss_fn, optim.SGD(learning_rate=0.1))
     after = {k: np.array(v.tolist()) for k, v in tree_flatten(m.parameters())}
 
-    s1_changed     = any("sectors.1." in k and not np.array_equal(before[k], after[k]) for k in before)
-    others_changed = any(("sectors." in k and "sectors.1." not in k) and not np.array_equal(before[k], after[k]) for k in before)
-    core_changed   = any("sectors." not in k and not np.array_equal(before[k], after[k]) for k in before)
+    s1_changed = any("sectors.1." in k and not np.array_equal(before[k], after[k]) for k in before)
+    others_changed = any(
+        ("sectors." in k and "sectors.1." not in k) and not np.array_equal(before[k], after[k])
+        for k in before
+    )
+    core_changed = any(
+        "sectors." not in k and not np.array_equal(before[k], after[k]) for k in before
+    )
 
-    assert s1_changed,        "S1 did not update"
+    assert s1_changed, "S1 did not update"
     assert not others_changed, "another sector changed during S1 update"
-    assert not core_changed,   "foundational core changed during S1 update"
+    assert not core_changed, "foundational core changed during S1 update"
 
 
 @pytest.mark.skip(reason="requires trained foundational checkpoint")

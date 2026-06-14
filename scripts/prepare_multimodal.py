@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-import sys, os
+import os
+import sys
 from pathlib import Path
-_venv = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "bin", "python")
+
+_venv = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "bin", "python"
+)
 if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(_venv):
-    os.execv(_venv, [_venv] + sys.argv)
+    os.execv(_venv, [_venv, *sys.argv])
 
 """
 Build interleaved multimodal grounding data (RDMCA §7.5, §1.4.2).
@@ -41,9 +45,20 @@ def write(records, name):
 
 def images(mpl, n, lang):
     from datasets import load_dataset
+
     ds = load_dataset("uoft-cs/cifar10", split="train", streaming=True)
-    names = ["airplane", "automobile", "bird", "cat", "deer",
-             "dog", "frog", "horse", "ship", "truck"]
+    names = [
+        "airplane",
+        "automobile",
+        "bird",
+        "cat",
+        "deer",
+        "dog",
+        "frog",
+        "horse",
+        "ship",
+        "truck",
+    ]
     recs = []
     for ex in ds:
         img = ex.get("img") or ex.get("image")
@@ -56,8 +71,7 @@ def images(mpl, n, lang):
 
 
 def audio(mpl, audio_dir, n, lang):
-    paths = [p for p in Path(audio_dir).rglob("*")
-             if p.suffix.lower() in (".wav", ".flac", ".ogg")]
+    paths = [p for p in Path(audio_dir).rglob("*") if p.suffix.lower() in (".wav", ".flac", ".ogg")]
     recs = []
     for p in paths[:n]:
         txt = p.with_suffix(".txt")

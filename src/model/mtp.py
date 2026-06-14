@@ -29,6 +29,7 @@ addable later with ZERO retrain — exactly the part that should follow, not pre
 training. What MUST exist from the start is the training head (it shapes the
 checkpoint); that is what this module provides.
 """
+
 from __future__ import annotations
 
 import src.backend as backend
@@ -55,19 +56,24 @@ class MTPModule(nn.Module):
     def __init__(self, cfg, n_heads: int, hidden: int):
         super().__init__()
         self.n_heads = n_heads
-        self.hidden  = hidden
+        self.hidden = hidden
         d = cfg.d_model
+
         # residual source width: head 0 ← token embedding (d_model); head k>0 ←
         # previous head's hidden (`hidden`).
-        res_dim = lambda k: d if k == 0 else hidden
-        self.ln_in   = nn.ModuleList([RMSNorm(d)          for _ in range(n_heads)])
-        self.ln_res  = nn.ModuleList([RMSNorm(res_dim(k)) for k in range(n_heads)])
-        self.proj_in  = nn.ModuleList([nn.Linear(d, hidden, bias=False) for _ in range(n_heads)])
-        self.proj_res = nn.ModuleList([nn.Linear(res_dim(k), hidden, bias=False)
-                                       for k in range(n_heads)])
+        def res_dim(k):
+            return d if k == 0 else hidden
+
+        self.ln_in = nn.ModuleList([RMSNorm(d) for _ in range(n_heads)])
+        self.ln_res = nn.ModuleList([RMSNorm(res_dim(k)) for k in range(n_heads)])
+        self.proj_in = nn.ModuleList([nn.Linear(d, hidden, bias=False) for _ in range(n_heads)])
+        self.proj_res = nn.ModuleList(
+            [nn.Linear(res_dim(k), hidden, bias=False) for k in range(n_heads)]
+        )
         self.block = nn.ModuleList([SwiGLU(hidden, hidden * 4) for _ in range(n_heads)])
-        self.head  = nn.ModuleList([nn.Linear(hidden, cfg.vocab_size, bias=False)
-                                    for _ in range(n_heads)])
+        self.head = nn.ModuleList(
+            [nn.Linear(hidden, cfg.vocab_size, bias=False) for _ in range(n_heads)]
+        )
         # Zero-init the output heads → uniform logits at start, no perturbation of
         # the main loss while the heads warm up (same trick as the LoRA B matrix).
         for hd in self.head:
@@ -80,13 +86,14 @@ class MTPModule(nn.Module):
         logits[k] = [B, S-(k+1), vocab] predicting tokens at offset k+2."""
         S = h.shape[1]
         logits = []
-        prev = embed_next                         # residual chain seed (d_model)
+        prev = embed_next  # residual chain seed (d_model)
         for k in range(self.n_heads):
-            h_k   = h[:, :S - (k + 1)]             # [B, S-(k+1), d_model]
-            res_k = prev[:, 1:]                    # [B, S-(k+1), res_dim] (shift forward)
-            x  = ops.silu(self.proj_in[k](self.ln_in[k](h_k))) \
-                 * self.proj_res[k](self.ln_res[k](res_k))
-            hk = self.block[k](x)                  # [B, S-(k+1), hidden]
-            logits.append(self.head[k](hk))        # [B, S-(k+1), vocab]
-            prev = hk                              # head k+1 chains on this hidden
+            h_k = h[:, : S - (k + 1)]  # [B, S-(k+1), d_model]
+            res_k = prev[:, 1:]  # [B, S-(k+1), res_dim] (shift forward)
+            x = ops.silu(self.proj_in[k](self.ln_in[k](h_k))) * self.proj_res[k](
+                self.ln_res[k](res_k)
+            )
+            hk = self.block[k](x)  # [B, S-(k+1), hidden]
+            logits.append(self.head[k](hk))  # [B, S-(k+1), vocab]
+            prev = hk  # head k+1 chains on this hidden
         return logits

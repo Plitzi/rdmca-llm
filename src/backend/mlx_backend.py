@@ -3,18 +3,19 @@ MLX backend — wraps mlx.core / mlx.nn / mlx.optimizers behind the Backend
 facade. This is the reference implementation; `ops` signatures are MLX-native
 (`axis=`, `keepdims=`) and the Torch backend translates to match.
 """
+
 from __future__ import annotations
+
 import os
 from types import SimpleNamespace
 
-import numpy as np
 import mlx.core as mx
 import mlx.nn as mlx_nn
 import mlx.optimizers as mlx_optim
+import numpy as np
 from mlx.utils import tree_flatten, tree_map, tree_unflatten
 
 from src.backend.base import Backend
-
 
 _PRECISION = {"fp32": mx.float32, "bf16": mx.bfloat16, "fp16": mx.float16}
 _FLOAT_DTYPES = (mx.float32, mx.bfloat16, mx.float16)
@@ -29,10 +30,10 @@ class _Conv2dNCHW(mlx_nn.Module):
         super().__init__()
         self.conv = mlx_nn.Conv2d(*a, **k)
 
-    def __call__(self, x):                       # x: [N, C, H, W]
-        x = mx.transpose(x, (0, 2, 3, 1))        # -> NHWC
+    def __call__(self, x):  # x: [N, C, H, W]
+        x = mx.transpose(x, (0, 2, 3, 1))  # -> NHWC
         x = self.conv(x)
-        return mx.transpose(x, (0, 3, 1, 2))     # -> NCHW
+        return mx.transpose(x, (0, 3, 1, 2))  # -> NCHW
 
 
 class _ConvTranspose2dNCHW(mlx_nn.Module):
@@ -51,10 +52,10 @@ class _Conv1dNCL(mlx_nn.Module):
         super().__init__()
         self.conv = mlx_nn.Conv1d(*a, **k)
 
-    def __call__(self, x):                       # x: [N, C, L]
-        x = mx.transpose(x, (0, 2, 1))           # -> NLC
+    def __call__(self, x):  # x: [N, C, L]
+        x = mx.transpose(x, (0, 2, 1))  # -> NLC
         x = self.conv(x)
-        return mx.transpose(x, (0, 2, 1))        # -> NCL
+        return mx.transpose(x, (0, 2, 1))  # -> NCL
 
 
 class _ConvTranspose1dNCL(mlx_nn.Module):
@@ -98,7 +99,10 @@ _ops = SimpleNamespace(
     ones=lambda shape, dtype=None: mx.ones(shape, dtype=dtype) if dtype else mx.ones(shape),
     full=lambda shape, val: mx.full(shape, val),
     randn=lambda shape: mx.random.normal(shape),
-    cos=mx.cos, sin=mx.sin, sqrt=mx.sqrt, sigmoid=mx.sigmoid,
+    cos=mx.cos,
+    sin=mx.sin,
+    sqrt=mx.sqrt,
+    sigmoid=mx.sigmoid,
     mean=lambda x, axis=None, keepdims=False: mx.mean(x, axis=axis, keepdims=keepdims),
     sum=lambda x, axis=None, keepdims=False: mx.sum(x, axis=axis, keepdims=keepdims),
     concatenate=lambda arrays, axis=0: mx.concatenate(arrays, axis=axis),
@@ -107,9 +111,11 @@ _ops = SimpleNamespace(
     # Fused scaled-dot-product attention (MLX "flash" kernel). q:[B,H,S,Hd],
     # k/v:[B,Hkv,T,Hd] — GQA (Hkv<H) is handled natively. `is_causal` → built-in
     # causal mask; otherwise `attn_mask` (additive array or None) is used.
-    sdpa=lambda q, k, v, scale, is_causal=False, attn_mask=None:
+    sdpa=lambda q, k, v, scale, is_causal=False, attn_mask=None: (
         mx.fast.scaled_dot_product_attention(
-            q, k, v, scale=scale, mask=("causal" if is_causal else attn_mask)),
+            q, k, v, scale=scale, mask=("causal" if is_causal else attn_mask)
+        )
+    ),
     triu=lambda x, k=0: mx.triu(x, k=k),
     argmax=lambda x, axis=-1: mx.argmax(x, axis=axis),
     argmin=lambda x, axis=-1: mx.argmin(x, axis=axis),
@@ -119,25 +125,31 @@ _ops = SimpleNamespace(
     # top-k along the last axis (order within the k does not matter — softmax over them).
     topk=lambda x, k, axis=-1: (
         mx.take_along_axis(x, mx.argsort(x, axis=axis)[..., -k:], axis=axis),
-        mx.argsort(x, axis=axis)[..., -k:]),
+        mx.argsort(x, axis=axis)[..., -k:],
+    ),
     take_along_axis=lambda x, idx, axis: mx.take_along_axis(x, idx, axis=axis),
     index_select=lambda x, idx, axis=0: mx.take(x, idx, axis=axis),
     index_add=lambda out, idx, vals, axis=0: out.at[idx].add(vals),
-    nonzero=None,    # MLX has no static-shape nonzero; the MLX path uses capacity dispatch
+    nonzero=None,  # MLX has no static-shape nonzero; the MLX path uses capacity dispatch
     cumsum=lambda x, axis=0: mx.cumsum(x, axis=axis),
     where=lambda cond, a, b: mx.where(cond, a, b),
     int_=mx.int32,
     silu=mlx_nn.silu,
     relu=mlx_nn.relu,
     cross_entropy=lambda logits, targets, reduction="mean": mlx_nn.losses.cross_entropy(
-        logits, targets, reduction=reduction),
+        logits, targets, reduction=reduction
+    ),
     bce_with_logits=lambda logits, labels, reduction="mean": mlx_nn.losses.binary_cross_entropy(
-        logits, labels, with_logits=True, reduction=reduction),
+        logits, labels, with_logits=True, reduction=reduction
+    ),
     # numpy has no bfloat16; cast float types to float32 before converting.
     to_numpy=lambda x: np.array(
-        x.astype(mx.float32) if isinstance(x, mx.array) and x.dtype in _FLOAT_DTYPES else x),
+        x.astype(mx.float32) if isinstance(x, mx.array) and x.dtype in _FLOAT_DTYPES else x
+    ),
     from_numpy=lambda a: mx.array(a),
-    float32=mx.float32, bfloat16=mx.bfloat16, float16=mx.float16,
+    float32=mx.float32,
+    bfloat16=mx.bfloat16,
+    float16=mx.float16,
 )
 
 
@@ -154,8 +166,7 @@ def _set_precision(model, precision: str) -> None:
     mx.eval(model.parameters())
 
 
-def _quantize(model, bits: int = 4, group_size: int = 64,
-              skip_names: tuple = ("embed",)) -> None:
+def _quantize(model, bits: int = 4, group_size: int = 64, skip_names: tuple = ("embed",)) -> None:
     """In-place weight quantization at any MLX-supported bit-width (2/3/4/6/8).
 
     Uses MLX grouped affine quantization on Linear/Embedding layers whose feature
@@ -181,8 +192,10 @@ def _quantize(model, bits: int = 4, group_size: int = 64,
     mlx_nn.quantize(model, group_size=group_size, bits=bits, class_predicate=predicate)
     mx.eval(model.parameters())
     if skipped:
-        print(f"  [quant] {len(skipped)} layer(s) not divisible by group_size={group_size} "
-              f"kept in float dtype")
+        print(
+            f"  [quant] {len(skipped)} layer(s) not divisible by group_size={group_size} "
+            f"kept in float dtype"
+        )
 
 
 def _optimizer_step(opt, model, grads):
@@ -194,14 +207,21 @@ def _save_optimizer(opt, path: str) -> None:
     """Persist optimizer state (AdamW m/v/step) so --resume continues with warm
     moments instead of cold ones (a cold restart spikes the loss). Saved as a flat
     .npz of the state tree's array leaves."""
-    flat = {k: np.array(v.astype(mx.float32)) for k, v in tree_flatten(opt.state)
-            if isinstance(v, mx.array)}
+    flat = {
+        k: np.array(v.astype(mx.float32))
+        for k, v in tree_flatten(opt.state)
+        if isinstance(v, mx.array)
+    }
     if not flat:
         # No step taken yet → no moments to persist. Warn (don't silently skip):
         # a later --resume would then find no .opt and start with cold moments.
         import sys
-        print(f"  [opt] no optimizer state to save yet (no step taken) — "
-              f"skipping {os.path.basename(str(path))}", file=sys.stderr)
+
+        print(
+            f"  [opt] no optimizer state to save yet (no step taken) — "
+            f"skipping {os.path.basename(str(path))}",
+            file=sys.stderr,
+        )
         return
     tmp = str(path) + ".tmp"
     with open(tmp, "wb") as f:
@@ -223,7 +243,7 @@ def _grad_norm(model, grads) -> float:
     for _, g in tree_flatten(grads):
         if isinstance(g, mx.array) and g.size > 0:
             sq += float((g * g).sum().item())
-    return sq ** 0.5
+    return sq**0.5
 
 
 def _accumulate_grads(running, grads, model):
@@ -256,22 +276,30 @@ def _save_weights(model, path: str) -> None:
     """Neutral checkpoint: a .npz of float32 numpy arrays keyed by param name.
     Loadable by any backend (same names) regardless of training precision."""
     flat = {k: np.array(v.astype(mx.float32)) for k, v in tree_flatten(model.parameters())}
-    tmp = str(path) + ".tmp"           # atomic: write fully, then rename into place
-    with open(tmp, "wb") as f:         # file object → np.savez does NOT append .npz
+    tmp = str(path) + ".tmp"  # atomic: write fully, then rename into place
+    with open(tmp, "wb") as f:  # file object → np.savez does NOT append .npz
         np.savez(f, **flat)
     os.replace(tmp, str(path))
 
 
 def _load_weights(model, path: str) -> None:
     data = np.load(str(path))
-    if len(data.files) == 0:                    # empty/corrupt .npz → load_weights([]) is a no-op
+    if len(data.files) == 0:  # empty/corrupt .npz → load_weights([]) is a no-op
         import sys
-        print(f"  [load] {path} has no arrays — model stays UNINITIALIZED "
-              f"(checkpoint empty or corrupt).", file=sys.stderr)
+
+        print(
+            f"  [load] {path} has no arrays — model stays UNINITIALIZED "
+            f"(checkpoint empty or corrupt).",
+            file=sys.stderr,
+        )
         return
     from src.backend.base import warn_load_mismatch
-    warn_load_mismatch({k: tuple(v.shape) for k, v in tree_flatten(model.parameters())},
-                       {k: tuple(data[k].shape) for k in data.files}, str(path))
+
+    warn_load_mismatch(
+        {k: tuple(v.shape) for k, v in tree_flatten(model.parameters())},
+        {k: tuple(data[k].shape) for k in data.files},
+        str(path),
+    )
     model.load_weights([(k, mx.array(data[k])) for k in data.files], strict=False)
     mx.eval(model.parameters())
 
@@ -310,6 +338,7 @@ def _checkpoint(module, *args):
     for exact gradients (the L4-L5 scale where checkpointing matters runs on torch,
     which preserves the RNG)."""
     import mlx.nn.utils as _nnu
+
     return _nnu.checkpoint(module)(*args)
 
 
@@ -317,6 +346,7 @@ def _set_seed(seed: int) -> None:
     """Seed every RNG that affects a training run (Python, numpy, MLX), so weight
     init + dropout + sampling are reproducible across runs."""
     import random as _random
+
     _random.seed(seed)
     np.random.seed(seed)
     mx.random.seed(seed)
@@ -328,7 +358,8 @@ _engine = SimpleNamespace(
     # bf16 → ~2 bytes/state). There is no native 8-bit optimizer, so a `states=int8`
     # request is accepted but simply stays bf16 (the saving is on the CUDA backend).
     make_optimizer=lambda model, lr, weight_decay, states=None: mlx_optim.AdamW(
-        learning_rate=lr, weight_decay=weight_decay, bias_correction=True),
+        learning_rate=lr, weight_decay=weight_decay, bias_correction=True
+    ),
     optimizer_step=_optimizer_step,
     set_lr=lambda opt, lr: setattr(opt, "learning_rate", lr),
     eval=lambda *xs: mx.eval(*xs) if xs else None,
@@ -346,7 +377,7 @@ _engine = SimpleNamespace(
     # MLX walks dict/list-of-Module attributes automatically, so attaching the
     # sectors dict already registers their params — nothing extra to do.
     register_submodules=lambda parent, name, modules: None,
-    align_module=lambda module, model: None,   # MLX unified memory: no-op
+    align_module=lambda module, model: None,  # MLX unified memory: no-op
     grad_norm=_grad_norm,
     clip_grads=_clip_grads,
     accumulate_grads=_accumulate_grads,

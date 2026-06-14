@@ -172,11 +172,11 @@ rdmca-llm/
 ├── src/data/graded.py          Graded sources, readability filter, synthetic generators
 ├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
 ├── experiments/continual_learning.py   Hypothesis validation (no-forgetting)
-├── train_stage.py              Stage training + freeze + BCF
+├── scripts/train.py              Stage training + freeze + BCF
 ├── uses/                       Ways to consume a trained model
 │   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)
 │   └── agent/run_agent.py      Agentic tool loop (Action/Observation)
-├── consolidation_daemon.py     Daily consolidation daemon (wired)
+├── scripts/consolidation_daemon.py     Daily consolidation daemon (wired)
 └── docs/
     ├── GUIDE.md                Single step-by-step guide
     ├── reference/architecture.md   This file
@@ -209,7 +209,7 @@ Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `src/age
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
 override) — plus an `announce` that prints what the model is learning and from which areas.
 The estimate is **precision-aware**, so a lower training precision shrinks it and a heavier
-level may fit; `train_stage.py --precision {fp32,bf16,fp16}` overrides the config per run.
+level may fit; `scripts/train.py --precision {fp32,bf16,fp16}` overrides the config per run.
 For inference on limited hardware, chat/agent accept `--quant {int8,int4}` → real
 grouped-affine weight quantization via `engine.quantize` (MLX native; torch weight-only,
 packed nibbles at 4-bit; the output head stays in float). Generation is bounded by
@@ -220,7 +220,7 @@ packed nibbles at 4-bit; the output head stays in float). Generation is bounded 
 
 ## Consolidation (daemon)
 
-`consolidation_daemon.py` loads the frozen core + sectors, drains
+`scripts/consolidation_daemon.py` loads the frozen core + sectors, drains
 `data/runtime/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
 filter (R⁺<0) → LTSS consistency → MRF → sector assignment (STR + SectorRouter) → masked
 per-sector update → PGQ → snapshot/rollback → audit log in `logs/cycle_*.json`. It saves

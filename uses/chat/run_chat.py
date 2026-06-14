@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
+import os
+
 # Auto-bootstrap: re-run with .venv/bin/python if dependencies are not available.
-import sys, os
+import sys
+
 try:
     import numpy  # noqa: F401 — just checking the venv is active
 except ModuleNotFoundError:
     _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     venv_py = os.path.join(_repo, ".venv", "bin", "python")
     if os.path.exists(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
-        os.execv(venv_py, [venv_py] + sys.argv)
+        os.execv(venv_py, [venv_py, *sys.argv])
     print("ERROR: dependencies not found and .venv/bin/python not available.")
     print("Run:  source .venv/bin/activate   (or follow README setup)")
     sys.exit(1)
@@ -41,334 +45,34 @@ Comandos especiales durante el chat:
 """
 import argparse
 import sys
-import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root on path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root on path
 
 import src.backend as backend
 from src import agent
-from uses.common.interaction import SessionInput, InterruptGuard
-from src.memory.experience_log import log_experience, detect_correction, load_experiences
-from src.config import require_backend, get_precision, load_config
-from src.modalities.text import BOS_ID
-from src.modalities.moods import MOODS
-from src.observability import ContextReport, count_tokens
+from src.config import get_precision, load_config, require_backend
 
 # Model/tokenizer modules are imported lazily inside load_model() — only AFTER
 # require_backend() has selected the backend — so model classes bind to it.
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Generation
-# ──────────────────────────────────────────────────────────────────────────────
-
-# Anti-logic-bomb generation guards. Generation is already bounded by
-# `max_new_tokens`, but an adversarial prompt can still drive a tiny model into a
-# degenerate loop that burns the whole budget (and, with thinking on, stalls the
-# turn). These detect that and stop early:
-_MAX_TOKEN_REPEAT = 32      # same token N× in a row → degenerate
-_CYCLE_MAX_LEN    = 8       # look for a repeating cycle up to this length …
-_CYCLE_MIN_REPS   = 5       # … repeated at least this many times → looping
-GEN_DEADLINE_S    = 90.0    # default per-generation wall-clock cap (0 = unlimited)
-
-
-def _looping(generated: list) -> bool:
-    """True if the tail of `generated` is a short cycle repeated many times — the
-    signature of a stuck 'thinking' loop. O(_CYCLE_MAX_LEN) per call."""
-    n = len(generated)
-    for c in range(1, _CYCLE_MAX_LEN + 1):
-        span = c * _CYCLE_MIN_REPS
-        if n < span:
-            break
-        tail = generated[-span:]
-        if all(tail[i] == tail[i % c] for i in range(span)):
-            return True
-    return False
-
-
-def sample_top_p(logits, temperature: float, top_p: float, top_k: int = 0,
-                 recent_ids=None, rep_penalty: float = 1.0) -> int:
-    logits_np = np.asarray(backend.current().ops.to_numpy(logits), dtype=np.float32).copy()
-    # Repetition penalty (HF-style): push down logits of recently emitted tokens
-    # so the model stops looping ("I'm sorry. I'm sorry. …"). Window-limited so it
-    # never blocks tokens that legitimately recur over a longer span.
-    if rep_penalty and rep_penalty != 1.0 and recent_ids:
-        idx = np.fromiter(set(int(i) for i in recent_ids), dtype=np.int64)
-        if idx.size:
-            vals = logits_np[idx]
-            logits_np[idx] = np.where(vals > 0, vals / rep_penalty, vals * rep_penalty)
-    if temperature == 0.0:
-        return int(np.argmax(logits_np))
-    logits_np = logits_np / temperature
-    logits_np -= logits_np.max()
-    probs = np.exp(logits_np)
-    probs /= probs.sum()
-    sorted_idx  = np.argsort(probs)[::-1]
-    if top_k and top_k > 0:                       # restrict to the top_k most likely
-        sorted_idx = sorted_idx[:top_k]
-    sorted_prob = probs[sorted_idx]
-    cumulative  = np.cumsum(sorted_prob)
-    cutoff      = int(np.searchsorted(cumulative, top_p)) + 1
-    top_idx     = sorted_idx[:cutoff]
-    top_prob    = probs[top_idx]
-    top_prob   /= top_prob.sum()
-    return int(np.random.choice(top_idx, p=top_prob))
-
-
-class IncrementalDecoder:
-    """O(n) streaming decode. A naive streamer re-decodes the WHOLE token list every
-    step (`decode_fn(generated)`), which is O(n²) total work over a generation. This
-    keeps a frozen text PREFIX and only re-decodes a short live TAIL each step, so
-    total work is O(n).
-
-    It returns EXACTLY the text of a full decode (asserted token-by-token in
-    tests) — never a naive `+= decode([tok])`, which corrupts subword/byte-fallback
-    merges and SentencePiece's leading-space handling. The prefix is frozen only at a
-    boundary VERIFIED to reconstruct (`full.endswith(tail_redecode)`); since tokens
-    are only appended at the end, a once-clean left boundary stays clean, and the
-    whole live tail is re-decoded every step so any local merge is always inside the
-    tail, never across the frozen seam. If a split is never clean it simply keeps
-    re-decoding (still correct, just less amortized)."""
-
-    def __init__(self, decode_fn, keep: int = 16):
-        self._decode = decode_fn
-        self._keep   = keep              # tokens kept in the live tail
-        self._toks: list[int] = []
-        self._anchor = 0                 # tail re-decode starts here
-        self._prefix = ""                # verified prefix of decode(all toks)
-
-    def append(self, tok_id: int) -> str:
-        """Add one token; return the full decoded text so far (== decode(all))."""
-        self._toks.append(tok_id)
-        full = self._prefix + self._decode(self._toks[self._anchor:])
-        # Freeze more of the prefix once the live tail is long, but only if the cut
-        # reconstructs exactly — so the frozen text is always a true prefix.
-        if len(self._toks) - self._anchor > 2 * self._keep:
-            new_anchor = len(self._toks) - self._keep
-            new_tail = self._decode(self._toks[new_anchor:])
-            if full.endswith(new_tail):
-                self._prefix = full[: len(full) - len(new_tail)]
-                self._anchor = new_anchor
-        return full
-
-
-def generate(model,
-             input_ids: list,
-             max_new_tokens: int,
-             temperature: float,
-             top_p: float,
-             vocab_size: int,
-             context_len: int = 2048,
-             stream: bool = True,
-             decode_fn=None,
-             max_seconds: float | None = None,
-             stop_strings: tuple[str, ...] | None = None,
-             top_k: int = 0,
-             rep_penalty: float = 1.0,
-             rep_window: int = 128,
-             suppress_think: bool = False,
-             should_stop=None) -> tuple[list[int], float]:
-    """
-    Returns (generated_ids, tokens_per_second).
-
-    If stream=True, prints tokens as they are generated. When `decode_fn` is
-    given (e.g. tokenizer.decode), it decodes the running output and prints the
-    new text delta each step — real token streaming; otherwise it falls back to
-    a per-token ▌ marker (used on the no-tokenizer plumbing path).
-
-    Anti-logic-bomb guards (besides the `max_new_tokens` cap): generation also
-    stops on a degenerate token loop (`_looping`) and on an optional wall-clock
-    deadline (`max_seconds`), so a crafted prompt can't wedge the turn.
-    """
-    ops = backend.current().ops
-    engine = backend.current().engine
-
-    # Prefill the prompt ONCE into a per-layer KV cache, then decode one token at a
-    # time feeding only the new token. This is the O(n³)→O(n²) win: each step does
-    # O(1) new-token work instead of reprocessing the whole sequence. `eval` on the
-    # cache tensors each step keeps MLX's lazy graph from growing unbounded.
-    ids = list(input_ids)
-    if len(ids) > context_len:           # keep the prompt within the positional limit
-        ids = ids[-context_len:]
-    prefill = ops.array(np.asarray([ids], dtype=np.int64))
-    logits, caches = model.logits_cached(prefill, caches=None, pos_offset=0)
-    next_logits = logits[0, -1, :]       # [vocab] — logits for the first new token
-    engine.eval(next_logits, *[t for kv in caches for t in kv])
-    cur_len = len(ids)
-
-    generated: list[int] = []
-    printed = ""
-    repeat_run = 0
-    boundary_hit = False        # broke at a turn-boundary leak → don't flush past it
-    # O(n) streaming decode: one short tail re-decode per token instead of
-    # re-decoding the whole sequence each step. Identical text, no O(n²) cost.
-    inc = IncrementalDecoder(decode_fn) if decode_fn is not None else None
-    t0 = time.perf_counter()
-
-    EOS_ID = 3
-
-    for _ in range(max_new_tokens):
-        # User abort (Ctrl-C via InterruptGuard): stop NOW, return what we have so
-        # far so the partial answer is kept and the session continues.
-        if should_stop is not None and should_stop():
-            break
-
-        next_id = sample_top_p(next_logits, temperature, top_p, top_k=top_k,
-                               recent_ids=generated[-rep_window:] if rep_penalty != 1.0 else None,
-                               rep_penalty=rep_penalty)
-
-        if next_id == EOS_ID:
-            break
-
-        # Anti-loop: a single token repeated many times, or a short repeating
-        # cycle, is a stuck generation — stop rather than burn the budget.
-        repeat_run = repeat_run + 1 if (generated and next_id == generated[-1]) else 1
-        if repeat_run >= _MAX_TOKEN_REPEAT:
-            break
-
-        generated.append(next_id)
-        # Decode incrementally ONCE per token (O(n) total); reused by both the
-        # stop-string check and the streamer below.
-        text = inc.append(next_id) if inc is not None else None
-        # What to DISPLAY/scan: with thinking hidden (think off), show only the
-        # answer after `</think>` — never the scratchpad the model emits on its own.
-        disp = (agent.visible_stream_text(text)
-                if (suppress_think and text is not None) else text)
-
-        if _looping(generated):
-            break
-        if max_seconds is not None and (time.perf_counter() - t0) > max_seconds:
-            break
-
-        # Stop-string check (e.g. role-tag turn-boundary leakage). Needs the
-        # decoded text, so it runs on the tokenizer path; we print only up to the
-        # boundary (in stream mode) and stop before emitting the leaked new turn.
-        if stop_strings and disp is not None:
-            cut = agent.first_stop_index(disp, stop_strings)
-            if cut is not None:
-                if stream:
-                    sys.stdout.write(disp[len(printed):cut]); sys.stdout.flush()
-                    printed = disp[:cut]
-                boundary_hit = True
-                break
-
-        if stream:
-            if disp is not None:
-                # Emit only up to the safe boundary — hold back a trailing fragment
-                # that could still grow into a role tag (e.g. 'User' → 'User:'), so a
-                # forming turn boundary is never half-printed.
-                safe = agent.safe_stream_len(disp)
-                if safe > len(printed):
-                    sys.stdout.write(disp[len(printed):safe])
-                    sys.stdout.flush()
-                    printed = disp[:safe]
-            else:
-                print("▌", end="", flush=True)
-
-        # Advance the cache with the chosen token → logits for the next step. Stop
-        # if the positional window is full (the chat trims history, so this is rare).
-        if cur_len >= context_len:
-            break
-        new_tok = ops.array(np.asarray([[next_id]], dtype=np.int64))
-        logits, caches = model.logits_cached(new_tok, caches=caches, pos_offset=cur_len)
-        next_logits = logits[0, -1, :]
-        engine.eval(next_logits, *[t for kv in caches for t in kv])
-        cur_len += 1
-
-    # Flush any held-back tail (real text that never became a role tag). Skipped
-    # when we stopped at a boundary — everything past it is the leaked next turn.
-    if stream and decode_fn is not None and not boundary_hit:
-        text = decode_fn(generated)
-        disp = agent.visible_stream_text(text) if suppress_think else text
-        if len(disp) > len(printed):
-            sys.stdout.write(disp[len(printed):]); sys.stdout.flush()
-
-    elapsed = time.perf_counter() - t0
-    tps = len(generated) / elapsed if elapsed > 0 else 0.0
-    return generated, tps
-
-
-def generate_thinking(model, prompt_ids: list, *, tokenizer, lang: str,
-                      max_new_tokens: int, think_budget: int,
-                      temperature: float, top_p: float, vocab_size: int,
-                      context_len: int, stream: bool = False,
-                      think_prefix: str = "", answer_prefix: str = "",
-                      max_seconds: float | None = None,
-                      answer_stop: tuple[str, ...] | None = agent.ANSWER_STOP_STRINGS,
-                      top_k: int = 0, rep_penalty: float = 1.0, should_stop=None,
-                      ) -> tuple[str, list[int], float]:
-    """Two-phase generation: a budget-capped <think> scratchpad, then the answer.
-
-    Returns (think_text, answer_ids, tok_per_s). With think_budget <= 0 it is a
-    single plain generation and think_text is "". The scratchpad is force-closed
-    when the budget is hit (or trimmed at </think> if the model closes early), so
-    the answer is always generated from a well-formed `… </think>` prefix —
-    mirroring how Claude bounds extended thinking with a token budget.
-
-    When `stream=True` the scratchpad and answer are printed live (decoded
-    incrementally), each preceded by its prefix label; callers then skip their
-    own printing of the same content.
-    """
-    decode_fn = tokenizer.decode
-    sgen = dict(temperature=temperature, top_p=top_p, vocab_size=vocab_size,
-                context_len=context_len, stream=stream,
-                decode_fn=(decode_fn if stream else None), max_seconds=max_seconds,
-                top_k=top_k, rep_penalty=rep_penalty, should_stop=should_stop)
-
-    def _label(prefix):
-        if stream and prefix:
-            sys.stdout.write(prefix); sys.stdout.flush()
-
-    if think_budget <= 0:
-        # think OFF: a reasoning-trained model still emits <think> on its own, so
-        # hide the scratchpad in the stream and show only the answer (suppress_think).
-        _label(answer_prefix)
-        ids, tps = generate(model, list(prompt_ids), max_new_tokens=max_new_tokens,
-                            stop_strings=answer_stop, suppress_think=True, **sgen)
-        # Fallback: if the model OPENED a <think> it never CLOSED, the visible answer
-        # is empty (a blank reply — the symptom on an under-trained reasoning stage).
-        # Force-close the scratchpad and continue from it (Phase-B style) so 'think
-        # off' NEVER returns blank — without ever showing the raw scratchpad.
-        raw = decode_fn(ids) if ids else ""
-        if ids and agent.THINK_OPEN in raw and not agent.visible_stream_text(raw).strip():
-            scratch = (raw.split(agent.THINK_OPEN, 1)[1]
-                          .split(agent.THINK_CLOSE, 1)[0].strip())
-            closed = f"{agent.THINK_OPEN} {scratch} {agent.THINK_CLOSE}\n"
-            _label(answer_prefix)
-            ids, tps2 = generate(model, list(prompt_ids) + tokenizer.encode_raw(closed),
-                                 max_new_tokens=max_new_tokens, stop_strings=answer_stop, **sgen)
-            tps = tps2 or tps
-        return "", ids, tps
-
-    # Raw pieces only — NO `<lang:XX>` prefix. encode() would inject the language
-    # token mid-sequence (the model only saw it at the start), degrading the
-    # scratchpad/answer continuation. See TextTokenizer.encode_raw.
-    enc = lambda s: tokenizer.encode_raw(s)
-    # Phase A — scratchpad. Prime with the opening tag so generation starts inside it.
-    # Stop if the model runs into a new turn (a 'User:'/… leak) — reasoning should
-    # never cross a turn boundary, same as the answer phase.
-    _label(think_prefix)
-    think_ids, tps_a = generate(model, list(prompt_ids) + enc(agent.THINK_OPEN),
-                                max_new_tokens=think_budget, stop_strings=answer_stop,
-                                **sgen)
-    think_text = tokenizer.decode(think_ids) if think_ids else ""
-    if agent.THINK_CLOSE in think_text:                 # model closed early
-        think_text = think_text.split(agent.THINK_CLOSE)[0]
-    think_text = think_text.strip()
-
-    # Phase B — answer, from a force-closed scratchpad prefix.
-    closed = f"{agent.THINK_OPEN} {think_text} {agent.THINK_CLOSE}\n"
-    _label(answer_prefix)
-    answer_ids, tps_b = generate(model, list(prompt_ids) + enc(closed),
-                                 max_new_tokens=max_new_tokens,
-                                 stop_strings=answer_stop, **sgen)
-    tps = next((t for t in (tps_b, tps_a) if t), 0.0)   # report a meaningful rate
-    return think_text, answer_ids, tps
-
+# Generation core (sampling, KV-cached decode loop, two-phase <think>/answer)
+# lives in src/inference/generate.py so the chat and agent runtimes share it.
+# Re-exported here for backward compatibility (tests + run_agent import via run_chat).
+from src.inference.generate import (  # noqa: F401  (re-exported for tests + run_agent)
+    GEN_DEADLINE_S,
+    IncrementalDecoder,
+    _looping,
+    generate,
+    generate_thinking,
+    sample_top_p,
+)
+from src.memory.experience_log import detect_correction, load_experiences, log_experience
+from src.modalities.moods import MOODS
+from src.modalities.text import BOS_ID
+from src.observability import ContextReport, count_tokens
+from uses.common.interaction import InterruptGuard, SessionInput
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Model loading
@@ -396,10 +100,12 @@ def parse_quant(value: str | int | None) -> int | None:
         bits = int(s)
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"invalid --quant {value!r}: use 'none' or a bit-width (e.g. 8, int4)")
+            f"invalid --quant {value!r}: use 'none' or a bit-width (e.g. 8, int4)"
+        ) from None
     if not (_QUANT_MIN <= bits <= _QUANT_MAX):
         raise argparse.ArgumentTypeError(
-            f"--quant bit-width {bits} out of range — supported: {_QUANT_MIN}-{_QUANT_MAX}")
+            f"--quant bit-width {bits} out of range — supported: {_QUANT_MIN}-{_QUANT_MAX}"
+        )
     return bits
 
 
@@ -441,8 +147,11 @@ def resolve_stage_checkpoint(stage_dir: Path):
     if best_npz.exists():
         return best_npz, "best", _read(stage_dir / "best.json")
     if final_npz.exists():
-        return final_npz, "final (graduated)", (_read(stage_dir / "best.json")
-                                                or _read(stage_dir / "stage_complete.json"))
+        return (
+            final_npz,
+            "final (graduated)",
+            (_read(stage_dir / "best.json") or _read(stage_dir / "stage_complete.json")),
+        )
     state = _read(stage_dir / "latest.json")
     if state and state.get("checkpoint") and Path(state["checkpoint"]).exists():
         return Path(state["checkpoint"]), "latest (in-progress)", state
@@ -462,7 +171,7 @@ def describe_checkpoint_meta(meta: dict | None) -> str:
         bits.append(f"step {int(meta['step']):,}")
     toks = meta.get("tokens_seen", meta.get("tokens"))
     if isinstance(toks, (int, float)):
-        bits.append(f"{toks/1e6:.1f}M tok")
+        bits.append(f"{toks / 1e6:.1f}M tok")
     if meta.get("met_bar") is not None:
         bits.append(f"graduated: met_bar={meta['met_bar']}")
     return " · ".join(bits)
@@ -470,22 +179,24 @@ def describe_checkpoint_meta(meta: dict | None) -> str:
 
 def load_model(args):
     cfg = load_config(args.config)
-    require_backend(cfg)              # selects the configured backend (mlx | torch)
+    require_backend(cfg)  # selects the configured backend (mlx | torch)
     B = backend.current()
     precision = get_precision(cfg)
 
     # Announce what this level can do + guard inference memory against the device.
     from src import resources as R
+
     R.announce(cfg, mode="infer")
     R.guard(cfg, mode="infer", force=getattr(args, "force", False))
 
     # Import model modules now that the backend is selected.
-    from src.model.transformer import RDMCAFoundational, set_model_precision
     from src.model.config import ModelConfig
+    from src.model.transformer import RDMCAFoundational, set_model_precision
 
     model_dict = dict(cfg["model"])
     # Sync vocab_size with trained tokenizer if available
     import json as _j
+
     tok_info = Path("dist/tokenizer/tokenizer_info.json")
     if tok_info.exists():
         # Use the real text vocab (IDs the tokenizer actually emits), NOT the full
@@ -496,8 +207,9 @@ def load_model(args):
         if actual_vocab != model_dict.get("vocab_size"):
             model_dict["vocab_size"] = actual_vocab
 
-    mcfg = ModelConfig(**{k: v for k, v in model_dict.items()
-                          if k in ModelConfig.__dataclass_fields__})
+    mcfg = ModelConfig(
+        **{k: v for k, v in model_dict.items() if k in ModelConfig.__dataclass_fields__}
+    )
     model = RDMCAFoundational(mcfg)
 
     if args.dummy:
@@ -517,9 +229,9 @@ def load_model(args):
     # behaviour is added on top. Falls through to a plain checkpoint for cognitive
     # stages (or before any freeze).
     from src.model import sector_io
+
     level = cfg.get("level")
-    root  = (Path("dist/checkpoints") if level is None
-             else Path("dist/checkpoints") / f"level{level}")
+    root = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
     if not args.checkpoint and args.stage:
         label = sector_io.load_for_inference(model, root, args.stage)
         if label:
@@ -536,15 +248,19 @@ def load_model(args):
     if args.checkpoint:
         ckpt_path = Path(args.checkpoint)
     elif args.stage:
-        level     = cfg.get("level")                # NB: level 0 is valid → use `is None`
-        root      = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
+        level = cfg.get("level")  # NB: level 0 is valid → use `is None`
+        root = (
+            Path("dist/checkpoints")
+            if level is None
+            else Path("dist/checkpoints") / f"level{level}"
+        )
         ckpt_path, label, meta = resolve_stage_checkpoint(root / f"stage{args.stage}")
 
     if ckpt_path is None or not ckpt_path.exists():
         stage_hint = args.stage or 1
-        print(f"No checkpoint found. Options:")
+        print("No checkpoint found. Options:")
         print(f"  Train first:  python train_stage.py --stage {stage_hint} --config {args.config}")
-        print(f"  Or test now:  python uses/chat/run_chat.py --dummy")
+        print("  Or test now:  python uses/chat/run_chat.py --dummy")
         sys.exit(1)
 
     print(f"  Loading checkpoint [{label}]: {ckpt_path}")
@@ -552,9 +268,9 @@ def load_model(args):
     if desc:
         print(f"    └ tracking: {desc}")
     B.engine.load_weights(model, str(ckpt_path))
-    set_model_precision(model, precision)    # cast to configured inference precision
-    _apply_quant(model, getattr(args, "quant", "none"))   # optional 4-/8-bit
-    B.engine.set_eval(model)                 # disable dropout for inference
+    set_model_precision(model, precision)  # cast to configured inference precision
+    _apply_quant(model, getattr(args, "quant", "none"))  # optional 4-/8-bit
+    B.engine.set_eval(model)  # disable dropout for inference
     return model, mcfg
 
 
@@ -577,9 +293,13 @@ BANNER = """
 def _load_mood_head(model, args, mcfg):
     """Load this stage's mood head via the shared loader (None ⇒ stay neutral)."""
     from src.model.mood import load_mood_head
-    head = load_mood_head(mcfg.d_model, level=getattr(args, "level", None),
-                          stage=getattr(args, "stage", None),
-                          checkpoint=getattr(args, "checkpoint", None))
+
+    head = load_mood_head(
+        mcfg.d_model,
+        level=getattr(args, "level", None),
+        stage=getattr(args, "stage", None),
+        checkpoint=getattr(args, "checkpoint", None),
+    )
     if head is not None:
         print("  Mood head: loaded — conversation mood tracking on (neutral default)")
     return head
@@ -589,38 +309,42 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     print(BANNER)
 
     # Session state
-    lang       = args.lang
+    lang = args.lang
     temperature = args.temp
-    top_p       = args.topp
-    top_k       = getattr(args, "topk", 0)
+    top_p = args.topp
+    top_k = getattr(args, "topk", 0)
     rep_penalty = getattr(args, "rep_penalty", 1.0)
-    max_tokens  = args.maxtok
-    out_format  = agent.normalize_format(getattr(args, "format", "text"))
+    max_tokens = args.maxtok
+    out_format = agent.normalize_format(getattr(args, "format", "text"))
     # think=auto: thinking only makes sense once the reasoning stage is trained. When
     # testing a stage BELOW it, an under-trained <think> just emits garbage (e.g. stage 1
     # answering "hi" with a broken scratchpad), so default think OFF there.
     _think_arg = getattr(args, "think", "auto")
     if _think_arg == "auto":
         from src.training.stages import STAGE_NAMES
+
         # The <think>/CoT stage is the one named exactly "Reasoning" (stage 5) — NOT
         # stage 4 "Causal and procedural reasoning", which also contains the substring.
-        reasoning_stage = next((s for s, n in STAGE_NAMES.items()
-                                if n.lower().strip() == "reasoning"), 5)
+        reasoning_stage = next(
+            (s for s, n in STAGE_NAMES.items() if n.lower().strip() == "reasoning"), 5
+        )
         _stage = getattr(args, "stage", None)
         if _stage is not None and _stage < reasoning_stage:
             think_level = agent.normalize_thinking("off")
-            print(f"  Thinking → off (stage {_stage} is below the reasoning stage "
-                  f"{reasoning_stage}; use --think to override)")
+            print(
+                f"  Thinking → off (stage {_stage} is below the reasoning stage "
+                f"{reasoning_stage}; use --think to override)"
+            )
         else:
             think_level = agent.normalize_thinking("medium")
     else:
         think_level = agent.normalize_thinking(_think_arg)
-    stream      = bool(getattr(args, "stream", True))
-    deadline    = getattr(args, "max_seconds", GEN_DEADLINE_S) or None   # 0 → unlimited
+    stream = bool(getattr(args, "stream", True))
+    deadline = getattr(args, "max_seconds", GEN_DEADLINE_S) or None  # 0 → unlimited
     # Seed context with the multimodal grounding prefix (image/audio), if any.
     history: list[int] = list(getattr(args, "mm_prefix", []) or [])
-    last_report = None                 # ContextReport of the last turn (/context, billing)
-    grounding_tokens = len(getattr(args, "mm_prefix", []) or [])   # injected memory/grounding
+    last_report = None  # ContextReport of the last turn (/context, billing)
+    grounding_tokens = len(getattr(args, "mm_prefix", []) or [])  # injected memory/grounding
     # System prompt + conversation mood. The system line opens every generation
     # (BOS + lang + `System: <persona> (mood: …)` + turns), refreshed each turn so
     # a shifting mood is reflected while staying at the front (in-distribution).
@@ -628,29 +352,35 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     # mood_off: moods disabled entirely → always neutral, focused on answering the
     # question (a calm, direct assistant). Otherwise: a pinned mood, or automatic
     # tracking when a mood head is loaded (neutral by default).
-    mood_off     = bool(getattr(args, "no_mood", False))
-    mood_head    = None if mood_off else _load_mood_head(model, args, mcfg)
-    mood_pin     = getattr(args, "mood", None)              # None ⇒ track automatically
+    mood_off = bool(getattr(args, "no_mood", False))
+    mood_head = None if mood_off else _load_mood_head(model, args, mcfg)
+    mood_pin = getattr(args, "mood", None)  # None ⇒ track automatically
     current_mood = mood_pin if (mood_pin in MOODS and not mood_off) else "neutral"
-    mood_auto    = (not mood_off) and (mood_pin not in MOODS) and (mood_head is not None)
+    mood_auto = (not mood_off) and (mood_pin not in MOODS) and (mood_head is not None)
     # Conversation-aware running mood (memory across turns), neutral by default.
     from src.model.mood import MoodTracker
+
     mood_tracker = MoodTracker(mood_head)
     if mood_off:
         print("  Mood: off — neutral, focused on answering.")
     # The previous turn, held back until we know its outcome (accepted/corrected/none).
     # We only persist a turn as a learning experience once it has a feedback signal —
     # a turn the user just moved on from is NOT saved (no benefit). See experience_log.
-    pending: Optional[dict] = None
+    pending: dict | None = None
 
-    def _resolve_pending(feedback: str, correction: Optional[str] = None) -> None:
+    def _resolve_pending(feedback: str, correction: str | None = None) -> None:
         nonlocal pending
         if not pending:
             print("  (no previous answer to mark)")
             return
-        wrote = log_experience(pending["prompt"], pending["response"],
-                               feedback=feedback, correction=correction,
-                               lang=pending["lang"], modality="text")
+        wrote = log_experience(
+            pending["prompt"],
+            pending["response"],
+            feedback=feedback,
+            correction=correction,
+            lang=pending["lang"],
+            modality="text",
+        )
         if wrote:
             print(f"  ✓ saved as a learning experience ({feedback}).")
         pending = None
@@ -668,6 +398,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     if tok_ready:
         try:
             from src.memory.recall import MemoryRecall
+
             recall = MemoryRecall(model, tokenizer)
             print("  Memory recall: on (LTSS + experiences, injected as <mem>).")
         except Exception as e:
@@ -681,10 +412,13 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     if getattr(args, "context_slots", False) and tok_ready:
         try:
             from src.routing.context_manager import build_context_manager
+
             cm = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
             gate_on = getattr(model, "gate", None) is not None
-            print(f"  Context slots: on (§12 STR; routing via "
-                  f"{'trained MoE gate' if gate_on else 'classifier/single-slot'}).")
+            print(
+                f"  Context slots: on (§12 STR; routing via "
+                f"{'trained MoE gate' if gate_on else 'classifier/single-slot'})."
+            )
         except Exception as e:
             print(f"  Context slots: off ({e}).")
 
@@ -696,13 +430,13 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
 
     while True:
         try:
-            queued = session.pending()                  # messages typed during the last reply
-            hint   = f" ({queued} queued)" if queued else ""
+            queued = session.pending()  # messages typed during the last reply
+            hint = f" ({queued} queued)" if queued else ""
             line = session.next_message(f"\n[{lang.upper()}]{hint} You: ")
         except KeyboardInterrupt:
             print("\nBye.")
             break
-        if line is None:                                # EOF (Ctrl-D / piped input done)
+        if line is None:  # EOF (Ctrl-D / piped input done)
             print("\nBye.")
             break
         prompt = line.strip()
@@ -713,7 +447,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         # ── Special commands ──────────────────────────────────────────────
         if prompt.startswith("/"):
             parts = prompt.split()
-            cmd   = parts[0].lower()
+            cmd = parts[0].lower()
 
             if cmd == "/quit":
                 print("Bye.")
@@ -760,16 +494,21 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                     print("  No generation yet.")
 
             elif cmd == "/system":
-                system_text = prompt[len("/system"):].strip()
-                print(f"  System prompt → {system_text!r}" if system_text
-                      else "  System prompt cleared.")
+                system_text = prompt[len("/system") :].strip()
+                print(
+                    f"  System prompt → {system_text!r}"
+                    if system_text
+                    else "  System prompt cleared."
+                )
 
             elif cmd == "/mood":
                 arg = parts[1].lower() if len(parts) > 1 else ""
                 if not arg:
                     src = "off" if mood_off else ("auto" if mood_auto else "pinned")
-                    print(f"  Mood: {current_mood} ({src}). "
-                          f"Set with /mood <{'|'.join(MOODS)}>, /mood auto, or /mood off.")
+                    print(
+                        f"  Mood: {current_mood} ({src}). "
+                        f"Set with /mood <{'|'.join(MOODS)}>, /mood auto, or /mood off."
+                    )
                 elif arg == "off":
                     mood_off, mood_auto, current_mood = True, False, "neutral"
                     print("  Mood → off (always neutral, focused on answering).")
@@ -797,11 +536,11 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
                     current_mood = "neutral"
                 print("  History cleared.")
 
-            elif cmd == "/ok":                       # explicit: last answer was good
+            elif cmd == "/ok":  # explicit: last answer was good
                 _resolve_pending("accepted")
 
-            elif cmd == "/fix":                      # explicit: here is the right answer
-                correction = prompt[len("/fix"):].strip()
+            elif cmd == "/fix":  # explicit: here is the right answer
+                correction = prompt[len("/fix") :].strip()
                 if not correction:
                     print("  Usage: /fix <the correct answer>")
                 else:
@@ -843,15 +582,14 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         # (persona + current mood) + history, so the system/mood always leads.
         enc_prompt = agent.wrap_prompt(prompt, out_format, think=think_level)
         if tok_ready:
-            new_ids = tokenizer.encode(enc_prompt, lang=lang,
-                                       add_bos=False, add_eos=False)
+            new_ids = tokenizer.encode(enc_prompt, lang=lang, add_bos=False, add_eos=False)
         else:
             # Fallback: hash characters to vocab IDs for smoke testing
             new_ids = [ord(c) % mcfg.vocab_size for c in enc_prompt]
 
         history.extend(new_ids)
         if cm is not None:
-            cm.add(new_ids)                 # route this turn's chunks to sector slots
+            cm.add(new_ids)  # route this turn's chunks to sector slots
         # Trim history to fit context window (leave room for generation + preamble).
         max_hist = max(64, mcfg.context_len - max_tokens - 48)
         if len(history) > max_hist:
@@ -865,8 +603,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             try:
                 mem_text = recall.as_context(recall.recall(prompt))
                 if mem_text:
-                    mem_ids = tokenizer.encode(mem_text, lang=lang,
-                                               add_bos=False, add_eos=False)
+                    mem_ids = tokenizer.encode(mem_text, lang=lang, add_bos=False, add_eos=False)
             except Exception:
                 mem_ids = []
 
@@ -880,25 +617,35 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             pre_ids = tokenizer.encode(pre, lang=lang, add_bos=True, add_eos=False)
             gen_history = pre_ids + mem_ids + body
         else:
-            gen_history = [BOS_ID] + body
+            gen_history = [BOS_ID, *body]
 
         # ── Generate (two-phase when thinking is on, streamed when asked) ──
         # Thinking needs a real tokenizer (the scratchpad is decoded/re-encoded
         # between phases), so it is disabled on the vocab-ID fallback path.
         # Streaming likewise needs a tokenizer to decode the live deltas.
-        budget    = agent.think_budget(think_level, max_tokens) if tok_ready else 0
+        budget = agent.think_budget(think_level, max_tokens) if tok_ready else 0
         stream_on = stream and tok_ready
         think_text = ""
         try:
-            with InterruptGuard() as guard:              # Ctrl-C aborts THIS reply only
+            with InterruptGuard() as guard:  # Ctrl-C aborts THIS reply only
                 think_text, gen_ids, tps = generate_thinking(
-                    model, list(gen_history), tokenizer=tokenizer, lang=lang,
-                    max_new_tokens=max_tokens, think_budget=budget,
-                    temperature=temperature, top_p=top_p,
-                    vocab_size=mcfg.vocab_size, context_len=mcfg.context_len,
-                    stream=stream_on, max_seconds=deadline,
-                    think_prefix="\n💭 thinking: ", answer_prefix="\nRDMCA: ",
-                    top_k=top_k, rep_penalty=rep_penalty, should_stop=guard.stopped,
+                    model,
+                    list(gen_history),
+                    tokenizer=tokenizer,
+                    lang=lang,
+                    max_new_tokens=max_tokens,
+                    think_budget=budget,
+                    temperature=temperature,
+                    top_p=top_p,
+                    vocab_size=mcfg.vocab_size,
+                    context_len=mcfg.context_len,
+                    stream=stream_on,
+                    max_seconds=deadline,
+                    think_prefix="\n💭 thinking: ",
+                    answer_prefix="\nRDMCA: ",
+                    top_k=top_k,
+                    rep_penalty=rep_penalty,
+                    should_stop=guard.stopped,
                 )
             if guard.was_interrupted:
                 print("\n  [stopped]")
@@ -920,27 +667,32 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         if not stream_on:
             if think_text:
                 print(f"\n💭 thinking: {think_text}")
-            print(f"\nRDMCA: ", end="", flush=True)
+            print("\nRDMCA: ", end="", flush=True)
         result = agent.parse_output(response, out_format)
         if result["format"] == "json":
             if result["valid"]:
                 import json as _json
-                print(("\n" if stream_on else "")
-                      + _json.dumps(result["json"], ensure_ascii=False, indent=2))
+
+                print(
+                    ("\n" if stream_on else "")
+                    + _json.dumps(result["json"], ensure_ascii=False, indent=2)
+                )
             elif not stream_on:
                 print(f"{response}\n  [warning: output is not valid JSON]")
         elif not stream_on:
-            print(result["text"])           # role-tag leakage already trimmed
+            print(result["text"])  # role-tag leakage already trimmed
         # ── Context & token accounting (legible now, billing-ready via to_dict) ─
         try:
             mem_files = len(load_experiences())
         except Exception:
             mem_files = 0
         last_report = ContextReport(
-            surface="chat", context_len=mcfg.context_len,
+            surface="chat",
+            context_len=mcfg.context_len,
             system_tokens=count_tokens(tokenizer, agent.system_preamble(system_text, current_mood))
-                          if tok_ready else 0,
-            memory_tokens=grounding_tokens + len(mem_ids),   # grounding + recalled <mem>
+            if tok_ready
+            else 0,
+            memory_tokens=grounding_tokens + len(mem_ids),  # grounding + recalled <mem>
             history_tokens=len(history),
             tokens_in=len(gen_history),
             tokens_out=len(gen_ids),
@@ -949,8 +701,14 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             mood_dist=mood_tracker.distribution() if mood_auto else None,
             memory_files=mem_files,
             tps=tps,
-            params={"temp": temperature, "top_p": top_p, "think": think_level,
-                    "format": out_format, "lang": lang, "stream": "on" if stream_on else "off"},
+            params={
+                "temp": temperature,
+                "top_p": top_p,
+                "think": think_level,
+                "format": out_format,
+                "lang": lang,
+                "stream": "on" if stream_on else "off",
+            },
         )
         print(last_report.render_compact())
 
@@ -961,7 +719,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
             resp_ids = tokenizer.encode(cleaned, lang=lang, add_bos=False, add_eos=False)
             history.extend(resp_ids)
             if cm is not None:
-                cm.add(resp_ids)            # the assistant's reply also fills slots
+                cm.add(resp_ids)  # the assistant's reply also fills slots
         else:
             history.extend(gen_ids)
 
@@ -970,13 +728,13 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
         # (accepted), /fix <answer> (corrected), or the next message reads as a
         # correction. A turn the user just moves on from is never saved (no benefit).
         if tok_ready:
-            pending = {"prompt": prompt, "response": agent.clean_answer(response),
-                       "lang": lang}
+            pending = {"prompt": prompt, "response": agent.clean_answer(response), "lang": lang}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -992,72 +750,130 @@ Examples:
   python uses/chat/run_chat.py --level 1 --stage 1 --no-mood   # always neutral, just answer
         """,
     )
-    parser.add_argument("--config",     default=None,
-                        help="Explicit config path (overrides --level)")
-    parser.add_argument("--level",      type=int, default=None,
-                        help="Educational level 1-5 (which base to chat with)")
-    parser.add_argument("--stage",      type=int, default=None,
-                        help="Load latest checkpoint from this stage")
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to a specific .npz checkpoint")
-    parser.add_argument("--dummy",      action="store_true",
-                        help="Use random weights (no checkpoint needed)")
-    parser.add_argument("--image",      type=str, default=None,
-                        help="Image file to ground the conversation on (multimodal)")
-    parser.add_argument("--audio",      type=str, default=None,
-                        help="Audio file to ground the conversation on (multimodal)")
-    parser.add_argument("--lang",       default="en",
-                        help="Starting language code (default: en)")
-    parser.add_argument("--system",     type=str, default=None,
-                        help="System prompt that opens every turn (persona/instructions)")
-    parser.add_argument("--mood",       type=str, default=None,
-                        help=f"Pin the conversation mood ({', '.join(MOODS)}); "
-                             "omit to track it automatically (neutral default)")
-    parser.add_argument("--no-mood",    dest="no_mood", action="store_true",
-                        help="Disable moods entirely: always neutral, focused on "
-                             "answering the question (respecting the system prompt)")
-    parser.add_argument("--context-slots", dest="context_slots", action="store_true",
-                        help="Use STR per-sector context slots (§12): route turn "
-                             "chunks to sector slots, evict overflow to memory, and "
-                             "assemble context from the slots (experimental; best with "
-                             "trained sectors). Off by default (flat history).")
-    parser.add_argument("--temp",       type=float, default=0.8,
-                        help="Sampling temperature (default: 0.8)")
-    parser.add_argument("--topp",       type=float, default=0.9,
-                        help="Nucleus sampling p (default: 0.9)")
-    parser.add_argument("--topk",       type=int,   default=0,
-                        help="Top-k sampling cutoff (0 = off, the default)")
-    parser.add_argument("--rep-penalty", dest="rep_penalty", type=float, default=1.3,
-                        help="Repetition penalty over recent tokens (1.0 = off; "
-                             "default 1.3 curbs the loops small models fall into)")
-    parser.add_argument("--seed",       type=int, default=None,
-                        help="Seed the sampler RNG for reproducible generations")
-    parser.add_argument("--maxtok",     type=int,   default=256,
-                        help="Max new tokens per turn (default: 256)")
-    parser.add_argument("--format",     choices=agent.OUTPUT_FORMATS, default="text",
-                        help="Output format: text (default) or json (structured)")
-    parser.add_argument("--think",      choices=[*agent.THINKING_LEVELS, "auto"],
-                        default="auto",
-                        help="Reasoning effort: off, low, medium, high, or auto (default). "
-                             "auto = off when testing a stage BELOW the reasoning stage "
-                             "(the model hasn't learned to think yet), medium otherwise.")
-    parser.add_argument("--stream",     action=argparse.BooleanOptionalAction, default=True,
-                        help="Stream tokens as they generate (default: on; --no-stream to disable)")
-    parser.add_argument("--quant",       type=parse_quant, default=None, metavar="none|N",
-                        help=f"Weight quantization bit-width: none (default) or "
-                             f"{_QUANT_MIN}-{_QUANT_MAX} bits (e.g. 8, int4). Smaller = less "
-                             f"memory; 4-bit (≈⅛ size) is the limited-hardware testing tier")
-    parser.add_argument("--max-seconds", type=float, default=GEN_DEADLINE_S,
-                        help=f"Per-generation wall-clock cap, anti-loop guard "
-                             f"(default {GEN_DEADLINE_S:g}s; 0 = unlimited)")
-    parser.add_argument("--force",      action="store_true",
-                        help="Run even if the resource guard says it won't fit (risk OOM)")
+    parser.add_argument("--config", default=None, help="Explicit config path (overrides --level)")
+    parser.add_argument(
+        "--level", type=int, default=None, help="Educational level 1-5 (which base to chat with)"
+    )
+    parser.add_argument(
+        "--stage", type=int, default=None, help="Load latest checkpoint from this stage"
+    )
+    parser.add_argument(
+        "--checkpoint", type=str, default=None, help="Path to a specific .npz checkpoint"
+    )
+    parser.add_argument(
+        "--dummy", action="store_true", help="Use random weights (no checkpoint needed)"
+    )
+    parser.add_argument(
+        "--image",
+        type=str,
+        default=None,
+        help="Image file to ground the conversation on (multimodal)",
+    )
+    parser.add_argument(
+        "--audio",
+        type=str,
+        default=None,
+        help="Audio file to ground the conversation on (multimodal)",
+    )
+    parser.add_argument("--lang", default="en", help="Starting language code (default: en)")
+    parser.add_argument(
+        "--system",
+        type=str,
+        default=None,
+        help="System prompt that opens every turn (persona/instructions)",
+    )
+    parser.add_argument(
+        "--mood",
+        type=str,
+        default=None,
+        help=f"Pin the conversation mood ({', '.join(MOODS)}); "
+        "omit to track it automatically (neutral default)",
+    )
+    parser.add_argument(
+        "--no-mood",
+        dest="no_mood",
+        action="store_true",
+        help="Disable moods entirely: always neutral, focused on "
+        "answering the question (respecting the system prompt)",
+    )
+    parser.add_argument(
+        "--context-slots",
+        dest="context_slots",
+        action="store_true",
+        help="Use STR per-sector context slots (§12): route turn "
+        "chunks to sector slots, evict overflow to memory, and "
+        "assemble context from the slots (experimental; best with "
+        "trained sectors). Off by default (flat history).",
+    )
+    parser.add_argument(
+        "--temp", type=float, default=0.8, help="Sampling temperature (default: 0.8)"
+    )
+    parser.add_argument("--topp", type=float, default=0.9, help="Nucleus sampling p (default: 0.9)")
+    parser.add_argument(
+        "--topk", type=int, default=0, help="Top-k sampling cutoff (0 = off, the default)"
+    )
+    parser.add_argument(
+        "--rep-penalty",
+        dest="rep_penalty",
+        type=float,
+        default=1.3,
+        help="Repetition penalty over recent tokens (1.0 = off; "
+        "default 1.3 curbs the loops small models fall into)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Seed the sampler RNG for reproducible generations"
+    )
+    parser.add_argument(
+        "--maxtok", type=int, default=256, help="Max new tokens per turn (default: 256)"
+    )
+    parser.add_argument(
+        "--format",
+        choices=agent.OUTPUT_FORMATS,
+        default="text",
+        help="Output format: text (default) or json (structured)",
+    )
+    parser.add_argument(
+        "--think",
+        choices=[*agent.THINKING_LEVELS, "auto"],
+        default="auto",
+        help="Reasoning effort: off, low, medium, high, or auto (default). "
+        "auto = off when testing a stage BELOW the reasoning stage "
+        "(the model hasn't learned to think yet), medium otherwise.",
+    )
+    parser.add_argument(
+        "--stream",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stream tokens as they generate (default: on; --no-stream to disable)",
+    )
+    parser.add_argument(
+        "--quant",
+        type=parse_quant,
+        default=None,
+        metavar="none|N",
+        help=f"Weight quantization bit-width: none (default) or "
+        f"{_QUANT_MIN}-{_QUANT_MAX} bits (e.g. 8, int4). Smaller = less "
+        f"memory; 4-bit (≈⅛ size) is the limited-hardware testing tier",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=GEN_DEADLINE_S,
+        help=f"Per-generation wall-clock cap, anti-loop guard "
+        f"(default {GEN_DEADLINE_S:g}s; 0 = unlimited)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run even if the resource guard says it won't fit (risk OOM)",
+    )
     args = parser.parse_args()
 
-    if args.seed is not None:           # reproducible sampling across runs
+    if args.seed is not None:  # reproducible sampling across runs
         np.random.seed(args.seed)
 
     from src.config import resolve_config_path
+
     args.config = resolve_config_path(args.config, args.level)
 
     if not args.dummy and args.stage is None and args.checkpoint is None:
@@ -1068,16 +884,20 @@ Examples:
     print("Loading model…")
     model, mcfg = load_model(args)
     from src.modalities.text import TextTokenizer
-    tokenizer   = TextTokenizer()
 
-    print(f"  d_model={mcfg.d_model} | vocab={mcfg.vocab_size} | "
-          f"layers={mcfg.n_layers} | context={mcfg.context_len}")
+    tokenizer = TextTokenizer()
+
+    print(
+        f"  d_model={mcfg.d_model} | vocab={mcfg.vocab_size} | "
+        f"layers={mcfg.n_layers} | context={mcfg.context_len}"
+    )
     print(f"  Tokenizer: {'ready' if tokenizer.ready else 'NOT trained yet'}")
 
     # Optional multimodal grounding prefix (image/audio) via the perception layer.
     args.mm_prefix = []
     if args.image or args.audio:
         from src.modalities.perception import MultimodalPerception
+
         mpl = MultimodalPerception(text_tok=tokenizer)
         segments = []
         if args.image:
@@ -1086,8 +906,10 @@ Examples:
             segments.append(("audio", args.audio))
         try:
             args.mm_prefix = mpl.build_sequence(segments)
-            print(f"  Multimodal prefix: {len(args.mm_prefix)} tokens "
-                  f"({'image ' if args.image else ''}{'audio' if args.audio else ''})")
+            print(
+                f"  Multimodal prefix: {len(args.mm_prefix)} tokens "
+                f"({'image ' if args.image else ''}{'audio' if args.audio else ''})"
+            )
         except RuntimeError as e:
             print(f"  [multimodal] {e}")
             sys.exit(1)

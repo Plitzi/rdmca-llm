@@ -77,7 +77,6 @@ curriculum:
     name: "Language and communication"
     entry_level: 1
     n_tokens: 600_000_000
-    data_dir: "data/level4/stage1"
     data:
       sources: [wikipedia]
       filter:
@@ -87,7 +86,6 @@ curriculum:
     name: "Perception and pattern recognition"
     entry_level: 1
     n_tokens: 140_000_000
-    data_dir: "data/level4/stage2"
     data:
       sources: [arc_easy, arc_challenge]
       filter: null
@@ -95,7 +93,6 @@ curriculum:
     name: "Abstraction and symbolic composition"
     entry_level: 1
     n_tokens: 260_000_000
-    data_dir: "data/level4/stage3"
     data:
       sources: [arithmetic, gsm8k]
       filter:
@@ -104,7 +101,6 @@ curriculum:
     name: "Causal and procedural reasoning"
     entry_level: 1                     # present from L1 (uniform structure); graded by level.
     n_tokens: 200_000_000
-    data_dir: "data/level4/stage4"
     data:
       sources: [causal_synth, wikipedia]
       filter:
@@ -115,7 +111,6 @@ curriculum:
     entry_level: 1             # memory is a cognitive faculty: the frozen core learns
                                # to recall and USE injected memory (LTSS + episodic).
     n_tokens: 200_000_000
-    data_dir: "data/level4/stage6"
     data:
       sources: [memory]        # synthetic recall/use-of-memory: relevant facts + distractors.
       filter: null
@@ -123,7 +118,6 @@ curriculum:
     name: "Cognitive ethics and BCF"
     entry_level: 1                     # core freezes after stage 7 (BCF) at every level (uniform).
     n_tokens: 100_000_000
-    data_dir: "data/level4/stage7"
     data:
       sources: [ethics]
       filter: null
@@ -131,7 +125,6 @@ curriculum:
     name: "Action and tool use"
     entry_level: 0
     n_tokens: 50_000_000
-    data_dir: "data/level4/stage8"
     data:
       sources: [agentic]       # real tool-use loop (Claude-style JSON Action/Observation).
       filter: null
@@ -139,7 +132,6 @@ curriculum:
     name: "Model Context Protocol (MCP)"
     entry_level: 0
     n_tokens: 40_000_000
-    data_dir: "data/level4/stage9"
     data:
       sources: [mcp]           # real tool use re-serialized into MCP (JSON-RPC 2.0).
       filter: null
@@ -147,7 +139,6 @@ curriculum:
     name: "Skills"
     entry_level: 0
     n_tokens: 40_000_000
-    data_dir: "data/level4/stage10"
     data:
       sources: [skills]        # real procedures (Super-NaturalInstructions) as SKILL.md.
       filter: null
@@ -155,7 +146,6 @@ curriculum:
     name: "Reasoning"
     entry_level: 0             # cadena-de-pensamiento desde el inicio; mejora con el tamaño.
     n_tokens: 180_000_000
-    data_dir: "data/level4/stage5"
     data:
       sources: [reasoning]     # CoT (GSM8K) + planificación y uso de tools (sesiones multi-paso) en <think>…</think>.
       filter: null
