@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src import models as stages
+from src import plugins as stages
 from src.core.training.curriculum import stage_enabled
 
 

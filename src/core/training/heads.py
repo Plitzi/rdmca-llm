@@ -3,7 +3,7 @@ stage finishes (persist sector / freeze the core / the active model's `post_stag
 
 Model-specific completion work (e.g. cognition's mood head) is NOT here — the trainer
 invokes the active model's optional `post_stage` hook so the agnostic core never imports
-a model. See src/models/cognition/mood for that hook."""
+a model. See models/cognition/mood for that hook."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import numpy as np
 import src.core.backend as backend
 from src.core.training.checkpoint import freeze_model
 from src.core.training.curriculum import BCF_STAGE, is_behavioral_stage, last_cognitive_stage
-from src.models import model_hook
+from src.plugins import model_hook
 
 
 def train_bcf_head(

@@ -16,8 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
+from models.cognition.uses.common import agent
 from src.core.modalities.text import BOS_ID
-from uses.common import agent
 
 
 def _resolve_config(level):
@@ -30,7 +30,7 @@ def answer(model, mcfg, tokenizer, prompt, lang="en", max_new=64, temperature=0.
     exact task should give the SAME answer regardless of temperature (its correct token
     dominates), so temperature-sensitivity reveals an under-learned, low-confidence
     operation rather than a decoding choice."""
-    from uses.chat.run_chat import generate
+    from models.cognition.uses.chat.run_chat import generate
 
     enc_prompt = agent.wrap_prompt(prompt, "text", think="off")
     body = tokenizer.encode(enc_prompt, lang=lang, add_bos=False, add_eos=False)
@@ -100,7 +100,7 @@ def main():
     args.quant = "none"
     args.force = True
 
-    from uses.chat.run_chat import load_model
+    from models.cognition.uses.chat.run_chat import load_model
 
     print("Loading model…")
     model, mcfg = load_model(args)

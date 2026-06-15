@@ -64,7 +64,7 @@ Examples:
     parser.add_argument(
         "--model",
         default=None,
-        help="Model to train (a package under src/models/, e.g. cognition). "
+        help="Model to train (a package under models/, e.g. cognition). "
         "Overrides the config's model_name; defaults to cognition.",
     )
     parser.add_argument(
@@ -177,7 +177,9 @@ Examples:
             print(f"\nStage {args.stage} complete ({tag}).")
             if later:
                 print(f"Next stage: python scripts/train.py{lvl_flag} --stage {later[0]}")
-            print(f"Or chat now: python uses/chat/run_chat.py{lvl_flag} --stage {active[-1]}")
+            print(
+                f"Or chat now: python models/cognition/uses/chat/run_chat.py{lvl_flag} --stage {active[-1]}"
+            )
         elif later:
             print(f"\nNext: python scripts/train.py{lvl_flag} --stage {later[0]}")
         else:

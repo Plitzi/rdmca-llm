@@ -21,7 +21,7 @@ import numpy as np
 from src.core.modalities.text import BOS_ID, EOS_ID
 
 # Conversational transcripts are line-prefixed by role ("System:/User:/Assistant:"
-# …, see the per-stage sources + src/models/sdk). A record whose FIRST line opens with a role marker
+# …, see the per-stage sources + src/plugins/sdk). A record whose FIRST line opens with a role marker
 # is a dialogue/instruction transcript; prose (stories, wiki) never does. RESPONSE
 # roles are the turns the MODEL produces (trained on); every other role is CONTEXT
 # the model is GIVEN (loss-masked) so it learns to ANSWER, not to model the whole

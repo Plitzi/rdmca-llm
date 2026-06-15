@@ -171,7 +171,7 @@ rdmca-llm/
 ├── src/resources.py            Memory estimate + OOM guard + level announce
 ├── src/core/data/graded.py          Graded sources, readability filter, synthetic generators
 ├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
-├── src/models/cognition/experiments/continual_learning.py   Hypothesis validation (no-forgetting)
+├── models/cognition/experiments/continual_learning.py   Hypothesis validation (no-forgetting)
 ├── scripts/train.py              Stage training + freeze + BCF
 ├── uses/                       Ways to consume a trained model
 │   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)
@@ -202,8 +202,8 @@ cognitive core** is seven developmental **stages** (1 Language · 2 Perception �
 (`entry_level ≤ 1`); the core **freezes after the ethics/BCF stage** (`BCF_STAGE = 7`),
 so neither competence nor values drift. Three **behavioral** stages (8 tool use · 9 MCP ·
 10 skills) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
-Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `uses/common/agent.py`
-(see [uses/chat/](../../uses/chat/)). Data is graded per level by each stage plugin's own sources (`src/models/<model>/stageNN_*/sources.py`), resolved by the registry.
+Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `models/cognition/uses/common/agent.py`
+(see [models/cognition/uses/chat/](../../models/cognition/uses/chat/)). Data is graded per level by each stage plugin's own sources (`models/<model>/stageNN_*/sources.py`), resolved by the registry.
 
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to

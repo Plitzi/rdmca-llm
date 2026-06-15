@@ -63,8 +63,12 @@ COMMANDS: dict[str, tuple[str, tuple[str, str], str]] = {
     "ood": ("Evaluate", ("script", "scripts/ood_probe.py"), "Out-of-distribution probe"),
     "plot": ("Evaluate", ("script", "scripts/plot_metrics.py"), "Plot training metrics"),
     # Run (consume the trained model)
-    "chat": ("Run", ("script", "uses/chat/run_chat.py"), "Interactive chat with a checkpoint"),
-    "agent": ("Run", ("script", "uses/agent/run_agent.py"), "Agent tool-use loop"),
+    "chat": (
+        "Run",
+        ("script", "models/cognition/uses/chat/run_chat.py"),
+        "Interactive chat with a checkpoint",
+    ),
+    "agent": ("Run", ("script", "models/cognition/uses/agent/run_agent.py"), "Agent tool-use loop"),
     "daemon": (
         "Run",
         ("module", "src.core.consolidation.daemon"),
@@ -101,10 +105,10 @@ def _dispatch(name: str, rest: list[str]) -> int:
 
 # ── info: model-aware discovery ────────────────────────────────────────────────
 def _available_models() -> list[str]:
-    """Model packages under src/models/ (a dir with __init__.py that is not the SDK
+    """Model packages under models/ (a dir with __init__.py that is not the SDK
     or the plugin system itself)."""
     models = []
-    for child in sorted((REPO / "src" / "models").iterdir()):
+    for child in sorted((REPO / "models").iterdir()):
         if not child.is_dir() or child.name in {"sdk", "__pycache__"}:
             continue
         if (child / "__init__.py").exists():
@@ -113,7 +117,7 @@ def _available_models() -> list[str]:
 
 
 def _stage_prepared(model: str, stage_pkg: str, level: int) -> bool:
-    data_dir = REPO / "src" / "models" / model / stage_pkg / "data" / f"level{level}"
+    data_dir = REPO / "models" / model / stage_pkg / "data" / f"level{level}"
     return data_dir.is_dir() and any(data_dir.glob("*.jsonl"))
 
 
@@ -126,7 +130,7 @@ def _cmd_info(rest: list[str]) -> int:
     import argparse
 
     from src.core.config import available_levels
-    from src.models import all_stages, bcf_stage, set_active_model
+    from src.plugins import all_stages, bcf_stage, set_active_model
 
     ap = argparse.ArgumentParser(prog="rdmca info", description="List models, levels, stages.")
     ap.add_argument("--model", default=None, help="Model to inspect (default: cognition)")

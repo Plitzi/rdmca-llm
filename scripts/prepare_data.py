@@ -5,14 +5,14 @@ RDMCA Data Preparation Script — config-driven, per level + stage
 Writes the training corpus for each curriculum stage of a LEVEL, using the
 sources, complexity filter and token budget declared in that level's config
 (`configs/levels/levelN.yaml`). Output:
-  src/models/<model>/stage{N}_<slug>/data/level{L}/{source}.jsonl   {"text": "...", "lang": "<code>"}
+  models/<model>/stage{N}_<slug>/data/level{L}/{source}.jsonl   {"text": "...", "lang": "<code>"}
 plus a {source}.meta.json sidecar recording token count + whether the source
 was exhausted (used to decide if a re-run can skip it).
 
 Where the data comes from is per-source:
   - Lower levels use each stage plugin's OWN simple/graded sources (tinystories,
     dialogue, arithmetic, analogies, agentic/MCP/skills, reasoning) — small,
-    conversational/structured (see src/models/<model>/stageNN_*/sources.py).
+    conversational/structured (see models/<model>/stageNN_*/sources.py).
   - Higher levels add the FULL external corpora (src/core/data/corpora.py: Wikipedia per
     language, ARC, GSM8K, MATH, ethics), with Wikipedia routed to a stage by category
     keywords (STAGE_KEYWORDS) and prose readability-graded (Flesch-Kincaid).
@@ -72,8 +72,8 @@ def prepare_stage_for_level(
     curriculum entry: which sources, the complexity filter, the token budget and
     the output dir. Skips stages whose entry_level is above this level."""
     from src.core.training.curriculum import stage_enabled
-    from src.models import stage_data_dir, stream_source
-    from src.models.sdk import passes_filter
+    from src.plugins import stage_data_dir, stream_source
+    from src.plugins.sdk import passes_filter
 
     curriculum = cfg.get("curriculum", {}) or {}
     stage_key = f"stage{stage}"
@@ -164,7 +164,7 @@ def main():
     parser.add_argument(
         "--model",
         default=None,
-        help="Model whose stages to prepare (package under src/models/, e.g. cognition). "
+        help="Model whose stages to prepare (package under models/, e.g. cognition). "
         "Overrides the config's model_name; defaults to cognition.",
     )
     parser.add_argument("--lang", default=None, help="Comma-separated override of config languages")

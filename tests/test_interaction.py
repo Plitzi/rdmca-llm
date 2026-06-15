@@ -1,5 +1,5 @@
 """
-Tests for the interactive-session ergonomics (uses/common/interaction.py) and the
+Tests for the interactive-session ergonomics (models/cognition/uses/common/interaction.py) and the
 agent's interrupt / mid-run steering hooks (src/agent.run_agent):
 
   - InterruptGuard exposes a live stop flag and restores the SIGINT handler;
@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from uses.common.agent import Tool, run_agent
-from uses.common.interaction import InterruptGuard, SessionInput
+from models.cognition.uses.common.agent import Tool, run_agent
+from models.cognition.uses.common.interaction import InterruptGuard, SessionInput
 
 
 # ── InterruptGuard ───────────────────────────────────────────────────────────

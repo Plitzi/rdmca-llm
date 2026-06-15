@@ -1,7 +1,7 @@
 """Model-spec resolution — the seam that makes the trainer task/modality-agnostic.
 
 The trainer never builds a network, a loader, the loss, or the gate directly; it asks
-the ACTIVE model's `ModelSpec` (see src/models/base.py) for them. The default spec here
+the ACTIVE model's `ModelSpec` (see src/plugins/base.py) for them. The default spec here
 wires the text-LLM pieces (`setup.build_stage_model`, `dataload.build_data_loader`, the
 MRL+aux objective, `gates.evaluate_gate`), so the cognition model behaves exactly as
 before. A different model (e.g. hands_recognition) overrides any of these by exposing a
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import importlib
 
-from src.models import ModelSpec, active_model, set_active_model
+from src.plugins import ModelSpec, active_model, set_active_model
 
 
 def _default_spec(cfg: dict) -> ModelSpec:
@@ -46,7 +46,7 @@ def active_model_spec(cfg: dict) -> ModelSpec:
     a `SPEC` or a `build_spec(cfg)` factory; falls back to the default text-LM spec when
     the model declares neither (as cognition does — it IS the default)."""
     set_active_model(cfg.get("model_name"))
-    package = importlib.import_module(f"src.models.{active_model()}")
+    package = importlib.import_module(f"models.{active_model()}")
     spec = getattr(package, "SPEC", None)
     if spec is None and hasattr(package, "build_spec"):
         spec = package.build_spec(cfg)

@@ -155,7 +155,7 @@ def test_narrow_stages_have_gentler_lr_scale():
     5 CoT) train the SHARED core at a reduced LR so they nudge it instead of overwriting
     conversation; stage 1 (conversation) trains at full LR. The schedule scales linearly."""
     from src.core.training import trainer as T
-    from src.models import get_stage
+    from src.plugins import get_stage
 
     lr = {n: get_stage(n).lr_scale for n in range(1, 6)}
     rehearsal = {n: get_stage(n).rehearsal_fraction for n in range(1, 6)}

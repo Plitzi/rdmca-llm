@@ -20,7 +20,7 @@ pip install -r requirements.txt   # base + torch; MLX auto-added only on Apple S
 python scripts/prepare_data.py    --level 1 --stage 1
 python scripts/train_tokenizer.py --level 1
 python scripts/train.py             --level 1 --stage 1
-python uses/chat/run_chat.py      --level 1 --stage 1
+python models/cognition/uses/chat/run_chat.py      --level 1 --stage 1
 ```
 
 The level sets the model size, the data complexity and the resource use — pick the

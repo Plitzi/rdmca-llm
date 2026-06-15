@@ -264,7 +264,7 @@ def main():
     config_path = resolve_config_path(args.config, args.level)
     cfg = load_config(config_path)
     # Select the active model so checkpoint paths resolve under the right model.
-    from src.models import set_active_model
+    from src.plugins import set_active_model
 
     set_active_model(cfg.get("model_name"))
     require_backend(cfg)  # selects the configured backend (mlx | torch)

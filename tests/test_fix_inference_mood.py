@@ -9,21 +9,21 @@ from fixes_common import B
 
 
 def test_clean_answer_cuts_inline_role_tag():
-    from uses.common.agent import clean_answer
+    from models.cognition.uses.common.agent import clean_answer
 
     leak = "I'm not sure. User: hi Assistant: hello"
     assert clean_answer(leak) == "I'm not sure."
 
 
 def test_first_stop_index_inline_and_ignores_leading():
-    from uses.common.agent import first_stop_index
+    from models.cognition.uses.common.agent import first_stop_index
 
     assert first_stop_index("ok. User: x") == 4  # inline boundary
     assert first_stop_index("Assistant: hi") is None  # leading primed tag ignored
 
 
 def test_safe_stream_len_holds_back_role_prefix():
-    from uses.common.agent import safe_stream_len
+    from models.cognition.uses.common.agent import safe_stream_len
 
     # trailing "User" could still become "User:" → held back
     assert safe_stream_len("done. User") == len("done. ")
@@ -32,7 +32,7 @@ def test_safe_stream_len_holds_back_role_prefix():
 
 
 def test_strip_thinking_removes_scratchpad():
-    from uses.common.agent import strip_thinking
+    from models.cognition.uses.common.agent import strip_thinking
 
     assert strip_thinking("<think>plan</think>answer").strip() == "answer"
 
@@ -43,7 +43,7 @@ def test_strip_thinking_removes_scratchpad():
 def test_rep_penalty_demotes_recent_token():
     import mlx.core as mx
 
-    from uses.chat.run_chat import sample_top_p
+    from models.cognition.uses.chat.run_chat import sample_top_p
 
     logits = mx.array(np.array([1.0, 5.0, 1.0, 1.0], dtype=np.float32))  # token 1 peaks
     # temperature 0 → argmax; penalizing token 1 hard should move the choice off it.
@@ -54,7 +54,7 @@ def test_rep_penalty_demotes_recent_token():
 def test_top_k_restricts_choices():
     import mlx.core as mx
 
-    from uses.chat.run_chat import sample_top_p
+    from models.cognition.uses.chat.run_chat import sample_top_p
 
     logits = mx.array(np.array([10.0, 9.0, -50.0, -50.0], dtype=np.float32))
     picks = {sample_top_p(logits, temperature=1.0, top_p=1.0, top_k=2) for _ in range(50)}
@@ -82,8 +82,8 @@ def test_tokenizer_symbols_include_control_and_modality():
 
 
 def test_agent_think_delimiters_match_registry():
+    from models.cognition.uses.common.agent import THINK_CLOSE, THINK_OPEN
     from src.core.modalities.vocab import REASONING_SPECIALS
-    from uses.common.agent import THINK_CLOSE, THINK_OPEN
 
     assert [THINK_OPEN, THINK_CLOSE] == REASONING_SPECIALS
 
@@ -92,7 +92,7 @@ def test_agent_think_delimiters_match_registry():
 
 
 def test_emotion_maps_to_mood_palette():
-    from src.models.cognition.mood import MOODS, emotion_to_mood
+    from models.cognition.mood import MOODS, emotion_to_mood
 
     assert emotion_to_mood("joyful") == "happy"
     assert emotion_to_mood("terrified") == "afraid"
@@ -105,7 +105,7 @@ def test_emotion_maps_to_mood_palette():
 
 
 def test_mood_system_phrase_neutral_is_empty():
-    from src.models.cognition.mood import mood_system_phrase
+    from models.cognition.mood import mood_system_phrase
 
     assert mood_system_phrase("neutral") == ""  # default adds nothing
     assert mood_system_phrase("happy") == "(mood: happy)"
@@ -113,7 +113,7 @@ def test_mood_system_phrase_neutral_is_empty():
 
 
 def test_system_preamble_framing():
-    from uses.common import agent
+    from models.cognition.uses.common import agent
 
     assert agent.system_preamble(None, "neutral") == ""  # nothing → no line
     assert agent.system_preamble("Be kind.", "neutral") == "System: Be kind.\n"
@@ -122,7 +122,7 @@ def test_system_preamble_framing():
 
 
 def test_agent_prompt_prepends_system_persona():
-    from uses.common import agent
+    from models.cognition.uses.common import agent
 
     p = agent.build_agent_prompt([], "hello", system="You are terse.")
     assert p.startswith("System: You are terse. ")  # persona ahead of tool spec
@@ -132,8 +132,8 @@ def test_agent_prompt_prepends_system_persona():
 def test_data_enrichment_system_and_story():
     """instruct system injection yields a System line; story reframing is a NATURAL
     User→Assistant request with NO system prompt (telling a story needs no persona)."""
-    from src.models.cognition.mood import mood_system_phrase
-    from src.models.sdk import STORY_PROMPTS, prepend_system
+    from models.cognition.mood import mood_system_phrase
+    from src.plugins.sdk import STORY_PROMPTS, prepend_system
 
     sysd = prepend_system("User: q\nAssistant: a", "You are kind.", mood_system_phrase("happy"))
     assert sysd.startswith("System: You are kind. (mood: happy)\nUser:")
@@ -144,14 +144,14 @@ def test_data_enrichment_system_and_story():
 
 
 def test_classify_mood_defaults_neutral_without_head():
-    from src.models.cognition.mood import classify_mood
+    from models.cognition.mood import classify_mood
 
     mood, _conf = classify_mood(None, None, None, "anything")
     assert mood == "neutral"
 
 
 def test_mood_tracker_neutral_without_head():
-    from src.models.cognition.mood import MoodTracker
+    from models.cognition.mood import MoodTracker
 
     t = MoodTracker(None)
     assert t.update(None, None, "I am so happy!") == "neutral"  # one msg ⇒ inertia
@@ -161,7 +161,7 @@ def test_lexicon_mood_fixes_broken_classifications():
     """The learned 11M head was near-random ('im good'→angry, 'my dog died'→caring,
     requests→emotion). The lexicon is the reliable floor: clear cues map correctly,
     requests/questions stay neutral, and negation flips a positive cue to sad."""
-    from src.models.cognition.mood import lexicon_mood
+    from models.cognition.mood import lexicon_mood
 
     cases = {
         "im good": "happy",
@@ -185,7 +185,7 @@ def test_lexicon_mood_fixes_broken_classifications():
 def test_mood_tracker_lexicon_drives_mood_without_a_head():
     """No learned head needed: a sustained emotional tone is detected by the lexicon
     alone (the head is only an optional refinement)."""
-    from src.models.cognition.mood import MoodTracker
+    from models.cognition.mood import MoodTracker
 
     t = MoodTracker(None, alpha=0.5)
     last = "neutral"
@@ -200,8 +200,8 @@ def test_mood_tracker_lexicon_drives_mood_without_a_head():
 def test_mood_tracker_builds_and_decays_over_conversation(monkeypatch):
     """Conversation-aware mood: one message isn't enough (inertia), a sustained tone
     takes hold, and it decays back to neutral — emotion is the WHOLE exchange."""
-    import src.models.cognition.mood.head as mood
-    from src.models.cognition.mood import MOOD_INDEX, MOODS, MoodTracker
+    import models.cognition.mood.head as mood
+    from models.cognition.mood import MOOD_INDEX, MOODS, MoodTracker
 
     happy = [0.0] * len(MOODS)
     happy[MOOD_INDEX["happy"]] = 1.0
@@ -221,8 +221,8 @@ def test_mood_tracker_builds_and_decays_over_conversation(monkeypatch):
 
 
 def test_mood_tracker_reset(monkeypatch):
-    import src.models.cognition.mood.head as mood
-    from src.models.cognition.mood import MOOD_INDEX, MOODS, MoodTracker
+    import models.cognition.mood.head as mood
+    from models.cognition.mood import MOOD_INDEX, MOODS, MoodTracker
 
     happy = [0.0] * len(MOODS)
     happy[MOOD_INDEX["happy"]] = 1.0
@@ -240,7 +240,7 @@ def test_mood_head_learns_to_separate_moods():
     + train step are wired): loss drops over a few steps on frozen features."""
     import mlx.core as mx
 
-    from src.models.cognition.mood import MoodHead, mood_loss
+    from models.cognition.mood import MoodHead, mood_loss
 
     head = MoodHead(d_model=32, hidden=16)
     opt = B.engine.make_optimizer(head, 1e-2, 0.0)

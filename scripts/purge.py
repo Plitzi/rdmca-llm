@@ -8,7 +8,7 @@ inputs: configs, `.env`, source code, `data/benchmarks/` (BCF probes you
 provide), or the shared HuggingFace download cache.
 
 Data pipeline (two distinct artifacts — don't confuse them):
-  HF cache (raw downloads)  →  prepare_data  →  src/models/<model>/*/data/level* (prepared
+  HF cache (raw downloads)  →  prepare_data  →  models/<model>/*/data/level* (prepared
   corpora)  →  train
   • --data / --keep-data act on the PREPARED corpora (prepare_data's output).
   • --hf-cache acts on the RAW DOWNLOADS (prepare_data's input). Dropping it forces
@@ -17,7 +17,7 @@ Data pipeline (two distinct artifacts — don't confuse them):
 Targets (pick any combination, or --all):
   --checkpoints   dist/checkpoints/<model>/  + dist/snapshots/  (trained weights, frozen core, sectors)
   --tokenizer     dist/tokenizer/    + dist/tokenizer*.bak (SentencePiece + image/audio VQ-VAE)
-  --data          src/models/<model>/*/data/level*/  (PREPARED corpora — output of prepare_data)
+  --data          models/<model>/*/data/level*/  (PREPARED corpora — output of prepare_data)
   --runtime       data/runtime/       (experiences.jsonl, ltss.db — consolidation memory)
   --logs          logs/               (daemon.log, cycle_*.json, human_queue.jsonl)
   --hf-cache      ~/.cache/huggingface/{datasets,hub}  (RAW HF downloads — prepare_data's
@@ -74,7 +74,7 @@ def _hf_cache_paths() -> list[Path]:
 
 def _paths_for(target: str, level: int | None, model: str | None) -> list[Path]:
     """Resolve a target name to the concrete paths it would remove. Checkpoints and
-    prepared corpora are namespaced by MODEL (a package under src/models/); `model=None`
+    prepared corpora are namespaced by MODEL (a package under models/); `model=None`
     spans every model, `level=None` spans every level."""
     lvl = f"level{level}" if level is not None else None
     mdl = model or "*"  # glob across models when unscoped
@@ -89,7 +89,7 @@ def _paths_for(target: str, level: int | None, model: str | None) -> list[Path]:
     if target == "tokenizer":  # global (trained per level into one dir)
         return [REPO / "dist/tokenizer", *sorted((REPO / "dist").glob("tokenizer*.bak"))]
     if target == "data":  # prepared corpora, inside each stage package (gitignored)
-        glob = f"src/models/{mdl}/*/data/{lvl}" if lvl else f"src/models/{mdl}/*/data"
+        glob = f"models/{mdl}/*/data/{lvl}" if lvl else f"models/{mdl}/*/data"
         return sorted(REPO.glob(glob))
     if target == "runtime":
         return [REPO / "data/runtime"]
@@ -182,7 +182,7 @@ def main() -> None:
     ap.add_argument(
         "--model",
         default=None,
-        help="Limit --checkpoints/--data to one model (a package under src/models/, "
+        help="Limit --checkpoints/--data to one model (a package under models/, "
         "e.g. cognition); else every model.",
     )
     ap.add_argument("--dry-run", action="store_true", help="Preview only; delete nothing")

@@ -55,8 +55,8 @@ def test_relevance_feedback_overrides_utility():
 def test_dialogue_interleave_and_emotion_balance():
     """Dialogue mixing: _interleave round-robins all sources (no front-loaded block),
     and empathetic streaming caps per emotion so moods stay balanced."""
-    from src.models.cognition.stage01_language.sources import _stream_empathetic_balanced
-    from src.models.sdk import interleave
+    from models.cognition.stage01_language.sources import _stream_empathetic_balanced
+    from src.plugins.sdk import interleave
 
     # round-robin: drains every source, no loss, interleaved order
     def gen(tag, n):

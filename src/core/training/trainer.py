@@ -46,7 +46,7 @@ from src.core.training.gates import (
 )
 from src.core.training.heads import on_stage_complete
 from src.core.training.valdata import make_val_batches
-from src.models import get_stage, stage_data_dir
+from src.plugins import get_stage, stage_data_dir
 
 
 def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False) -> bool:

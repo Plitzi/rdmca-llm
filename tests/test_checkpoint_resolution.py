@@ -12,7 +12,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from uses.chat.run_chat import describe_checkpoint_meta, resolve_stage_checkpoint
+from models.cognition.uses.chat.run_chat import (
+    describe_checkpoint_meta,
+    resolve_stage_checkpoint,
+)
 
 
 def _touch(p: Path):

@@ -87,7 +87,7 @@ def select_model(cfg: dict, override: str | None = None) -> str:
     `--model` override wins over the config's `model_name` (registry default otherwise).
     The SINGLE place scripts choose the model, so stage discovery + data/checkpoint
     paths all resolve under it."""
-    from src.models import active_model, set_active_model
+    from src.plugins import active_model, set_active_model
 
     set_active_model(override or cfg.get("model_name"))
     return active_model()

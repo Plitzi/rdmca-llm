@@ -2,7 +2,7 @@
 
 These read a level's `curriculum` config and the stage registry; they are the leaf
 utilities the trainer and its helper modules build on. Stage metadata (name, freeze
-point, behavioral kind) comes from `src.models`, the single source of truth.
+point, behavioral kind) comes from `src.plugins`, the single source of truth.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.models import active_model, bcf_stage, get_stage, has_stage, is_behavioral
+from src.plugins import active_model, bcf_stage, get_stage, has_stage, is_behavioral
 
 # The ethics/BCF stage — the stage that runs the BCF probe and at which the mood head
 # is retrained. It is the stage flagged `is_freeze_point` in the registry, NOT a

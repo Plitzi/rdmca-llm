@@ -265,9 +265,9 @@ def main():
         print("Specify --stage N or --checkpoint PATH")
         sys.exit(1)
 
+    from models.cognition.uses.chat.run_chat import generate, load_model
     from src.core.config import resolve_config_path
     from src.core.modalities.text import TextTokenizer
-    from uses.chat.run_chat import generate, load_model
 
     la = Namespace(
         config=resolve_config_path(None, args.level),

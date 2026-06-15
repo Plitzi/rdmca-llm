@@ -314,7 +314,7 @@ def main():
     parser.add_argument(
         "--model",
         default=None,
-        help="Model whose stage-1 data to sample (package under src/models/). "
+        help="Model whose stage-1 data to sample (package under models/). "
         "Overrides the config's model_name; defaults to cognition.",
     )
     parser.add_argument("--lang", default=None, help="Comma-separated override of config languages")

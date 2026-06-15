@@ -1,5 +1,5 @@
 """
-Tests for IncrementalDecoder (uses/chat/run_chat.py): the O(n) streaming decoder
+Tests for IncrementalDecoder (models/cognition/uses/chat/run_chat.py): the O(n) streaming decoder
 must return EXACTLY the same text as a full re-decode at every prefix, across the
 tricky cases (multi-char pieces, SentencePiece leading-space, byte-fallback splits),
 and must actually re-decode less than the naive whole-sequence approach.
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-from uses.chat.run_chat import IncrementalDecoder
+from models.cognition.uses.chat.run_chat import IncrementalDecoder
 
 
 def _assert_matches(decode_fn, ids, keep=4):

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.models import owns_source, stream_source
+from src.plugins import owns_source, stream_source
 
 # key -> owning stage number (mirrors the old dispatcher's routing).
 KEY_OWNER = {

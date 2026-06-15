@@ -50,7 +50,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_
 ```
 
 `pillow`/`soundfile` are only needed for the multimodal parts (loading images/audio).
-The main scripts (`scripts/train.py`, `uses/chat/run_chat.py`, `src/core/consolidation/daemon.py`) re-exec
+The main scripts (`scripts/train.py`, `models/cognition/uses/chat/run_chat.py`, `src/core/consolidation/daemon.py`) re-exec
 themselves with the venv's Python if you run them without activating it.
 
 ## 3. Backend & precision
@@ -86,7 +86,7 @@ training:
   take `--quant N` for any 2–8 bit width (e.g. `int4`, `8`): real grouped-affine
   quantization via `engine.quantize` on both backends. MLX packs at the true width;
   torch packs nibbles at 4-bit (≈⅛) and stores a byte per weight otherwise (≈¼), so
-  4-/8-bit are its memory sweet spots. See [uses/chat/](../uses/chat/).
+  4-/8-bit are its memory sweet spots. See [models/cognition/uses/chat/](../models/cognition/uses/chat/).
 
 ## 4. Choose languages
 
@@ -274,11 +274,11 @@ From here the core is never touched again: all learning is through consolidation
 ## 9. Chat
 
 ```bash
-python uses/chat/run_chat.py --level 3 --stage 10                # most complete (core + behavioral)
-python uses/chat/run_chat.py --level 3 --stage 1 --lang es       # Spanish session
-python uses/chat/run_chat.py --level 3 --stage 10 --think medium # show <think> reasoning
-python uses/chat/run_chat.py --level 3 --stage 10 --image foto.png  # visual grounding
-python uses/chat/run_chat.py --level 3 --stage 10 --audio clip.wav  # audio grounding
+python models/cognition/uses/chat/run_chat.py --level 3 --stage 10                # most complete (core + behavioral)
+python models/cognition/uses/chat/run_chat.py --level 3 --stage 1 --lang es       # Spanish session
+python models/cognition/uses/chat/run_chat.py --level 3 --stage 10 --think medium # show <think> reasoning
+python models/cognition/uses/chat/run_chat.py --level 3 --stage 10 --image foto.png  # visual grounding
+python models/cognition/uses/chat/run_chat.py --level 3 --stage 10 --audio clip.wav  # audio grounding
 ```
 
 In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512`
@@ -289,8 +289,8 @@ register (real GSM8K chain-of-thought). `--think` / `/think` is an effort dial
 (off · low · medium · high, **default medium** — more thinking ≈ better answers)
 that sets how big a token budget the scratchpad gets; the chat shows the
 scratchpad above the answer. Tokens **stream live by default** (`--no-stream` to
-batch). The agent (`uses/agent/run_agent.py`) runs several think→act→observe
-rounds until it answers, surfacing each round. See [uses/chat/](../uses/chat/).
+batch). The agent (`models/cognition/uses/agent/run_agent.py`) runs several think→act→observe
+rounds until it answers, surfacing each round. See [models/cognition/uses/chat/](../models/cognition/uses/chat/).
 
 **Mood** — the assistant tracks a conversational mood that defaults to **neutral**
 and only shifts on a clear emotional cue (it rides the system channel as plain text,
@@ -355,7 +355,7 @@ python scripts/train.py --level 1 --stage 9      # MCP           (LoRA sector)
 python scripts/train.py --level 1 --stage 10     # Skills        (LoRA sector)
 
 # 4) Chat with it (most complete checkpoint)
-python uses/chat/run_chat.py --level 1 --stage 10
+python models/cognition/uses/chat/run_chat.py --level 1 --stage 10
 ```
 
 On start each command prints the **announce** (what the model is learning + estimated
@@ -418,7 +418,7 @@ Shows in seconds that sectorized consolidation does not forget, vs. sequential
 fine-tuning and EWC:
 
 ```bash
-python src/models/cognition/experiments/continual_learning.py --domains 5 --steps 250
+python models/cognition/experiments/continual_learning.py --domains 5 --steps 250
 ```
 
 Expected ordering: `naive` worst → `ewc` middle → `rdmca` BWT≈0.

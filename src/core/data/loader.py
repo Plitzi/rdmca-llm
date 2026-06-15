@@ -221,7 +221,7 @@ class DataLoader:
         split (no replay, no oversampling) for honest generalization measurement."""
         mcfg = cfg["model"]
         tcfg = cfg["training"]
-        from src.models import stage_data_dir
+        from src.plugins import stage_data_dir
 
         stage_cfg = cfg["curriculum"][f"stage{stage}"]  # key-based (levels may omit stages)
         # Each stage owns its data folder inside its package; a config data_dir wins.
