@@ -12,7 +12,8 @@ camera overlay draws. Two interchangeable architectures, same ModelSpec:
     plus a per-keypoint DEPTH (z relative to the wrist) → 21×3. Soft-argmax turns each
     heatmap into an (x,y) anywhere in the frame, so it LOCALIZES a real hand wherever it
     is (not just filling the frame). Trained on the real FreiHAND dataset (see
-    data_freihand.py) with location augmentation. Opt-in via configs/hands2d.yaml.
+    data_freihand.py) with location augmentation. Opt-in via the model's level configs
+    (configs/levels/levelN.yaml, `model.arch: heatmap`).
 
 `build_spec` picks the arch + loader from the config (`model.arch`, `dataset.root`). Built
 on the shared backend (`src.backend`) → trains/infers on MLX or torch. The camera use case

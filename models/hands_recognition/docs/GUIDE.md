@@ -14,11 +14,16 @@ position error) is better.
   constellation. Nothing is downloaded; it proves the pipeline but does **not** track a real
   hand (it only learned the synthetic distribution). Predicts 21×2 of a hand that fills the
   frame.
-- **Real hands (opt-in)** — a **heatmap FCN** trained on the **FreiHAND** dataset that
-  **localizes a real hand anywhere in the frame** and recovers **3D** keypoints (x, y +
-  root-relative depth). Enabled by a config + the dataset on disk (see
+- **Real hands** — a **heatmap FCN** trained on the **FreiHAND** dataset that **localizes a
+  real hand anywhere in the frame** and recovers **3D** keypoints (x, y + root-relative
+  depth). This is the model's standard curriculum, available at every level (see
   [Detect real hands](#detect-real-hands-freihand)). The camera auto-selects whichever
   checkpoint you trained and rebuilds the matching architecture.
+
+**Levels = model SIZE, the stage = the curriculum.** Like every RDMCA model, levels differ
+only in model size/scope and the single keypoint stage is the curriculum at each one:
+`level 0` is a small/fast FCN (64 px) and `level 1` the standard one (128 px). The synthetic
+MLP is the no-dataset fallback (used for the headless selftest and CI), not a training level.
 
 ## Layout
 
@@ -27,13 +32,16 @@ models/hands_recognition/
   pose.py             HandPoseNet (synthetic MLP) + HandHeatmapNet (real FCN) + soft_argmax + build_spec
   data_freihand.py    FreiHandLoader (heatmaps + 3D + localization) + download_freihand
   __init__.py         build_spec + prepare_stage hook (rdmca prepare downloads FreiHAND)
-  configs/hands2d.yaml real-hand training config (heatmap FCN + FreiHAND; tier: vision-edge)
-  configs/levels/     this model's per-model level configs (the level constructor lives in src/levels.py)
+  configs/levels/     per-model level ladder: _base.yaml (shared) + level0/level1 (SIZE only)
   stages/stage01_keypoints/   the single curriculum stage (keypoint heatmaps)
   uses/camera/run_camera.py   live-camera use case (skeleton + depth overlay + FPS HUD)
-  data/freihand/      the downloaded FreiHAND dataset (gitignored; only for real mode)
+  data/freihand/      the downloaded FreiHAND dataset (gitignored)
   docs/GUIDE.md       this file
 ```
+
+The level constructor (the boilerplate shared across models: training cadence + resource
+estimates) lives in [../../../src/levels.py](../../../src/levels.py); each level opts in with
+`tier: vision-edge`.
 
 ## Use it now — the camera
 
@@ -53,51 +61,45 @@ joints are **coloured + sized by depth** (near = red/large, far = blue/small). `
 both asks the device for that rate and paces the loop to it. Press `q` or `ESC` to quit. With
 random weights the points won't track a real hand — train the model first.
 
-## Train the synthetic demo (no data, no tokenizer)
-
-The default model needs **no data prep and no tokenizer** — its `ModelSpec` loader generates
-synthetic frames:
-
-```bash
-rdmca info  --model hands_recognition            # confirm the stage is discovered
-rdmca train --model hands_recognition --level 0  # train stage 1 on synthetic data
-rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level0/stage1/best.npz
-```
-
-Checkpoints are namespaced by model: `dist/hands_recognition/checkpoints/level0/stage1/`.
-The gate metric is `mpjpe` (set the bar with `gate.max_mpjpe` in the level config).
-
 ## Detect real hands (FreiHAND)
 
-The synthetic model can't track a real hand. To detect **your** hand — anywhere in the frame,
-in 3D — train the **heatmap FCN** on real data. The download is part of the **prepare**
-pipeline (just like cognition prepares its corpus), via this model's `prepare_stage` hook:
+To detect **your** hand — anywhere in the frame, in 3D — train the **heatmap FCN** on real
+data. Standard form: `--model hands_recognition` (+ `--level`), no `--config` needed. The
+download is part of the **prepare** pipeline (just like cognition prepares its corpus), via
+this model's `prepare_stage` hook:
 
 ```bash
+rdmca info --model hands_recognition              # confirm the stage + levels are discovered
+
 # 1. Download + extract FreiHAND into models/hands_recognition/data/freihand/ (~4 GB,
 #    idempotent + resumable — re-run to resume; skips if already prepared):
-rdmca prepare --config models/hands_recognition/configs/hands2d.yaml
+rdmca prepare --model hands_recognition --level 1
 
-# 2. Train the heatmap FCN on real, localized, 3D hands. Do NOT pass --level (it would
-#    override --config):
-rdmca train --config models/hands_recognition/configs/hands2d.yaml
+# 2. Train the heatmap FCN on real, localized, 3D hands:
+rdmca train --model hands_recognition --level 1
 
 # 3. Run the camera — no flags: it auto-discovers the newest checkpoint, reads its audit.json
 #    to rebuild the exact FCN (img_size / channels / heatmap_size), and localizes the hand:
 rdmca uses camera
 ```
 
-Checkpoints land in `dist/hands_recognition/checkpoints/level1/stage1/`. Targets come from
-the 3D labels: 2D via the camera intrinsics (`uv = K · xyz`, normalized), depth as each
-keypoint's camera-z minus the wrist's, divided by the wrist→middle-MCP bone length (so it is
-scale-invariant). **Location augmentation** pastes the hand at a random position/scale on a
-random background, so the FCN learns to find it anywhere — not just filling the frame.
+Use `--level 0` for the small/fast FCN (64 px) or `--level 1` for the standard one (128 px) —
+same task + data, smaller model. With no `--level`, `--model hands_recognition` resolves to the
+model's lowest level (0). Checkpoints are namespaced by model + level:
+`dist/hands_recognition/checkpoints/level{L}/stage1/`; the gate metric is `mpjpe`.
 
-Tune in [../configs/hands2d.yaml](../configs/hands2d.yaml): `model.img_size`,
-`model.heatmap_size` (= img_size/4), `model.in_channels`, `model.dims` (3 = with depth, 2 =
-planar), `model.depth_weight`, `dataset.localize`, `training.*`, `gate.max_mpjpe`. The shared
-training cadence + resource block come from `tier: vision-edge` (see [the level
-constructor](../../../src/levels.py)).
+Targets come from the 3D labels: 2D via the camera intrinsics (`uv = K · xyz`, normalized),
+depth as each keypoint's camera-z minus the wrist's, divided by the wrist→middle-MCP bone
+length (so it is scale-invariant). **Location augmentation** pastes the hand at a random
+position/scale on a random background, so the FCN learns to find it anywhere — not just filling
+the frame (the key trait for the **VR** use case: hands appearing anywhere in the captured
+scene).
+
+Tune in [../configs/levels/](../configs/levels/): the size knobs (`model.img_size`,
+`model.heatmap_size = img_size/4`, `model.d_model`) per level; the shared `model.in_channels`,
+`model.dims` (3 = with depth, 2 = planar), `model.depth_weight`, `dataset.localize`,
+`training.*`, `gate.max_mpjpe` in `_base.yaml`. The training cadence + resource block come from
+`tier: vision-edge` (see [the level constructor](../../../src/levels.py)).
 
 ## How it works
 

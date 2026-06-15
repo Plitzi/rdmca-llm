@@ -139,7 +139,7 @@ def test_info_lists_models_and_stages(capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "cognition" in out and "hands_recognition" in out
-    assert "Hand keypoint regression" in out
+    assert "Hand keypoint detection" in out
 
 
 def test_info_unknown_model_errors(capsys):

@@ -83,12 +83,15 @@ propios stages (cada modelo internamente corre un grupo de stages):
   `build_loader`/`objective`/`evaluate`, métrica `mpjpe`, menor=mejor). Dos arquitecturas bajo
   el MISMO spec: **MLP sintético** (default, sin descarga — demuestra el pipeline pero NO
   rastrea una mano real, 21×2 que llena el cuadro) y **FCN de heatmaps real** opt-in
-  (`model.arch: heatmap` + dataset FreiHAND en `data/freihand/`, loader en `data_freihand.py`,
-  config `configs/hands2d.yaml`): encoder-decoder que emite 21 heatmaps espaciales + una rama
-  de profundidad; **soft-argmax** localiza la mano EN CUALQUIER PARTE del cuadro y recupera 3D
-  (x,y + z relativo a la muñeca). `build_spec` elige arch+loader según el config. La descarga
-  de FreiHAND es parte del **prepare** (`rdmca prepare --config …/hands2d.yaml`) vía el hook de
-  modelo `prepare_stage` (descubierto por `model_hook`, mismo patrón que `post_stage`). Tiene
+  (`model.arch: heatmap` + dataset FreiHAND en `data/freihand/`, loader en `data_freihand.py`):
+  encoder-decoder que emite 21 heatmaps espaciales + una rama de profundidad; **soft-argmax**
+  localiza la mano EN CUALQUIER PARTE del cuadro y recupera 3D (x,y + z relativo a la muñeca).
+  `build_spec` elige arch+loader según el config. Sus niveles están en la forma per-modelo
+  estándar (`configs/levels/_base.yaml` + `level0`/`level1`, que difieren SOLO en tamaño del
+  modelo — img_size/heatmap_size/width; el único stage de keypoints es su currículo en cada
+  nivel), así `rdmca {prepare,train} --model hands_recognition [--level N]` NO necesita
+  `--config`. La descarga de FreiHAND es parte del **prepare** vía el hook de modelo
+  `prepare_stage` (descubierto por `model_hook`, mismo patrón que `post_stage`). Tiene
   UN stage (`stage01_keypoints/`), `moods: false`, y su caso de uso es la **cámara**
   ([models/hands_recognition/uses/camera/](models/hands_recognition/uses/camera/),
   `rdmca uses camera [--selftest]`) — reconstruye la arch del checkpoint (vía `trained_arch`) y

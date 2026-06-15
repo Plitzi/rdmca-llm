@@ -1,0 +1,14 @@
+# hands_recognition · level 1 — STANDARD tier. The full-size FCN (128px, heatmap 32, width
+# 128) for the best real-hand tracking. Same task + data as level 0; inherits _base.yaml.
+level: 1
+tier: vision-edge              # shared training cadence + resource block (src/levels.py)
+
+information:
+  summary: "Pose de mano 3D real (FreiHAND), localizada en cualquier parte del encuadre — FCN estándar."
+  areas:
+    1: "Visión: 21 keypoints 3D (x,y + profundidad relativa) de una mano real, en cualquier posición/escala."
+
+model:
+  img_size: 128                # frames resized to 128×128 before the FCN
+  heatmap_size: 32             # = img_size // 4 (the decoder up-samples ×4)
+  d_model: 128                 # conv width at the bottleneck

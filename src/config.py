@@ -90,7 +90,6 @@ def level_config_path(level: int, model: str | None = None) -> str:
 _LEVELS = available_levels(DEFAULT_MODEL)
 MIN_LEVEL = _LEVELS[0] if _LEVELS else 0  # level 0 = throwaway smoke/test tier
 MAX_LEVEL = _LEVELS[-1] if _LEVELS else 5
-DEFAULT_CONFIG = level_config_path(DEFAULT_LEVEL, DEFAULT_MODEL)
 
 # Single source of truth: the registry's builder map. Adding a backend there now
 # updates this automatically (no second list to keep in sync).
@@ -103,17 +102,26 @@ SUPPORTED_PRECISIONS = ("fp32", "bf16", "fp16")
 def resolve_config_path(
     config: str | None = None, level: int | None = None, model: str | None = None
 ) -> str:
-    """A `--level N` (resolved under `model`'s own levels) wins over an explicit
-    `--config path`; else the default level. Levels are per-model, so the model picks
-    which ladder `--level` indexes."""
+    """Resolve which level config a CLI run uses, ALWAYS under the GIVEN model's own ladder.
+    Precedence: an explicit `--level N` wins over `--config path`; with neither, the model's
+    DEFAULT level (or its lowest, if it has no level 2). Levels are per-model, so a run for one
+    model NEVER falls back to another model's config — `rdmca <cmd> --model M` resolves to M's
+    own level (its single stage), not cognition's curriculum."""
+    if config is not None and level is None:
+        return config  # an explicit config (and no --level) is used as-is
+    levels = available_levels(model)
+    if not levels:
+        who = model or DEFAULT_MODEL
+        raise ValueError(
+            f"No level configs for model '{who}' (expected {level_config_dir(model)}/levelN.yaml)."
+        )
     if level is not None:
         lvl = int(level)
-        levels = available_levels(model)
         if lvl not in levels:
             who = model or DEFAULT_MODEL
             raise ValueError(f"Level {lvl} not found for model '{who}' — available: {levels}.")
         return level_config_path(lvl, model)
-    return config or DEFAULT_CONFIG
+    return level_config_path(DEFAULT_LEVEL if DEFAULT_LEVEL in levels else levels[0], model)
 
 
 def get_level(cfg: dict) -> int | None:

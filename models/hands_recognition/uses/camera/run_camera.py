@@ -88,8 +88,8 @@ def _load_net(checkpoint: str | None, arch: dict | None = None):
     else:
         print("  No trained checkpoint found — using random weights.")
         print(
-            "  Train a real-hand model:  rdmca train "
-            "--config models/hands_recognition/configs/hands2d.yaml"
+            "  Train a real-hand model:  rdmca prepare --model hands_recognition --level 1"
+            "  &&  rdmca train --model hands_recognition --level 1"
         )
     backend.current().engine.set_eval(net)
     return net

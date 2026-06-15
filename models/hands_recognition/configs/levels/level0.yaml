@@ -1,0 +1,19 @@
+# hands_recognition · level 0 — SMALL/fast tier (smoke + low-power). Same task + data as
+# level 1, just a smaller FCN (128px→64px, heatmap 16, half width) so it trains quickly and
+# fits tiny machines. Inherits everything else from _base.yaml.
+level: 0
+tier: vision-edge              # shared training cadence + resource block (src/levels.py)
+
+information:
+  summary: "Pose de mano 3D real (FreiHAND), localizada en cualquier parte — FCN pequeño (rápido)."
+  areas:
+    1: "Visión: 21 keypoints 3D de una mano real, en cualquier posición/escala (modelo pequeño)."
+
+model:
+  img_size: 64                 # smaller input → faster
+  heatmap_size: 16             # = img_size // 4
+  d_model: 64                  # half the conv width of level 1
+
+curriculum:
+  stage1:
+    n_tokens: 8_000_000        # shorter run for the small tier

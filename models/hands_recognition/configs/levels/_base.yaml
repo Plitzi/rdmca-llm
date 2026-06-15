@@ -1,0 +1,46 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  hands_recognition · shared base for every level                           ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  Levels differ ONLY in MODEL SIZE / scope (img_size, heatmap_size, width); ║
+# ║  the curriculum (the single hand-keypoint stage) and everything else live   ║
+# ║  here once and are inherited (deep-merged) by each levelN.yaml. The shared   ║
+# ║  training cadence + resource block come from `tier: vision-edge`            ║
+# ║  (src/levels.py). Run a level with, e.g.:                                   ║
+# ║    rdmca prepare --model hands_recognition --level 1   # downloads FreiHAND  ║
+# ║    rdmca train   --model hands_recognition --level 1                         ║
+# ║    rdmca uses camera                                                         ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+model_name: hands_recognition
+backend: mlx                   # mlx | torch
+# NOTE: `tier:` (the shared training-cadence/resource scaffold from src/levels.py) is read
+# from the LEVEL file BEFORE this base is merged, so each levelN.yaml declares its own tier.
+
+# The heatmap FCN. img_size / heatmap_size / d_model (the SIZE knobs) come from each level;
+# the rest is shared. It is NOT a transformer, so the resource estimator uses the tier block.
+model:
+  arch: heatmap                # encoder-decoder → 21 spatial heatmaps + a depth branch
+  in_channels: 3               # RGB (skin colour helps); set 1 for grayscale
+  dims: 3                      # 3 = predict + score depth (x,y,z); 2 = planar only
+  depth_weight: 0.1            # weight of the depth-MSE term relative to the heatmap MSE
+
+dataset:
+  root: models/hands_recognition/data/freihand   # where `rdmca prepare` unzips FreiHAND
+  localize: true               # paste the hand at a random position/scale (detect anywhere)
+  augment: true                # horizontal-flip + brightness jitter (webcam robustness)
+
+training:                      # batch_size / warmup / save_every / eval_every from the tier
+  lr: 1.0e-3
+  lr_min: 1.0e-4
+  weight_decay: 0.0
+
+gate:
+  max_mpjpe: 0.12              # graduate when mean 3D keypoint error ≤ 0.12 (xy[0,1] + z units)
+
+skip_gate: false
+
+curriculum:                    # ONE stage = the model's whole curriculum, active at every level
+  stage1:
+    name: "Hand keypoint heatmaps (real, localized, 3D)"
+    entry_level: 0
+    n_tokens: 20_000_000       # ⇒ ~5 passes over FreiHAND at the tier's batch_size
