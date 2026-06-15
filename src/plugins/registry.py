@@ -17,6 +17,7 @@ import importlib
 import pkgutil
 import re
 from collections.abc import Iterator
+from pathlib import Path
 
 from src.plugins.base import StagePlugin
 
@@ -44,6 +45,39 @@ def model_hook(name: str):
     effects without importing the model — the same discovery pattern as the ModelSpec."""
     pkg = importlib.import_module(f"models.{_ACTIVE_MODEL}")
     return getattr(pkg, name, None)
+
+
+def _models_root() -> Path:
+    """The repo's models/ directory (this file is src/plugins/registry.py → repo is 3 up)."""
+    return Path(__file__).resolve().parents[2] / "models"
+
+
+def available_models() -> list[str]:
+    """Every model package under models/ — a directory with an __init__.py. The SINGLE
+    source of truth for "what models exist" (the CLI and trainer both ask here)."""
+    root = _models_root()
+    if not root.is_dir():
+        return []
+    return sorted(
+        child.name
+        for child in root.iterdir()
+        if child.is_dir() and (child / "__init__.py").exists()
+    )
+
+
+def model_uses(model: str) -> dict[str, Path]:
+    """A model's runnable USE CASES: {app: run_<app>.py} for each models/<model>/uses/<app>/
+    that ships a run_<app>.py. Use cases belong to the model, NOT the framework — so they
+    are discovered here per model (common/, tests/ and stub dirs lack a run_ file and are
+    skipped) rather than hardcoded in the CLI. Empty for a model with no uses/ yet."""
+    found: dict[str, Path] = {}
+    uses_dir = _models_root() / model / "uses"
+    if uses_dir.is_dir():
+        for child in sorted(uses_dir.iterdir()):
+            run = child / f"run_{child.name}.py"
+            if child.is_dir() and run.exists():
+                found[child.name] = run
+    return found
 
 
 def _discover(model: str) -> dict[int, StagePlugin]:

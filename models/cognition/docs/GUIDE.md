@@ -112,7 +112,7 @@ model:
 - One-off override without touching the config: `--lang en,es` on `prepare_data.py` and
   `train_tokenizer.py`.
 
-The chosen languages are persisted to `dist/tokenizer/tokenizer_info.json`, which the
+The chosen languages are persisted to `dist/cognition/tokenizer/tokenizer_info.json`, which the
 tokenizer and model read at runtime.
 
 ## 5. Data
@@ -169,7 +169,7 @@ python scripts/train_tokenizer.py --images-dir path/ --audio-dir path/to/wavs
 python scripts/train_tokenizer.py --image-dataset uoft-cs/cifar10 --audio-synthetic
 ```
 
-Output: `dist/tokenizer/image_vqvae.npz` and `dist/tokenizer/audio_vqvae.npz`.
+Output: `dist/cognition/tokenizer/image_vqvae.npz` and `dist/cognition/tokenizer/audio_vqvae.npz`.
 
 ## 7. Train the cognitive base
 
@@ -218,7 +218,7 @@ shallowly. `scripts/train.py` suggests the next stage and enforces prerequisites
 > Gates use **validation perplexity** as the operative proxy. To use real benchmarks
 > (BLiMP/ARC/GSM8K), replace `evaluate_gate` in `scripts/train.py`.
 
-Checkpoints live in `dist/checkpoints/level<N>/stage<N>/` (`step_*.npz`, `latest.json`,
+Checkpoints live in `dist/cognition/checkpoints/level<N>/stage<N>/` (`step_*.npz`, `latest.json`,
 `final.npz`, `stage_complete.json`).
 
 ### 7.1 Monitoring the run (graphs)
@@ -257,7 +257,7 @@ levels — run `scripts/run_benchmarks.py`:
 ```bash
 python scripts/run_benchmarks.py --level 1 --stage 5                 # all benchmarks
 python scripts/run_benchmarks.py --level 1 --stage 5 --benchmarks wikitext lambada mmlu
-python scripts/run_benchmarks.py --checkpoint dist/checkpoints/level1/stage5/best.npz --level 1
+python scripts/run_benchmarks.py --checkpoint dist/cognition/checkpoints/level1/stage5/best.npz --level 1
 ```
 
 Covers **wikitext** (LM perplexity), **lambada** (last-word accuracy), **mmlu**
@@ -273,7 +273,7 @@ absolute. Use `--limit N` to cap examples per benchmark for a quick read.
 
 When the **Ethics + BCF stage (stage 7)** completes, the foundational core (stages 1-7:
 cognition + memory + values) is **frozen permanently** and saved to
-`dist/checkpoints/level<N>/foundational/theta_f_frozen.npz`. If
+`dist/cognition/checkpoints/level<N>/foundational/theta_f_frozen.npz`. If
 `data/benchmarks/bcf_probes.jsonl` exists (one `{"text": "...", "label": 0|1}` per line),
 the BCF safety head is also trained and saved as `bcf_head.npz`. This happens
 automatically inside `scripts/train.py --stage 7` (driven by `BCF_STAGE = 7`).
@@ -283,11 +283,11 @@ From here the core is never touched again: all learning is through consolidation
 ## 9. Chat
 
 ```bash
-python models/cognition/uses/chat/run_chat.py --level 3 --stage 10                # most complete (core + behavioral)
-python models/cognition/uses/chat/run_chat.py --level 3 --stage 1 --lang es       # Spanish session
-python models/cognition/uses/chat/run_chat.py --level 3 --stage 10 --think medium # show <think> reasoning
-python models/cognition/uses/chat/run_chat.py --level 3 --stage 10 --image foto.png  # visual grounding
-python models/cognition/uses/chat/run_chat.py --level 3 --stage 10 --audio clip.wav  # audio grounding
+rdmca uses chat --level 3 --stage 10                # most complete (core + behavioral)
+rdmca uses chat --level 3 --stage 1 --lang es       # Spanish session
+rdmca uses chat --level 3 --stage 10 --think medium # show <think> reasoning
+rdmca uses chat --level 3 --stage 10 --image foto.png  # visual grounding
+rdmca uses chat --level 3 --stage 10 --audio clip.wav  # audio grounding
 ```
 
 In-chat commands: `/lang es` · `/temp 0.7` · `/topp 0.9` · `/maxtok 512`
@@ -333,7 +333,7 @@ python -m src.consolidation.daemon --level 3 --once    # one cycle, then exit
 python -m src.consolidation.daemon --level 3           # daemon (waits for idle)
 ```
 
-Updated sectors are saved to `dist/checkpoints/level<N>/sectors.npz`; long-term memory
+Updated sectors are saved to `dist/cognition/checkpoints/level<N>/sectors.npz`; long-term memory
 to `data/runtime/ltss.db`.
 
 ## 11. Start here — the Level 1 experiment
@@ -364,13 +364,13 @@ python scripts/train.py --level 1 --stage 9      # MCP           (LoRA sector)
 python scripts/train.py --level 1 --stage 10     # Skills        (LoRA sector)
 
 # 4) Chat with it (most complete checkpoint)
-python models/cognition/uses/chat/run_chat.py --level 1 --stage 10
+rdmca uses chat --level 1 --stage 10
 ```
 
 On start each command prints the **announce** (what the model is learning + estimated
 memory) and runs the **resource guard** (aborts a level that won't fit; `--force` to
 override). Data lands in `models/cognition/data/<stage>/level1/...`, checkpoints in
-`dist/checkpoints/cognition/level1/...` (both namespaced by the active model).
+`dist/cognition/checkpoints/level1/...` (both namespaced by the active model).
 
 **Faster first pass:** the `n_tokens` budgets in `level1.yaml` control run length — lower
 them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a fuller model.
@@ -396,8 +396,8 @@ python scripts/purge.py --checkpoints --data --level 1   # redo level 1 only
 python scripts/purge.py --tokenizer --checkpoints  # keep prepared data, retrain
 ```
 
-Targets: `--checkpoints` (`dist/checkpoints/` + `dist/snapshots/`), `--tokenizer`
-(`dist/tokenizer/` + VQ-VAE + `*.bak`), `--data` (`models/<model>/data/` corpora),
+Targets: `--checkpoints` (`dist/cognition/checkpoints/` + `dist/cognition/snapshots/`), `--tokenizer`
+(`dist/cognition/tokenizer/` + VQ-VAE + `*.bak`), `--data` (`models/<model>/data/` corpora),
 `--runtime` (`data/runtime/` — `experiences.jsonl`, `ltss.db`), `--logs`. Scope
 checkpoints/data to one level with `--level N`.
 

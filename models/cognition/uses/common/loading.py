@@ -196,7 +196,7 @@ def load_model(args):
         stage_hint = args.stage or 1
         print("No checkpoint found. Options:")
         print(f"  Train first:  rdmca train --stage {stage_hint} --config {args.config}")
-        print("  Or test now:  rdmca chat --dummy")
+        print("  Or test now:  rdmca uses chat --dummy")
         sys.exit(1)
 
     print(f"  Loading checkpoint [{label}]: {ckpt_path}")

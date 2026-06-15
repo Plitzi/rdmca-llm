@@ -25,12 +25,12 @@ models/hands_recognition/
 
 ```bash
 # Headless self-test (no webcam, no opencv needed) — proves the model + pipeline run:
-rdmca camera --model hands_recognition --selftest
+rdmca uses camera --selftest
 
 # Live webcam overlay (needs opencv: .venv/bin/python -m pip install opencv-python):
-rdmca camera --model hands_recognition                 # 30 FPS (default)
-rdmca camera --model hands_recognition --fps 60        # 60 FPS
-rdmca camera --model hands_recognition --checkpoint dist/checkpoints/hands_recognition/level0/stage1/best.npz
+rdmca uses camera                 # 30 FPS (default)
+rdmca uses camera --fps 60        # 60 FPS
+rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level0/stage1/best.npz
 ```
 
 The window overlays the **hand skeleton** (a line per bone/phalanx, a dot per joint) and a
@@ -46,10 +46,10 @@ generates synthetic frames. Steps:
 ```bash
 rdmca info  --model hands_recognition            # confirm the stage is discovered
 rdmca train --model hands_recognition --level 0  # train stage 1 (keypoint regression)
-rdmca camera --model hands_recognition --checkpoint dist/checkpoints/hands_recognition/level0/stage1/best.npz
+rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level0/stage1/best.npz
 ```
 
-Checkpoints are namespaced by model: `dist/checkpoints/hands_recognition/level0/stage1/`.
+Checkpoints are namespaced by model: `dist/hands_recognition/checkpoints/level0/stage1/`.
 The gate metric is `mpjpe` (set the bar with `gate.max_mpjpe` in the level config).
 
 ## How it works

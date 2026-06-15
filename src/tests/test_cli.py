@@ -1,9 +1,10 @@
 """Tests for the unified `rdmca` developer CLI (scripts/rdmca.py).
 
 The CLI is pure routing — it must: parse a `--model` out of the forwarded args, build
-the right command for each kind (script / run / module / builtin), forward `--model` only
-to model-aware scripts, and answer `info` from the registry. We drive it without spawning
-real subprocesses by stubbing `subprocess.call`.
+the right command for each FRAMEWORK kind (script / module / builtin), forward `--model`
+only to model-aware scripts, discover USE CASES per model (chat/agent/camera are NOT
+hardcoded commands) and answer `info`/`uses` from the registry. We drive it without
+spawning real subprocesses by stubbing `subprocess.call`.
 """
 
 import importlib.util
@@ -34,24 +35,22 @@ def test_extract_model_all_forms():
     assert CLI._extract_model(["--level", "1"]) == (None, ["--level", "1"])
 
 
-def test_commands_table_is_well_formed():
+def test_commands_table_is_framework_only():
+    # Use cases (chat/agent/camera) are discovered per model, NOT framework commands.
     for name, spec in CLI.COMMANDS.items():
         assert len(spec) == 4, name
-        _group, kind, target, help_text = spec
-        assert kind in {"script", "run", "module", "builtin"}
+        _group, kind, _target, help_text = spec
+        assert kind in {"script", "module", "builtin"}
         assert help_text
-        if kind == "run":  # a use case must exist on disk for at least the default model
-            assert isinstance(target, str) and target
+    for use_case in ("chat", "agent", "camera"):
+        assert use_case not in CLI.COMMANDS
 
 
-def test_run_use_cases_exist_on_disk():
-    # Every `run` command resolves to models/<model>/uses/<target>/run_<target>.py
-    pairs = {"chat": "cognition", "agent": "cognition", "camera": "hands_recognition"}
-    for name, (_g, kind, target, _h) in CLI.COMMANDS.items():
-        if kind == "run":
-            model = pairs.get(name, "cognition")
-            app = _REPO / "models" / model / "uses" / target / f"run_{target}.py"
-            assert app.exists(), f"{name} → {app} missing"
+def test_model_uses_discovers_apps_skipping_non_runnables():
+    cognition = CLI._model_uses("cognition")
+    assert set(cognition) == {"chat", "agent"}  # common/, tests/, api/ stub are skipped
+    hands = CLI._model_uses("hands_recognition")
+    assert set(hands) == {"camera"}
 
 
 def test_available_models_includes_both():
@@ -59,16 +58,71 @@ def test_available_models_includes_both():
     assert "cognition" in models and "hands_recognition" in models
 
 
-def test_dispatch_run_builds_use_case_path(monkeypatch):
+def test_uses_launches_use_case(monkeypatch):
+    # `rdmca uses camera --model hands_recognition …` launches the run script; the model
+    # selects the use case, so it is NOT forwarded as an arg.
     captured = {}
     monkeypatch.setattr(
         CLI.subprocess, "call", lambda cmd, cwd: captured.setdefault("cmd", cmd) or 0
     )
-    CLI._dispatch("camera", ["--model", "hands_recognition", "--selftest"])
+    CLI._cmd_uses(["camera", "--model", "hands_recognition", "--selftest"])
     cmd = captured["cmd"]
     assert str(_REPO / "models" / "hands_recognition" / "uses" / "camera" / "run_camera.py") in cmd
     assert "--selftest" in cmd
-    assert "--model" not in cmd  # the model selects the use case, not forwarded as an arg
+    assert "--model" not in cmd
+
+
+def test_uses_infers_model_for_unambiguous_app(monkeypatch):
+    # `camera` is owned only by hands_recognition → no --model needed; it must NOT fall
+    # back to the default model (cognition) and fail.
+    captured = {}
+    monkeypatch.setattr(CLI.subprocess, "call", lambda cmd, cwd: captured.update(cmd=cmd) or 0)
+    rc = CLI._cmd_uses(["camera", "--selftest"])
+    assert rc == 0
+    assert "run_camera.py" in str(captured["cmd"])
+
+
+def test_uses_unknown_app_with_explicit_wrong_model_hints_owner(capsys):
+    # Forcing the wrong model for a real app points at the model that DOES own it.
+    rc = CLI._cmd_uses(["camera", "--model", "cognition"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "hands_recognition" in out and "rdmca uses camera --model hands_recognition" in out
+
+
+def test_uses_duplicate_app_requires_model(monkeypatch, capsys):
+    # If several models declare the SAME app name, it is ambiguous → --model is required,
+    # nothing is assumed (not even cognition). Simulate a collision on `chat`.
+    monkeypatch.setattr(
+        CLI,
+        "_all_uses_by_model",
+        lambda: {"cognition": {"chat": object()}, "other": {"chat": object()}},
+    )
+    called = []
+    monkeypatch.setattr(CLI.subprocess, "call", lambda cmd, cwd: called.append(cmd) or 0)
+    rc = CLI._launch_use(None, "chat", [])
+    out = capsys.readouterr().out
+    assert rc == 2 and not called  # refused to launch
+    assert "several models" in out and "cognition" in out and "other" in out
+    assert "--model" in out
+
+
+def test_uses_lists_per_model(capsys):
+    rc = CLI._cmd_uses([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "cognition" in out and "chat" in out and "agent" in out
+    # camera is unambiguous → listed WITHOUT --model (it's inferred when launching).
+    assert "rdmca uses camera" in out and "rdmca uses camera --model" not in out
+
+
+def test_bare_use_case_word_is_not_a_command(monkeypatch, capsys):
+    # There is NO global `rdmca chat`; it must teach the `rdmca uses chat` form.
+    monkeypatch.setattr(CLI.sys, "argv", ["rdmca", "chat"])
+    rc = CLI.main()
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "unknown command 'chat'" in out and "rdmca uses chat --model cognition" in out
 
 
 def test_dispatch_script_forwards_model_only_when_aware(monkeypatch):
@@ -107,6 +161,8 @@ def test_main_no_args_prints_overview(monkeypatch, capsys):
 
 
 def test_main_unknown_command(monkeypatch, capsys):
+    # A word that is neither a framework command nor any model's use case.
     monkeypatch.setattr(CLI.sys, "argv", ["rdmca", "frobnicate"])
     assert CLI.main() == 2
-    assert "unknown command" in capsys.readouterr().out.lower()
+    out = capsys.readouterr().out.lower()
+    assert "unknown command 'frobnicate'" in out and "rdmca uses" in out

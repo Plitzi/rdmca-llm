@@ -32,9 +32,10 @@ Usage:
   python models/hands_recognition/uses/camera/run_camera.py --selftest     # headless, no camera
   python models/hands_recognition/uses/camera/run_camera.py                # webcam (needs opencv)
   python models/hands_recognition/uses/camera/run_camera.py --checkpoint dist/hands_recognition/checkpoints/level1/stage1/best.npz
-  rdmca camera --model hands_recognition --selftest
+  rdmca uses camera --selftest     # model inferred (only hands_recognition has `camera`)
 """
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -53,16 +54,68 @@ from models.hands_recognition.pose import (
 )
 
 
-def _load_net(checkpoint: str | None):
-    """Build the net and (optionally) load trained weights; else random (a plumbing demo)."""
-    net = build_pose_net()
+def _resolve_checkpoint(explicit: str | None, level: int | None, stage: int | None) -> str | None:
+    """Find the trained weights to load. An explicit --checkpoint wins; otherwise AUTO-
+    DISCOVER under this model's dist root (dist/hands_recognition/checkpoints/levelL/stageS/),
+    preferring best.npz then final.npz and the most recently trained one. So `rdmca uses
+    camera` just works after training, with no --checkpoint needed. None ⇒ nothing trained
+    yet (the caller falls back to random weights)."""
+    if explicit:
+        return explicit
+    from src.config import model_dist_root
+
+    root = model_dist_root("hands_recognition") / "checkpoints"
+    if not root.is_dir():
+        return None
+    candidates: list[Path] = []
+    for lvl_dir in sorted(root.glob("level*")):
+        if level is not None and lvl_dir.name != f"level{level}":
+            continue
+        for stage_dir in sorted(lvl_dir.glob("stage*")):
+            if stage is not None and stage_dir.name != f"stage{stage}":
+                continue
+            for fname in ("best.npz", "final.npz"):  # best (ratcheted) over final (graduated)
+                if (stage_dir / fname).exists():
+                    candidates.append(stage_dir / fname)
+                    break
+    if not candidates:
+        return None
+    return str(max(candidates, key=lambda p: p.stat().st_mtime))
+
+
+_DEFAULT_HIDDEN = 256  # build_pose_net's default width (used when nothing was trained)
+
+
+def _hidden_for_checkpoint(checkpoint: str | None) -> int:
+    """The hidden width the checkpoint was trained at, read from its sibling audit.json
+    (model.d_model). The net MUST be built at this width or the weights are shape-mismatched
+    and silently stay random — which is exactly the "trained but acts untrained" trap. Falls
+    back to the build default when there's no checkpoint or audit."""
+    if not checkpoint:
+        return _DEFAULT_HIDDEN
+    audit = Path(checkpoint).parent / "audit.json"
+    if audit.exists():
+        try:
+            d_model = json.loads(audit.read_text()).get("model", {}).get("d_model")
+        except (OSError, ValueError):
+            d_model = None
+        if isinstance(d_model, int) and d_model > 0:
+            return d_model
+    return _DEFAULT_HIDDEN
+
+
+def _load_net(checkpoint: str | None, hidden: int = _DEFAULT_HIDDEN):
+    """Build the net AT THE CHECKPOINT'S WIDTH and load its weights; else random (a plumbing
+    demo). `hidden` must match how the checkpoint was trained (see _hidden_for_checkpoint)."""
+    net = build_pose_net(hidden)
     if checkpoint and Path(checkpoint).exists():
         backend.current().engine.load_weights(net, checkpoint)
-        print(f"  Loaded weights: {checkpoint}")
+        print(f"  Loaded weights (d_model={hidden}): {checkpoint}")
     elif checkpoint:
         print(f"  [warn] checkpoint not found ({checkpoint}); using random weights")
     else:
-        print("  Using random weights (train the model for meaningful keypoints).")
+        print("  No trained checkpoint found — using random weights.")
+        print("  Train first:  rdmca train --model hands_recognition --level 0")
     backend.current().engine.set_eval(net)
     return net
 
@@ -121,7 +174,7 @@ def run_camera(net, camera_index: int, target_fps: int = 30) -> int:
     except ModuleNotFoundError:
         print("opencv is not installed. Install it with:")
         print("  .venv/bin/python -m pip install opencv-python")
-        print("Or run headless:  rdmca camera --model hands_recognition --selftest")
+        print("Or run headless:  rdmca uses camera --selftest")
         return 1
 
     cap = cv2.VideoCapture(camera_index)
@@ -158,7 +211,11 @@ def run_camera(net, camera_index: int, target_fps: int = 30) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="hands_recognition live camera use case")
-    ap.add_argument("--checkpoint", default=None, help="Trained weights .npz (else random)")
+    ap.add_argument(
+        "--checkpoint", default=None, help="Trained weights .npz (else auto-discovered)"
+    )
+    ap.add_argument("--level", type=int, default=None, help="Restrict auto-discovery to a level")
+    ap.add_argument("--stage", type=int, default=None, help="Restrict auto-discovery to a stage")
     ap.add_argument("--camera-index", type=int, default=0, help="OpenCV camera index")
     ap.add_argument(
         "--fps", type=int, default=30, choices=(30, 60), help="Target frame rate (30 or 60)"
@@ -169,7 +226,8 @@ def main() -> int:
     args = ap.parse_args()
 
     print("Loading hand-pose model…")
-    net = _load_net(args.checkpoint)
+    checkpoint = _resolve_checkpoint(args.checkpoint, args.level, args.stage)
+    net = _load_net(checkpoint, _hidden_for_checkpoint(checkpoint))
     if args.selftest:
         return selftest(net)
     return run_camera(net, args.camera_index, target_fps=args.fps)

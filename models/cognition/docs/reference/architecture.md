@@ -99,7 +99,7 @@ output (new components are zero-output at first).
 ## Unified vocabulary (multimodal, Era 3b)
 
 Text, image and audio share **one embedding table**. The ranges are disjoint and
-persisted in `dist/tokenizer/tokenizer_info.json` (`modality_layout`):
+persisted in `dist/cognition/tokenizer/tokenizer_info.json` (`modality_layout`):
 
 ```
 text  = [0,            Vt)          SentencePiece (Vt = text_vocab_size)
@@ -183,9 +183,9 @@ rdmca-llm/
 └── models/cognition/docs/      cognition's docs (this file, GUIDE, levels, papers)
 ```
 
-Checkpoints: `dist/checkpoints/<model>/level<N>/stage<N>/`, frozen core at
+Checkpoints: `dist/<model>/checkpoints/level<N>/stage<N>/`, frozen core at
 `.../foundational/theta_f_frozen.npz`, sectors at `.../sectors.npz`. Tokenizers in
-`dist/tokenizer/`. Long-term memory in `data/runtime/ltss.db`.
+`dist/cognition/tokenizer/`. Long-term memory in `data/runtime/ltss.db`.
 
 ---
 
@@ -224,7 +224,7 @@ packed nibbles at 4-bit; the output head stays in float). Generation is bounded 
 `data/runtime/experiences.jsonl` and runs `ConsolidationPipeline`: BCF filter → adversarial
 filter (R⁺<0) → LTSS consistency → MRF → sector assignment (STR + SectorRouter) → masked
 per-sector update → PGQ → snapshot/rollback → audit log in `logs/cycle_*.json`. It saves
-the sectors to `dist/checkpoints/level<N>/sectors.npz`.
+the sectors to `dist/cognition/checkpoints/level<N>/sectors.npz`.
 
 ---
 
@@ -236,7 +236,7 @@ size you will use.
 
 ```python
 import numpy as np                       # checkpoints are neutral .npz (numpy)
-w = np.load("dist/checkpoints/level5/foundational/theta_f_frozen.npz")
+w = np.load("dist/cognition/checkpoints/level5/foundational/theta_f_frozen.npz")
 emb_t3 = w["embed.weight"][:, :512]       # 512-dim prefix
 ```
 

@@ -35,6 +35,23 @@ from src.training.curriculum import ckpt_root, load_config, prev_active_stage, s
 from src.training.trainer import train_stage
 
 
+def _run_hint(model_name: str) -> str:
+    """Model-agnostic 'now run it' line. Use cases belong to the model (each declares its
+    own under uses/), so point at `rdmca uses` for THIS model instead of assuming `chat`."""
+    from src.plugins import available_models, model_uses
+
+    apps = list(model_uses(model_name))
+    if not apps:
+        return f"Run it:  rdmca uses --model {model_name}"
+    # Suggest launching the first use case the model actually declares (no hardcoded
+    # `chat`). Only add --model if another model shares the app name — an app owned by a
+    # single model (e.g. `camera`) is inferred, so --model would be noise.
+    app = apps[0]
+    shared = sum(app in model_uses(m) for m in available_models()) > 1
+    suffix = f" --model {model_name}" if shared else ""
+    return f"Run it:  rdmca uses {app}{suffix}   (all: rdmca uses --model {model_name})"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RDMCA Progressive Stage Trainer",
@@ -107,7 +124,7 @@ Examples:
     # anything touches the stage registry, so it discovers THIS model's stage plugins.
     from src.config import select_model
 
-    select_model(cfg, args.model)
+    model_name = select_model(cfg, args.model)
     # Precision override (CLI wins over config). Set before the guard/announce so the
     # precision-aware memory estimate reflects the chosen dtype.
     if args.precision:
@@ -177,16 +194,16 @@ Examples:
             print(f"\nStage {args.stage} complete ({tag}).")
             if later:
                 print(f"Next stage: rdmca train{lvl_flag} --stage {later[0]}")
-            print(f"Or chat now: rdmca chat{lvl_flag} --stage {active[-1]}")
+            print(f"Or run it now: {_run_hint(model_name)}")
         elif later:
             print(f"\nNext: rdmca train{lvl_flag} --stage {later[0]}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
-            print(f"Next: rdmca daemon{lvl_flag} --once")
+            print(_run_hint(model_name))
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print("  Options: extend corpus, adjust thresholds, or --resume")
-        print("  See: models/cognition/docs/GUIDE.md")
+        print(f"  See: models/{model_name}/docs/GUIDE.md")
 
 
 if __name__ == "__main__":

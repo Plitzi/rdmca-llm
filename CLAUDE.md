@@ -201,15 +201,25 @@ carpeta común en vez de duplicarlo:
 Nunca copies un helper en dos sitios — muévelo arriba y que ambos lo importen.
 
 **CLI único: `rdmca`.** [scripts/rdmca.py](scripts/rdmca.py) es el ÚNICO punto de
-entrada para el developer: agrupa todo (`prepare`, `tokenizer`, `prepare-mm`, `train`,
-`bench`, `ood`, `plot`, `chat`, `agent`, `camera`, `daemon`, `purge`) y reenvía los args a
-la herramienta real (así `rdmca train --help` muestra los args verdaderos — una sola fuente
-de verdad por comando, sin duplicar argparse). Los comandos que CONSUMEN un modelo (`chat`,
-`agent`, `camera`) resuelven el caso de uso bajo `models/<model>/uses/<app>/` — `--model`
-elige cuál (p. ej. `camera` es de `hands_recognition`). `rdmca info [--model M] [--level L]`
-es model-aware: lista modelos, niveles y stages, y marca qué está preparado/entrenado.
-Selección de modelo con `--model` (override de `cfg["model_name"]`) en los comandos que
-tocan stages.
+entrada para el developer. Agrupa los comandos del FRAMEWORK (`prepare`, `tokenizer`,
+`prepare-mm`, `train`, `bench`, `ood`, `plot`, `daemon`, `purge`, `info`, `uses`) y
+reenvía los args a la herramienta real (así `rdmca train --help` muestra los args
+verdaderos — una sola fuente de verdad por comando, sin duplicar argparse).
+
+Los **casos de uso** (`chat`, `agent`, `camera`, …) **NO son comandos del framework** —
+NO existe un `rdmca chat` global (si ningún modelo chatea, no hay `chat` en ningún lado).
+Pertenecen al modelo y se DESCUBREN en runtime desde `models/<model>/uses/<app>/run_<app>.py`
+(la fuente única es `model_uses(model)` en el registry — el CLI NO los hardcodea). Un modelo
+expone solo los suyos: `cognition` tiene `chat`/`agent`, `hands_recognition` tiene `camera`.
+**Siempre se pasa por `uses`**: `rdmca uses [--model M]` los lista, y `rdmca uses <app>
+[--model M] [args…]` LANZA uno (los args tras `<app>` se reenvían al run script). El modelo
+se INFIERE del app: uno que solo un modelo tiene (p. ej. `camera`) NO necesita `--model`.
+Si VARIOS modelos declaran el mismo nombre de app es ambiguo y `--model` es OBLIGATORIO
+(no se asume nada, ni siquiera `cognition`); el CLI lista los dueños y se niega a lanzar. Un
+`<app>` que no exista en el modelo elegido apunta al modelo que sí lo tiene. Un `rdmca <app>` suelto NO es comando: el CLI enseña la forma `rdmca uses <app>`. El trainer, al terminar, sugiere `rdmca
+uses <app>` del modelo activo (no asume `chat`). `rdmca info [--model M] [--level L]` es
+model-aware: lista modelos, niveles y stages, y marca qué está preparado/entrenado. Selección
+de modelo con `--model` (override de `cfg["model_name"]`) en los comandos que tocan stages.
 
 **Scripts vs internos.** Los scripts en [scripts/](scripts/) son los CLIs del developer
 (envueltos por `rdmca`). Los componentes de runtime/internos NO van en scripts: viven en

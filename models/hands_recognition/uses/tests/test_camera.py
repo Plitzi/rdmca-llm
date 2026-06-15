@@ -2,6 +2,7 @@
 driven with a FAKE cv2 (no hardware), so we cover predict → skeleton overlay → display
 headlessly, plus the selftest and the missing-opencv path."""
 
+import json
 import sys
 import types
 
@@ -147,3 +148,42 @@ def test_main_passes_fps_choice(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run_camera.py", "--fps", "60"])
     assert RC.main() == 0
     assert fake.set_props.get(fake.CAP_PROP_FPS) == 60
+
+
+# ── checkpoint auto-discovery + width matching (the "trained but acts untrained" bug) ──
+def test_resolve_checkpoint_explicit_wins():
+    assert RC._resolve_checkpoint("given.npz", None, None) == "given.npz"
+
+
+def _fake_dist(monkeypatch, tmp_path):
+    """Point model_dist_root at a temp tree (resolved lazily inside _resolve_checkpoint)."""
+    import src.config as C
+
+    root = tmp_path / "hands_recognition"
+    monkeypatch.setattr(C, "model_dist_root", lambda model=None: root)
+    return root / "checkpoints"
+
+
+def test_resolve_checkpoint_autodiscovers_and_prefers_best(monkeypatch, tmp_path):
+    ckpts = _fake_dist(monkeypatch, tmp_path)
+    stage = ckpts / "level0" / "stage1"
+    stage.mkdir(parents=True)
+    (stage / "final.npz").write_bytes(b"x")
+    (stage / "best.npz").write_bytes(b"x")  # best preferred over final
+    got = RC._resolve_checkpoint(None, None, None)
+    assert got is not None and got.endswith("best.npz")
+
+
+def test_resolve_checkpoint_none_when_nothing_trained(monkeypatch, tmp_path):
+    _fake_dist(monkeypatch, tmp_path)  # dir doesn't exist → None (→ random weights)
+    assert RC._resolve_checkpoint(None, None, None) is None
+
+
+def test_hidden_for_checkpoint_reads_audit(tmp_path):
+    (tmp_path / "audit.json").write_text(json.dumps({"model": {"d_model": 64}}))
+    assert RC._hidden_for_checkpoint(str(tmp_path / "final.npz")) == 64
+
+
+def test_hidden_for_checkpoint_defaults_without_audit(tmp_path):
+    assert RC._hidden_for_checkpoint(None) == RC._DEFAULT_HIDDEN
+    assert RC._hidden_for_checkpoint(str(tmp_path / "x.npz")) == RC._DEFAULT_HIDDEN

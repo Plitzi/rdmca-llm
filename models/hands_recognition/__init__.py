@@ -10,7 +10,7 @@ see pose.py), selected with `cfg["model_name"] = "hands_recognition"` (or
 Layout (same shape as any model):
   • pose.py             — HandPoseNet + landmarks/skeleton + ModelSpec (build/loader/eval)
   • stages/             — its curriculum stages (here, the single keypoint-regression one)
-  • uses/camera/        — the live-camera use case overlaying the skeleton (`rdmca camera`)
+  • uses/camera/        — the live-camera use case overlaying the skeleton (`rdmca uses camera`)
 
 Moods/emotions don't apply here (a detector has no conversational state), so configs set
 `moods: false`. Lower `mpjpe` (mean keypoint error) is better.
