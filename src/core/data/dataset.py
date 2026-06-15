@@ -352,7 +352,7 @@ class TextDataset:
                 # The corpus yields NO trainable tokens (empty *.val.jsonl, or a
                 # split whose records all mask out). Re-entering the while-loop
                 # would spin forever and hang next_batch(); end the stream instead
-                # so callers (e.g. _make_val_batches) get StopIteration and fall back.
+                # so callers (e.g. make_val_batches) get StopIteration and fall back.
                 return
 
     def __iter__(self):

@@ -60,7 +60,7 @@ from uses.common import agent
 # Model/tokenizer modules are imported lazily inside load_model() — only AFTER
 # require_backend() has selected the backend — so model classes bind to it.
 # Generation core (sampling, KV-cached decode loop, two-phase <think>/answer)
-# lives in src/inference/generate.py so the chat and agent runtimes share it.
+# lives in uses/common/generate.py so the chat and agent runtimes share it.
 # Re-exported here for backward compatibility (tests + run_agent import via run_chat).
 from uses.common.generate import (  # noqa: F401  (re-exported for tests + run_agent)
     GEN_DEADLINE_S,
@@ -72,7 +72,7 @@ from uses.common.generate import (  # noqa: F401  (re-exported for tests + run_a
 )
 from uses.common.interaction import InterruptGuard, SessionInput
 
-# Model + checkpoint loading lives in src/inference/loading.py so chat and agent
+# Model + checkpoint loading lives in uses/common/loading.py so chat and agent
 # load models identically. Re-exported here (tests + run_agent import via run_chat).
 from uses.common.loading import (  # noqa: F401  (re-exported for tests + run_agent)
     _QUANT_MAX,
@@ -116,12 +116,12 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     # answering "hi" with a broken scratchpad), so default think OFF there.
     _think_arg = getattr(args, "think", "auto")
     if _think_arg == "auto":
-        from src.core.training.stages import STAGE_NAMES
+        from src.models import all_stages
 
         # The <think>/CoT stage is the one named exactly "Reasoning" (stage 5) — NOT
         # stage 4 "Causal and procedural reasoning", which also contains the substring.
         reasoning_stage = next(
-            (s for s, n in STAGE_NAMES.items() if n.lower().strip() == "reasoning"), 5
+            (p.number for p in all_stages() if p.name.lower().strip() == "reasoning"), 5
         )
         _stage = getattr(args, "stage", None)
         if _stage is not None and _stage < reasoning_stage:

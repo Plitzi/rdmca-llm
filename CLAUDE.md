@@ -1,5 +1,23 @@
 # CLAUDE.md
 
+## Cero tech-debt (OBLIGATORIO)
+
+**Tolerancia 0 a deuda técnica.** Todo lo que no se use o no sirva se ELIMINA, no se
+deja "por si acaso":
+- Nada de shims deprecados, aliases "back-compat", re-exports para módulos que ya no
+  existen, parámetros muertos, ramas inalcanzables, ni código comentado. Si algo queda
+  sin usar tras un cambio, BÓRRALO en el mismo cambio (incluido su test si solo existía
+  para cubrir el alias/shim).
+- Una sola fuente de verdad por concepto. Si encuentras dos formas de hacer lo mismo,
+  unifica y elimina la otra; nunca dupliques un helper (súbelo, ver más abajo).
+- Migra a los consumidores en el mismo PR cuando renombres/muevas algo, y borra el
+  nombre viejo — no lo mantengas vivo con un alias.
+- Antes de dar una tarea por terminada: `grep` de nombres/rutas viejas debe quedar
+  VACÍO, y no debe haber imports/símbolos sin usar (Ruff F401/F811 lo detecta).
+
+Al revisar o tocar un área, deja también limpio lo que encuentres alrededor
+(boy-scout rule): incongruencias de nombres, semántica engañosa, y muertos.
+
 ## Linting & formato (OBLIGATORIO)
 
 Este proyecto usa **Ruff** como formateador (equivalente a Prettier) y linter
@@ -124,9 +142,9 @@ Otros puntos clave del refactor:
 - Núcleo de generación en [uses/common/generate.py](uses/common/generate.py) y carga de
   modelo/checkpoint en [uses/common/loading.py](uses/common/loading.py) — son
   CONSUMIDORES (los reusan chat y agent), por eso viven en `uses/`, no en el framework.
-- `src/core/training/stages.py` queda como **shim deprecado** que re-exporta desde las
-  nuevas ubicaciones — no añadas código nuevo ahí. (El antiguo `src/data/graded.py` se
-  ELIMINÓ: acoplaba el core a todos los stages e impedía borrar uno.)
+- La metadata de stages (gates, nombres, rehearsal, lr_scale, freeze point, mood) vive
+  SOLO en los plugins y la sirve `src.models` (registry) — no hay tablas duplicadas. (Los
+  antiguos `src/data/graded.py` y el shim `src/core/training/stages.py` se ELIMINARON.)
 
 ## Convenciones de código (OBLIGATORIO)
 

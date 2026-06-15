@@ -102,8 +102,3 @@ def on_stage_complete(
         if stage == BCF_STAGE:
             train_bcf_head(model, ckpt_dir, precision)
         freeze_model(model, root / "foundational")
-
-
-# Back-compat aliases (old private names).
-_maybe_train_mood_head = maybe_train_mood_head
-_on_stage_complete = on_stage_complete

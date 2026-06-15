@@ -63,8 +63,3 @@ DICT_TIER2: dict[str, tuple] = {
     "quiet": ("a", "making little or no noise"),
 }
 DICT_TIERS = [DICT_TIER1, DICT_TIER2]  # index 0 → level 1, index 1 → levels ≥2
-
-# Backwards-compatible aliases (old graded.py names, still imported by tests).
-_DICT_TIER1 = DICT_TIER1
-_DICT_TIER2 = DICT_TIER2
-_DICT_TIERS = DICT_TIERS

@@ -61,9 +61,10 @@ only the data/params/context differ.
 the cognitive core is frozen permanently. From then on the behavioral stages (8–10)
 train as **LoRA sectors**, the **MoE gate** routes per token (safety sector S7 always
 on, isolated), and **daily consolidation** (learning from operational experience, the
-confidence-gated validation, the human-review queue) is available. The single constant
-`BCF_STAGE = 7` (`src/core/training/stages.py`) drives the cognitive-vs-behavioral split and
-the freeze — there is no per-level special-casing.
+confidence-gated validation, the human-review queue) is available. The freeze point
+(`bcf_stage()` from `src.models`, the stage whose plugin declares `is_freeze_point` — 7
+for cognition) drives the cognitive-vs-behavioral split and the freeze — there is no
+per-level special-casing.
 
 > **Memory (stage 6)** is the cognitive faculty that learns to *recall a fact given in
 > context and use it* — trained on `<mem>…</mem>` blocks of facts + distractors. This is

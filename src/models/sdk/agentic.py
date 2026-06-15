@@ -93,10 +93,3 @@ def hermes_to_transcript(ex: dict) -> str | None:
         elif kind == "result":
             lines.append(f"Observation: {payload}")
     return "\n".join(lines) if saw_call and len(lines) >= 4 else None
-
-
-# Backwards-compatible private aliases (old graded.py names).
-_AGENTIC_SYS = AGENTIC_SYSTEM_PROMPT
-_hermes_tools = hermes_tools
-_hermes_events = hermes_events
-_hermes_to_transcript = hermes_to_transcript

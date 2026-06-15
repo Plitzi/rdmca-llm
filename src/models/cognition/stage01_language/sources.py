@@ -12,9 +12,6 @@ import re
 from collections.abc import Iterator
 
 from src.models.cognition.stage01_language.offline import (
-    _COMPARATIVE,  # noqa: F401  (re-exported for the graded.py shim)
-    _PAST_IRREG,  # noqa: F401  (re-exported for the graded.py shim + stage test)
-    _PLURAL_IRREG,  # noqa: F401  (re-exported for the graded.py shim + stage test)
     gen_basic_chat,
     gen_definitions,
     gen_grammar,

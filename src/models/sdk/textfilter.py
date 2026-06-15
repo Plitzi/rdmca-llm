@@ -48,8 +48,3 @@ def passes_filter(text: str, spec: dict | None) -> bool:
     if "max_word_len" in spec and any(len(w) > spec["max_word_len"] for w in text.split()):
         return False
     return not ("max_grade" in spec and flesch_kincaid_grade(text) > spec["max_grade"])
-
-
-# Backwards-compatible private aliases (old graded.py names, still imported by tests).
-_stable_hash = stable_hash
-_syllables = syllable_count

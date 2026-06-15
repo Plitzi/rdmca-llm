@@ -1,5 +1,5 @@
 """
-Tests for the --resume fast-skip token-length index (src/data/loader.py):
+Tests for the --resume fast-skip token-length index (src/core/data/loader.py):
 
   - skip() with a loaded index reproduces the EXACT downstream stream position
     (same records, same batches) as a plain run — without re-tokenizing;

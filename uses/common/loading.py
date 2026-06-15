@@ -53,7 +53,7 @@ def _apply_quant(model, quant) -> None:
     """Quantize model weights to a given bit-width for limited hardware; no-op for
     None/'none'. `quant` may be an int bit-width or a raw --quant string (parsed
     here). Real grouped-affine quantization on both backends at any 2–8 bit width
-    — see engine.quantize in src/backend/{mlx,torch}_backend.py."""
+    — see engine.quantize in src/core/backend/{mlx,torch}_backend.py."""
     bits = parse_quant(quant)
     if bits is None:
         return

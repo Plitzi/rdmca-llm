@@ -1,11 +1,9 @@
 """
 Stage plugin contract — the SINGLE shape every curriculum stage follows.
 
-A stage used to be described by scattered dicts (gates, names, rehearsal, lr_scale,
-mood set, freeze point) in src/training/stages.py, plus data generators in
-src/data/graded.py and structure in the level YAMLs. Now each stage is a
-self-contained plugin: one `StagePlugin` instance that carries its metadata AND its
-data sources, lives in its own package under src/models/<model>/stageNN_<slug>/, and is
+Each stage is a self-contained plugin: one `StagePlugin` instance that carries its
+metadata (gates, name, rehearsal, lr_scale, mood set, freeze point) AND its data
+sources, lives in its own package under src/models/<model>/stageNN_<slug>/, and is
 discovered automatically (see registry.py). Adding a stage = drop a new package;
 nothing else needs editing.
 """

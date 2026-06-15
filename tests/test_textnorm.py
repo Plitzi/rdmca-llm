@@ -1,5 +1,5 @@
 """
-Tests for the ingestion normalization + garbage gate (src/data/textnorm.py):
+Tests for the ingestion normalization + garbage gate (src/core/data/textnorm.py):
 
   - format noise is normalized (NFKC, smart quotes/dashes → ASCII, control chars,
     inline-whitespace collapse) while CONTENT (incl. accents) is preserved;

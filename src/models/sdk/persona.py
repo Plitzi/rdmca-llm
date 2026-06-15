@@ -47,11 +47,3 @@ def prepend_system(text: str, persona: str, mood: str = "neutral") -> str:
     tag = mood_system_phrase(mood)
     system_line = f"System: {persona}" + (f" {tag}" if tag else "")
     return f"{system_line}\n{text}"
-
-
-# Backwards-compatible private aliases (old graded.py names, still imported by tests).
-_SYSTEM_PERSONAS = SYSTEM_PERSONAS
-_STORY_PROMPTS = STORY_PROMPTS
-_hash01 = hash01
-_persona_for = persona_for
-_prepend_system = prepend_system

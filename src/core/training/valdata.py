@@ -55,7 +55,3 @@ def make_val_batches(stage: int, cfg: dict, train_loader, n: int = 8):
         f"stage-{stage} batches (completion-masked); a stage that forgets conversation fails"
     )
     return mixed
-
-
-# Back-compat alias (old private name).
-_make_val_batches = make_val_batches

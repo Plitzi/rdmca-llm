@@ -203,7 +203,7 @@ cognitive core** is seven developmental **stages** (1 Language · 2 Perception �
 so neither competence nor values drift. Three **behavioral** stages (8 tool use · 9 MCP ·
 10 skills) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
 Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `uses/common/agent.py`
-(see [uses/chat/](../../uses/chat/)). Data is graded per level via `src/core/data/graded.py`.
+(see [uses/chat/](../../uses/chat/)). Data is graded per level by each stage plugin's own sources (`src/models/<model>/stageNN_*/sources.py`), resolved by the registry.
 
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to

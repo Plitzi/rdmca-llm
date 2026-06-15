@@ -171,7 +171,7 @@ def train_spm(
     import tempfile
     import threading
 
-    # Single source of truth (src/modalities/vocab.py): per-language tags +
+    # Single source of truth (src/core/modalities/vocab.py): per-language tags +
     # modality boundaries + every stage's control delimiters (<think>, <tool_call>,
     # …). Registered as user-defined symbols so they tokenize atomically instead of
     # BPE-splitting into combos the corpus never contains. New stage marker → add it
@@ -295,7 +295,7 @@ def show_summary(
 # ── Multimodal VQ-VAE tokenizers (image + audio) ──────────────────────────────
 # Trained after text by a single command. Each modality is OPTIONAL: with no data
 # for it, it is SKIPPED rather than failing — text is the only required tokenizer.
-# The training loops themselves live in src/modalities/vqvae_train.py.
+# The training loops themselves live in src/core/modalities/vqvae_train.py.
 AUDIO_OUT = "dist/tokenizer/audio_vqvae.npz"
 IMAGE_OUT = "dist/tokenizer/image_vqvae.npz"
 IMG_SIZE = 32  # CIFAR-scale default

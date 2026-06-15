@@ -66,9 +66,3 @@ def cycle_records(records: list[dict], n: int, seed: int = 1) -> Iterator[dict]:
             produced += 1
             if produced >= n:
                 return
-
-
-# Backwards-compatible private aliases (old graded.py names, still imported by tests).
-_blend = blend
-_interleave = interleave
-_cycle_records = cycle_records

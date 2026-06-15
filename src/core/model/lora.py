@@ -156,8 +156,3 @@ def masked_sector_update(model, sector_id: int, loss_fn, optimizer) -> tuple:
 
     B.engine.freeze_all(model)  # restore: nothing trainable between cycles
     return B.engine.item(loss), gnorm
-
-
-# Backwards-compatible alias for older call sites / Implementation Guide naming.
-def apply_masked_update(model, sector_id: int, loss_fn, optimizer) -> tuple:
-    return masked_sector_update(model, sector_id, loss_fn, optimizer)

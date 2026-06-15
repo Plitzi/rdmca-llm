@@ -151,7 +151,7 @@ def mood_probs(model, tokenizer, head: MoodHead, text: str, seq_len: int = 128):
 
 
 # ── Training data + end-to-end training ───────────────────────────────────────
-# Used by the normal training pipeline (train_stage._on_stage_complete). The mood
+# Used by the normal training pipeline (heads.on_stage_complete). The mood
 # head is a cheap probe over the frozen core, so it is trained at each cognitive
 # stage's completion — no separate manual step (or script) needed.
 

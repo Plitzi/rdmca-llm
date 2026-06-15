@@ -1,7 +1,7 @@
 """
-Stage registry parity tests — lock the plugin metadata to the values the scattered
-dicts (old src/training/stages.py) and the level configs used to hardcode, so the
-plugin migration can't silently change curriculum behavior.
+Stage registry parity tests — lock the plugin metadata to the values the curriculum
+used to hardcode in scattered dicts and level configs, so the plugin migration can't
+silently change curriculum behavior.
 """
 
 import sys
@@ -92,16 +92,3 @@ def test_active_stages_respects_entry_level():
     assert {p.number for p in stages.active_stages(1)} == set(range(1, 11))
     # a hypothetical level 0 sees only the entry_level-0 stages.
     assert {p.number for p in stages.active_stages(0)} == {5, 8, 9, 10}
-
-
-def test_shim_parity_with_registry():
-    """The deprecated src/training/stages.py shim must reproduce the old dicts."""
-    from src.core.training import stages as shim
-
-    assert shim.BCF_STAGE == 7
-    assert shim.STAGE_NAMES == EXPECTED_NAMES
-    assert set(shim.MOOD_TRAIN_STAGES) == {1, 7}
-    # tables hold only the non-default entries, as the hand-written ones did
-    assert shim.STAGE_REHEARSAL == {2: 0.35, 3: 0.45, 4: 0.35, 5: 0.45, 6: 0.35, 7: 0.35}
-    assert shim.STAGE_LR_SCALE == {2: 0.7, 3: 0.5, 4: 0.7, 5: 0.5, 6: 0.7, 7: 0.7}
-    assert shim.STAGE_GATES[1] == ("blim_accuracy", 0.70, "Language — BLiMP grammaticality")

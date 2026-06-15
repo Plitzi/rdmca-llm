@@ -150,18 +150,20 @@ def test_gate_decision_any_gain_is_a_new_best():
 
 
 def test_narrow_stages_have_gentler_lr_scale():
-    """Per-stage lr_scale/rehearsal are STAGE properties (apply at EVERY level) and live in
-    src/training/stages.py, NOT each level's yaml. The narrow eroders (3 arithmetic, 5 CoT)
-    train the SHARED core at a reduced LR so they nudge it instead of overwriting
+    """Per-stage lr_scale/rehearsal are STAGE properties (apply at EVERY level), declared on
+    each stage plugin (registry), NOT each level's yaml. The narrow eroders (3 arithmetic,
+    5 CoT) train the SHARED core at a reduced LR so they nudge it instead of overwriting
     conversation; stage 1 (conversation) trains at full LR. The schedule scales linearly."""
     from src.core.training import trainer as T
-    from src.core.training.stages import DEFAULT_LR_SCALE, STAGE_LR_SCALE, STAGE_REHEARSAL
+    from src.models import get_stage
 
-    assert STAGE_LR_SCALE.get(1, DEFAULT_LR_SCALE) == 1.0  # conversation: full LR
-    assert STAGE_LR_SCALE[3] <= 0.5  # arithmetic: gentlest
-    assert STAGE_LR_SCALE[5] <= 0.5  # CoT: gentlest
-    assert STAGE_LR_SCALE[3] < STAGE_LR_SCALE[2] <= 1.0
-    assert STAGE_REHEARSAL[3] >= 0.45 and STAGE_REHEARSAL[5] >= 0.45  # strongest rehearsal
+    lr = {n: get_stage(n).lr_scale for n in range(1, 6)}
+    rehearsal = {n: get_stage(n).rehearsal_fraction for n in range(1, 6)}
+    assert lr[1] == 1.0  # conversation: full LR
+    assert lr[3] <= 0.5  # arithmetic: gentlest
+    assert lr[5] <= 0.5  # CoT: gentlest
+    assert lr[3] < lr[2] <= 1.0
+    assert rehearsal[3] >= 0.45 and rehearsal[5] >= 0.45  # strongest rehearsal
     # A level's yaml may still OVERRIDE per stage; absent that, the stage default applies.
     from src.core.config import load_config, resolve_config_path
 

@@ -13,7 +13,7 @@ Where the data comes from is per-source:
   - Lower levels use each stage plugin's OWN simple/graded sources (tinystories,
     dialogue, arithmetic, analogies, agentic/MCP/skills, reasoning) — small,
     conversational/structured (see src/models/<model>/stageNN_*/sources.py).
-  - Higher levels add the FULL external corpora (src/data/corpora.py: Wikipedia per
+  - Higher levels add the FULL external corpora (src/core/data/corpora.py: Wikipedia per
     language, ARC, GSM8K, MATH, ethics), with Wikipedia routed to a stage by category
     keywords (STAGE_KEYWORDS) and prose readability-graded (Flesch-Kincaid).
 
