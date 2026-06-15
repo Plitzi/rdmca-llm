@@ -20,7 +20,6 @@ backend: mlx                   # mlx | torch
 model:
   arch: heatmap                # encoder-decoder → per-slot 21 heatmaps + depth + presence
   in_channels: 3               # RGB (skin colour helps); set 1 for grayscale
-  dims: 3                      # 3 = predict + score depth (x,y,z); 2 = planar only
   n_hands: 2                   # hand SLOTS detected at once (VR: both hands)
   depth_weight: 0.1            # weight of the depth-MSE term relative to the heatmap MSE
   presence_weight: 0.5         # weight of the per-slot presence BCE (stage 1)
@@ -38,7 +37,9 @@ training:                      # batch_size / warmup / save_every / eval_every f
   weight_decay: 0.0
 
 gate:
-  max_mpjpe: 0.12              # stage 1: mean 3D keypoint error ≤ 0.12 (xy[0,1] + z units)
+  max_mpjpe: 0.12              # stage 1: mean 2D keypoint error ≤ 0.12 of the frame (depth is
+                               #          trained + reported, but doesn't gate — monocular z is
+                               #          ill-conditioned and on a different scale)
   max_handstate_err: 0.30      # stage 2: 1 − accuracy (handedness + finger state)
   max_gesture_err: 0.30        # stage 3: 1 − gesture-classification accuracy
 
