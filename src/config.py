@@ -47,30 +47,50 @@ def tokenizer_info_path(model: str | None = None) -> Path:
 # Educational LEVELS replace the old hardware profiles. A level's size is set by
 # the INFORMATION it teaches (vocab/context/width/depth); the hardware only
 # limits how high a level you can run. Levels 1..5 = preescolar..universidad.
-LEVELS_DIR = "configs/levels"
+#
+# Level configs are PER-MODEL: each model owns its ladder under
+# models/<model>/configs/levels/, so multiple models never share one global folder.
+# The repeated boilerplate (training cadence, size tiers) is factored into the level
+# CONSTRUCTOR (src/levels.py), pulled in by a config's `tier:` key.
 DEFAULT_LEVEL = 2  # primaria — a sensible laptop default
+DEFAULT_MODEL = "cognition"  # the default model whose levels back the module-level bounds
 
 
-def available_levels() -> list[int]:
-    """All level numbers present as `configs/levels/level{N}.yaml`, sorted.
-    Single source of truth for the level range — drop in a new `levelN.yaml`
-    and it is recognized automatically (no code change needed)."""
-    import glob
+def level_config_dir(model: str | None = None) -> Path:
+    """Where a model's level configs live: models/<model>/configs/levels/ (active model
+    by default). Single source of truth for the per-model level layout."""
+    if model is None:
+        from src.plugins import active_model
+
+        model = active_model()
+    return Path("models") / model / "configs" / "levels"
+
+
+def available_levels(model: str | None = None) -> list[int]:
+    """All level numbers present as `models/<model>/configs/levels/level{N}.yaml`, sorted.
+    Drop in a new `levelN.yaml` under a model and it is recognized automatically."""
     import re
 
     levels = []
-    for path in glob.glob(f"{LEVELS_DIR}/level*.yaml"):
-        m = re.search(r"level(\d+)\.yaml$", path)
-        if m:
-            levels.append(int(m.group(1)))
+    directory = level_config_dir(model)
+    if directory.is_dir():
+        for path in directory.glob("level*.yaml"):
+            m = re.match(r"level(\d+)\.yaml$", path.name)
+            if m:
+                levels.append(int(m.group(1)))
     return sorted(levels)
 
 
-# Global level bounds, derived from the configs present (fallbacks if none yet).
-_LEVELS = available_levels()
+def level_config_path(level: int, model: str | None = None) -> str:
+    """Path to a level's config YAML (models/<model>/configs/levels/level{N}.yaml)."""
+    return str(level_config_dir(model) / f"level{int(level)}.yaml")
+
+
+# Global level bounds, derived from the DEFAULT model's configs (fallbacks if none yet).
+_LEVELS = available_levels(DEFAULT_MODEL)
 MIN_LEVEL = _LEVELS[0] if _LEVELS else 0  # level 0 = throwaway smoke/test tier
 MAX_LEVEL = _LEVELS[-1] if _LEVELS else 5
-DEFAULT_CONFIG = f"{LEVELS_DIR}/level{DEFAULT_LEVEL}.yaml"
+DEFAULT_CONFIG = level_config_path(DEFAULT_LEVEL, DEFAULT_MODEL)
 
 # Single source of truth: the registry's builder map. Adding a backend there now
 # updates this automatically (no second list to keep in sync).
@@ -80,20 +100,19 @@ SUPPORTED_BACKENDS = _available_backends()
 SUPPORTED_PRECISIONS = ("fp32", "bf16", "fp16")
 
 
-def level_config_path(level: int) -> str:
-    """Path to a level's config YAML (configs/levels/level{N}.yaml)."""
-    return f"{LEVELS_DIR}/level{int(level)}.yaml"
-
-
-def resolve_config_path(config: str | None = None, level: int | None = None) -> str:
-    """A `--level N` wins over an explicit `--config path`; else the default
-    level. Levels replace the old `--profile` selector."""
+def resolve_config_path(
+    config: str | None = None, level: int | None = None, model: str | None = None
+) -> str:
+    """A `--level N` (resolved under `model`'s own levels) wins over an explicit
+    `--config path`; else the default level. Levels are per-model, so the model picks
+    which ladder `--level` indexes."""
     if level is not None:
         lvl = int(level)
-        levels = available_levels()
+        levels = available_levels(model)
         if lvl not in levels:
-            raise ValueError(f"Level {lvl} not found — available: {levels}.")
-        return level_config_path(lvl)
+            who = model or DEFAULT_MODEL
+            raise ValueError(f"Level {lvl} not found for model '{who}' — available: {levels}.")
+        return level_config_path(lvl, model)
     return config or DEFAULT_CONFIG
 
 
@@ -132,22 +151,32 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config(path: str) -> dict:
-    """Load a level config, deep-merged OVER the shared `_base.yaml` in the same dir (if
-    present), so each level declares only what DIFFERS — the shared training/model/moe
-    defaults and the curriculum structure (stage names + entry_levels) live once in the
-    base. The level's values always win. A config opts out with `inherit_base: false`
-    (e.g. the level-0 smoke tier, which has its own minimal structure)."""
+    """Load a level config and layer the shared defaults UNDER it (the config always wins),
+    so each level declares only what DIFFERS. Two independent layers, lowest precedence first:
+
+      1. `tier: <name>` → the level CONSTRUCTOR's scaffold (src/levels.py) — the boilerplate
+         repeated across models (training cadence, size tier, resource estimates);
+      2. `inherit_base: true` (default) → the sibling `_base.yaml` (the MODEL's shared base —
+         e.g. cognition's curriculum structure + moe defaults).
+
+    A config opts out of the base with `inherit_base: false` (e.g. a model whose base differs
+    entirely); `tier` is independent of that. Unknown/absent tier contributes nothing."""
+    from src.levels import scaffold
+
     p = Path(path)
     with open(p) as f:
         cfg = yaml.safe_load(f) or {}
+
+    merged: dict = scaffold(cfg.get("tier"))  # layer 1 (lowest precedence)
     base_path = p.parent / BASE_CONFIG_NAME
     if cfg.get("inherit_base", True) and base_path.exists() and p.resolve() != base_path.resolve():
         with open(base_path) as f:
             base = yaml.safe_load(f) or {}
         base.pop("inherit_base", None)
-        cfg = _deep_merge(base, cfg)
-    cfg.pop("inherit_base", None)
-    return cfg
+        merged = _deep_merge(merged, base)  # layer 2 (base wins over scaffold)
+    merged = _deep_merge(merged, cfg)  # the level config always wins
+    merged.pop("inherit_base", None)
+    return merged
 
 
 def get_languages(cfg: dict) -> list[str]:

@@ -338,7 +338,7 @@ to `data/runtime/ltss.db`.
 
 ## 11. Start here — the Level 1 experiment
 
-Level 1 (`configs/levels/level1.yaml`) is the smallest usable base: it trains fast on a
+Level 1 (`models/cognition/configs/levels/level1.yaml`) is the smallest usable base: it trains fast on a
 laptop and already **holds a basic conversation and does simple arithmetic**. For what
 each level is and **exactly what it adds** over the previous one (sizes, active stages,
 the freeze point), see **[levels.md](levels.md)**. Train the stages **in order** (each
@@ -414,7 +414,7 @@ python scripts/purge.py --all --hf-cache --yes     # wipe everything incl. HF ca
 
 The model uses MRL (nested embeddings). A large model can be **truncated down** to a
 smaller tier at inference (not the other way around): train at the size you will use.
-**Levels** (`configs/levels/`) set the size from the information taught; a startup
+**Levels** (`models/cognition/configs/levels/`) set the size from the information taught; a startup
 **resource guard** refuses a level that won't fit your hardware (`--force` overrides).
 For the per-level breakdown — sizes, active stages and exactly what each level adds —
 see **[levels.md](levels.md)**; architecture details in

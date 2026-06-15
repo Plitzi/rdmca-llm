@@ -20,8 +20,10 @@ from models.cognition.uses.common import agent
 from src.modalities.text import BOS_ID
 
 
-def _resolve_config(level):
-    return f"configs/levels/level{level}.yaml"
+def _resolve_config(level, model=None):
+    from src.config import level_config_path
+
+    return level_config_path(level, model)
 
 
 def answer(model, mcfg, tokenizer, prompt, lang="en", max_new=64, temperature=0.0):
@@ -95,7 +97,7 @@ def main():
     p.add_argument("--model", default=None, help="Model to probe (default: cognition)")
     p.add_argument("--maxtok", type=int, default=64)
     args = p.parse_args()
-    args.config = _resolve_config(args.level)
+    args.config = _resolve_config(args.level, args.model)
     from src.config import load_config, select_model
 
     select_model(load_config(args.config), args.model)

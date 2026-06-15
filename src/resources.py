@@ -181,7 +181,7 @@ def estimate_for(cfg: dict, mode: str) -> float:
 
 def max_runnable_level(mode: str = "train") -> int | None:
     """Highest level whose `mode` estimate fits in available memory (× SAFETY).
-    Returns None if even level 1 does not fit. Scans configs/levels/levelN.yaml."""
+    Returns None if even level 1 does not fit. Scans the active model's level configs."""
     from src.config import available_levels, level_config_path, load_config
 
     budget = available_memory_gb() * SAFETY

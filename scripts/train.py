@@ -118,7 +118,7 @@ Examples:
 
     from src.config import resolve_config_path
 
-    cfg_path = resolve_config_path(args.config, args.level)
+    cfg_path = resolve_config_path(args.config, args.level, args.model)
     cfg = load_config(cfg_path)
     # Select the active model (CLI --model wins; registry default = cognition) before
     # anything touches the stage registry, so it discovers THIS model's stage plugins.

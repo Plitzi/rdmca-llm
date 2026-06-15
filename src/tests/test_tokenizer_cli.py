@@ -22,10 +22,12 @@ def _load_tokenizer_cli():
 
 def test_missing_data_points_at_per_model_path_and_rdmca(monkeypatch, capsys):
     cli = _load_tokenizer_cli()
-    # hands_recognition has no prepared text corpus → the data check must fail with the
-    # PER-MODEL path and the rdmca-CLI suggestion (never the old hardcoded path/command).
+    # hands_recognition has no prepared text corpus (it's a vision model) → the data check
+    # must fail with the PER-MODEL path and the rdmca-CLI suggestion (never the old
+    # hardcoded path/command). hands uses its own --config (per-model levels), not --level.
+    cfg = str(_REPO / "models" / "hands_recognition" / "configs" / "hands2d.yaml")
     monkeypatch.setattr(
-        cli.sys, "argv", ["train_tokenizer", "--level", "1", "--model", "hands_recognition"]
+        cli.sys, "argv", ["train_tokenizer", "--config", cfg, "--model", "hands_recognition"]
     )
     with pytest.raises(SystemExit):
         cli.main()

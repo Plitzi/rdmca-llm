@@ -358,7 +358,7 @@ def main():
     args = parser.parse_args()
 
     # Languages: --lang override > config(model.languages) > ['en']
-    cfg = load_config(resolve_config_path(args.config, args.level))
+    cfg = load_config(resolve_config_path(args.config, args.level, args.model))
     # Select the active model so the stage-1 data dir resolves under it.
     from src.config import select_model
 

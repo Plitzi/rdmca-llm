@@ -248,15 +248,17 @@ def _cmd_info(rest: list[str]) -> int:
     args = ap.parse_args(rest)
 
     models = _available_models()
-    levels = available_levels()
-    print(f"Models  ({len(models)}): " + ", ".join(models))
-    print(f"Levels  ({len(levels)}): " + ", ".join(map(str, levels)))
-
     model = args.model or "cognition"
     if model not in models:
+        print(f"Models  ({len(models)}): " + ", ".join(models))
         print(f"\nUnknown model '{model}'. Available: {', '.join(models)}")
         return 2
     set_active_model(model)
+    # Levels are PER-MODEL — list this model's ladder (a model may use a single --config
+    # instead of numbered levels, e.g. hands_recognition → none).
+    levels = available_levels(model)
+    print(f"Models  ({len(models)}): " + ", ".join(models))
+    print(f"Levels of '{model}'  ({len(levels)}): " + (", ".join(map(str, levels)) or "—"))
     print(f"\nModel '{model}' — stages:")
     try:
         stages = all_stages()

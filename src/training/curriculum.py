@@ -98,7 +98,7 @@ def cosine_lr(step: int, base_lr: float, min_lr: float, warmup: int, total: int)
 
 
 def load_config(path: str) -> dict:
-    # Single implementation (deep-merges configs/levels/_base.yaml so levels declare
+    # Single implementation (deep-merges the model's configs/levels/_base.yaml so levels declare
     # only their diffs) lives in src.config — delegate so the two never diverge.
     from src.config import load_config as _load_config
 

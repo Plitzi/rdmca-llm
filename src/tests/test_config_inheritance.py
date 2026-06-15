@@ -1,5 +1,5 @@
 """
-Level-config inheritance from configs/levels/_base.yaml.
+Level-config inheritance from the model's configs/levels/_base.yaml.
 
 Levels declare only their diffs; load_config deep-merges them over the shared base. This
 guards two things:
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from src.config import _deep_merge, level_config_path, load_config
+from src.config import _deep_merge, level_config_dir, level_config_path, load_config
 
 SNAP = json.loads((Path(__file__).parent / "fixtures" / "level_configs_snapshot.json").read_text())
 
@@ -41,7 +41,7 @@ def test_every_level_resolves_to_its_frozen_snapshot():
 def test_levels_inherit_shared_base_blocks():
     """A production level (1) inherits the shared moe/skip_gate/training knobs + the
     curriculum stage structure from the base even if its own yaml omits them."""
-    base = yaml.safe_load((Path("configs/levels/_base.yaml")).read_text())
+    base = yaml.safe_load((level_config_dir() / "_base.yaml").read_text())
     cfg = load_config(level_config_path(1))
     assert cfg["moe"] == base["moe"]  # full moe block from base
     assert cfg.get("skip_gate") is False

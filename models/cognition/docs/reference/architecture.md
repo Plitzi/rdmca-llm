@@ -4,7 +4,7 @@
 
 Decoder-only transformer (GPT-style) with RoPE, RMSNorm (pre-norm), SwiGLU FFN and an
 MRL (Matryoshka) loss over nested dims. The concrete size is set by the **level**
-(`configs/levels/level{0..5}.yaml`) — the size follows the *information* the level
+(`models/cognition/configs/levels/level{0..5}.yaml`) — the size follows the *information* the level
 teaches, from d_model=256 (level 1) to d_model=768 (level 5) (plus a tiny d_model=64
 level 0 for smoke tests). The output projection is **weight-tied** to the input
 embedding (a single nested `[vocab, d_model]` matrix serves input lookup and output
@@ -195,7 +195,7 @@ Checkpoints: `dist/<model>/checkpoints/level<N>/stage<N>/`, frozen core at
 > [cognition's levels.md](../levels.md).** This section covers only
 > the *architectural* mechanics behind levels; the per-level sizes/stages/data live in that doc.
 
-A level (`configs/levels/level{0..5}.yaml`, `--level N`) sets the model size from the
+A level (`models/cognition/configs/levels/level{0..5}.yaml`, `--level N`) sets the model size from the
 **information** it teaches (the hardware only caps how high you can run). The **frozen
 cognitive core** is seven developmental **stages** (1 Language · 2 Perception ·
 3 Abstraction · 4 Causal · 5 Reasoning · 6 Memory · 7 Ethics+BCF), present at every level

@@ -1,6 +1,6 @@
 # RDMCA Levels — what each level is and exactly what it adds
 
-A **level** (`configs/levels/level{0..5}.yaml`, selected with `--level N`) sets the
+A **level** (`models/cognition/configs/levels/level{0..5}.yaml`, selected with `--level N`) sets the
 model size, the graded-data complexity/budget and the context window. The guiding
 rule: **a level's size follows the *information* it must learn, not the hardware** —
 the hardware only caps *how high* a level you can run (the startup resource guard

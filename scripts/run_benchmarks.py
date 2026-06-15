@@ -270,7 +270,7 @@ def main():
     from src.config import load_config, resolve_config_path, select_model
     from src.modalities.text import TextTokenizer
 
-    _cfg_path = resolve_config_path(None, args.level)
+    _cfg_path = resolve_config_path(None, args.level, args.model)
     _active_model = select_model(load_config(_cfg_path), args.model)
     la = Namespace(
         config=_cfg_path,
