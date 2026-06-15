@@ -335,6 +335,10 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             f"max_passes={max_passes} early_stop=patience{patience}/δ{min_delta}"
         )
 
+        # Seed loop-carried values so the final dashboard update is safe even when the
+        # loop never runs — e.g. --resume on a stage that ALREADY hit its budget.
+        acc_loss = 0.0
+        lr = cosine_lr(step, base_lr, min_lr, warmup, total_steps)
         while tokens_seen < target:
             # Update learning rate (per-stage scaled base/min — see lr_scale)
             lr = cosine_lr(step, base_lr, min_lr, warmup, total_steps)

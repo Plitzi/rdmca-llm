@@ -108,14 +108,16 @@ def write_stage_audit(
         "precision": precision,
         "seed": seed,
         "command": "python " + " ".join(sys.argv),
+        # Geometry is recorded best-effort: the audit must work for ANY model, not just
+        # the text transformer — a non-text model (e.g. hand-pose) has no heads/vocab/mrl.
         "model": {
             "params": int(model.count_params()),
-            "d_model": model_cfg.d_model,
-            "n_layers": model_cfg.n_layers,
-            "n_heads": model_cfg.n_heads,
-            "vocab_size": model_cfg.vocab_size,
-            "context_len": model_cfg.context_len,
-            "mrl_dims": list(model_cfg.mrl_dims),
+            "d_model": getattr(model_cfg, "d_model", None),
+            "n_layers": getattr(model_cfg, "n_layers", None),
+            "n_heads": getattr(model_cfg, "n_heads", None),
+            "vocab_size": getattr(model_cfg, "vocab_size", None),
+            "context_len": getattr(model_cfg, "context_len", None),
+            "mrl_dims": list(getattr(model_cfg, "mrl_dims", []) or []),
         },
         "hparams": {
             "lr": tcfg.get("lr"),
@@ -146,6 +148,9 @@ def write_stage_audit(
         },
     }
     with contextlib.suppress(OSError):
+        # The audit is the FIRST thing written, before any checkpoint creates the dir —
+        # ensure it exists so the context isn't silently dropped (it was, on fresh runs).
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
         (ckpt_dir / "audit.json").write_text(json.dumps(rec, indent=2))
     return rec
 

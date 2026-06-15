@@ -26,9 +26,10 @@ python models/cognition/uses/chat/run_chat.py      --level 1 --stage 1
 The level sets the model size, the data complexity and the resource use — pick the
 highest your hardware can run (a startup guard refuses a level that won't fit).
 
-➡️ **Full step-by-step guide: [docs/GUIDE.md](docs/GUIDE.md)** (setup → backend/precision
-→ languages → data → tokenizers → cognitive core (stages 1-7) → freeze/BCF →
-behavioral stages (8 tool/9 MCP/10 skills) → chat text/image/audio → daily consolidation).
+➡️ **Full step-by-step guide: [models/cognition/docs/GUIDE.md](models/cognition/docs/GUIDE.md)**
+(setup → backend/precision → languages → data → tokenizers → cognitive core (stages 1-7) →
+freeze/BCF → behavioral stages (8 tool/9 MCP/10 skills) → chat text/image/audio → daily
+consolidation). Docs are split per model — see the [docs index](docs/README.md).
 
 ---
 
@@ -52,18 +53,25 @@ through **1 Preescolar · 2 Primaria · 3 Secundaria · 4 Bachillerato · 5 Univ
 each level grows the model and/or activates a new cognitive faculty (Language/Patterns/
 Arithmetic/Reasoning from L1, Causal at L3, Ethics+freeze at L4).
 
-➡️ **See [docs/levels.md](docs/levels.md)** — the single source of truth for per-level
-sizes, active stages and **exactly what each level adds** over the previous one.
+➡️ **See [models/cognition/docs/levels.md](models/cognition/docs/levels.md)** — the single
+source of truth for per-level sizes, active stages and **exactly what each level adds**.
 
 ---
 
 ## Documentation
 
+Docs are split **framework vs model** (see the [docs index](docs/README.md)):
+
+The **framework** (plugin system, `ModelSpec` seam, how to add a model) is in
+[CLAUDE.md](CLAUDE.md); model-specific docs (incl. architecture + papers) live with the model.
+
 | Doc | Contents |
 |---|---|
-| [docs/GUIDE.md](docs/GUIDE.md) | Single step-by-step guide (init → train → use → consolidate) |
-| [docs/reference/architecture.md](docs/reference/architecture.md) | Model, sectors, unified vocab, structure, scaling |
-| [docs/papers/](docs/papers/) | Theory paper + implementation guide (reference) |
+| [models/cognition/docs/GUIDE.md](models/cognition/docs/GUIDE.md) | **cognition**: step-by-step (init → train → use → consolidate) |
+| [models/cognition/docs/levels.md](models/cognition/docs/levels.md) | **cognition**: the per-level curriculum |
+| [models/cognition/docs/reference/architecture.md](models/cognition/docs/reference/architecture.md) | **cognition**: model, sectors, unified vocab, scaling |
+| [models/cognition/docs/papers/](models/cognition/docs/papers/) | **cognition**: theory paper + implementation guide |
+| [models/hands_recognition/docs/GUIDE.md](models/hands_recognition/docs/GUIDE.md) | **hands_recognition**: camera use (FPS/skeleton) + training |
 
 ## Tests
 

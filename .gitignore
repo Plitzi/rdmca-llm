@@ -58,8 +58,12 @@ data/runtime/experiences.jsonl
 *.swp
 *.swo
 
-# ── Test ───────────────────────────────────────────────────────────────────────
+# ── Test / coverage ──────────────────────────────────────────────────────────
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 
 # ── Secrets / local env ──────────────────────────────────────────────────────
 # Local environment (secrets like HF_TOKEN). .env.example is the tracked template.

@@ -195,7 +195,11 @@ def build_spec(cfg: dict):
 
     def evaluate(model, stage, val_batches=None, cfg=None, log=print, step=None):
         B.engine.set_eval(model)
-        errs = [mean_keypoint_error(model(f), k) for f, k in (val_batches or [])]
+        # The trainer hands us its raw val batches (numpy from next_batch); wrap them so
+        # the metric works whoever the caller is (trainer or a direct unit test).
+        errs = [
+            mean_keypoint_error(model(ops.array(f)), ops.array(k)) for f, k in (val_batches or [])
+        ]
         B.engine.set_train(model)
         score = float(np.mean(errs)) if errs else float("inf")
         threshold = float(((cfg or {}).get("gate", {}) or {}).get("max_mpjpe", 0.05))

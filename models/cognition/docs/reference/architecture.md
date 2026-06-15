@@ -179,13 +179,11 @@ rdmca-llm/
 │   ├── agent/run_agent.py      Agentic tool loop (Action/Observation)       [cognition]
 │   └── camera/run_camera.py    Live hand-skeleton overlay        [hands_recognition]
 ├── src/consolidation/daemon.py     Daily consolidation daemon (wired)
-└── docs/
-    ├── GUIDE.md                Single step-by-step guide
-    ├── reference/architecture.md   This file
-    └── papers/                 Theory paper + implementation guide
+├── docs/                       FRAMEWORK docs (index, FAQ, future-features)
+└── models/cognition/docs/      cognition's docs (this file, GUIDE, levels, papers)
 ```
 
-Checkpoints: `dist/checkpoints/level<N>/stage<N>/`, frozen core at
+Checkpoints: `dist/checkpoints/<model>/level<N>/stage<N>/`, frozen core at
 `.../foundational/theta_f_frozen.npz`, sectors at `.../sectors.npz`. Tokenizers in
 `dist/tokenizer/`. Long-term memory in `data/runtime/ltss.db`.
 
@@ -194,8 +192,8 @@ Checkpoints: `dist/checkpoints/level<N>/stage<N>/`, frozen core at
 ## Levels (educational curriculum)
 
 > **Single source of truth for what each level is and exactly what it adds:
-> [../levels.md](../levels.md).** This section covers only the *architectural*
-> mechanics behind levels; the per-level sizes/stages/data live in that doc.
+> [cognition's levels.md](../levels.md).** This section covers only
+> the *architectural* mechanics behind levels; the per-level sizes/stages/data live in that doc.
 
 A level (`configs/levels/level{0..5}.yaml`, `--level N`) sets the model size from the
 **information** it teaches (the hardware only caps how high you can run). The **frozen
@@ -205,7 +203,7 @@ cognitive core** is seven developmental **stages** (1 Language · 2 Perception �
 so neither competence nor values drift. Three **behavioral** stages (8 tool use · 9 MCP ·
 10 skills) then train as **LoRA sectors** on the frozen core — swappable without retraining it.
 Reasoning *effort* is a runtime dial (`--think off|low|medium|high`) in `models/cognition/uses/common/agent.py`
-(see [models/cognition/uses/chat/](../../models/cognition/uses/chat/)). Data is graded per level by each stage plugin's own sources (`models/<model>/stageNN_*/sources.py`), resolved by the registry.
+(see [models/cognition/uses/chat/](../../uses/chat/)). Data is graded per level by each stage plugin's own sources (`models/<model>/stages/stageNN_*/sources.py`), resolved by the registry.
 
 `src/resources.py` estimates a level's parameter count and peak memory from its config,
 compares against available RAM/VRAM, and **aborts before an OOM** (with `--force` to
@@ -243,4 +241,4 @@ emb_t3 = w["embed.weight"][:, :512]       # 512-dim prefix
 ```
 
 The per-level ladder (sizes, layers, vocab, backend and what each level adds) is in
-**[../levels.md](../levels.md)** — the single source of truth.
+**[cognition's levels.md](../levels.md)** — the single source of truth.

@@ -86,7 +86,7 @@ training:
   take `--quant N` for any 2–8 bit width (e.g. `int4`, `8`): real grouped-affine
   quantization via `engine.quantize` on both backends. MLX packs at the true width;
   torch packs nibbles at 4-bit (≈⅛) and stores a byte per weight otherwise (≈¼), so
-  4-/8-bit are its memory sweet spots. See [models/cognition/uses/chat/](../models/cognition/uses/chat/).
+  4-/8-bit are its memory sweet spots. See [the chat use case](../uses/chat/).
 
 ## 4. Choose languages
 
@@ -291,7 +291,7 @@ register (real GSM8K chain-of-thought). `--think` / `/think` is an effort dial
 that sets how big a token budget the scratchpad gets; the chat shows the
 scratchpad above the answer. Tokens **stream live by default** (`--no-stream` to
 batch). The agent (`models/cognition/uses/agent/run_agent.py`) runs several think→act→observe
-rounds until it answers, surfacing each round. See [models/cognition/uses/chat/](../models/cognition/uses/chat/).
+rounds until it answers, surfacing each round. See [the chat use case](../uses/chat/).
 
 **Mood** — the assistant tracks a conversational mood that defaults to **neutral**
 and only shifts on a clear emotional cue (it rides the system channel as plain text,

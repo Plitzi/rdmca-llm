@@ -35,6 +35,7 @@ Usage:
   rdmca camera --model hands_recognition --selftest
 """
 import argparse
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # repo root on path
@@ -101,7 +102,20 @@ def selftest(net) -> int:
     return 0
 
 
-def run_camera(net, camera_index: int) -> int:
+def _draw_hud(cv2, frame, fps: float, target_fps: int) -> None:
+    """Top-left HUD: the measured frame rate vs the selected target (30/60)."""
+    cv2.putText(
+        frame,
+        f"{fps:4.1f} FPS  (target {target_fps})",
+        (10, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+    )
+
+
+def run_camera(net, camera_index: int, target_fps: int = 30) -> int:
     try:
         import cv2
     except ModuleNotFoundError:
@@ -114,7 +128,11 @@ def run_camera(net, camera_index: int) -> int:
     if not cap.isOpened():
         print(f"Could not open camera {camera_index}.")
         return 1
-    print("  Camera open — press 'q' to quit.")
+    cap.set(cv2.CAP_PROP_FPS, target_fps)  # ask the device for the chosen rate
+    frame_budget_ms = max(1, int(1000 / target_fps))  # pace the loop to the target
+    print(f"  Camera open — target {target_fps} FPS — press 'q' to quit.")
+    fps = float(target_fps)  # smoothed (EMA) measured rate, seeded at the target
+    last = time.perf_counter()
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -123,8 +141,15 @@ def run_camera(net, camera_index: int) -> int:
         small = cv2.resize(gray, (IMG_SIZE, IMG_SIZE)).astype(np.float32) / 255.0
         pts = _predict(net, small.reshape(-1))
         _draw_skeleton(cv2, frame, pts)
+        # Measured FPS from the real frame interval, exponentially smoothed.
+        now = time.perf_counter()
+        dt = now - last
+        last = now
+        if dt > 0:
+            fps = 0.9 * fps + 0.1 * (1.0 / dt)
+        _draw_hud(cv2, frame, fps, target_fps)
         cv2.imshow("hands_recognition — hand skeleton (press q)", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        if cv2.waitKey(frame_budget_ms) & 0xFF == ord("q"):
             break
     cap.release()
     cv2.destroyAllWindows()
@@ -136,6 +161,9 @@ def main() -> int:
     ap.add_argument("--checkpoint", default=None, help="Trained weights .npz (else random)")
     ap.add_argument("--camera-index", type=int, default=0, help="OpenCV camera index")
     ap.add_argument(
+        "--fps", type=int, default=30, choices=(30, 60), help="Target frame rate (30 or 60)"
+    )
+    ap.add_argument(
         "--selftest", action="store_true", help="Headless synthetic-frame check (no camera)"
     )
     args = ap.parse_args()
@@ -144,7 +172,7 @@ def main() -> int:
     net = _load_net(args.checkpoint)
     if args.selftest:
         return selftest(net)
-    return run_camera(net, args.camera_index)
+    return run_camera(net, args.camera_index, target_fps=args.fps)
 
 
 if __name__ == "__main__":

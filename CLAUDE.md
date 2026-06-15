@@ -57,8 +57,10 @@ un modelo SÍ consume el framework.
   `models/`, y el **SDK** ([src/plugins/sdk/](src/plugins/sdk/)) — el único import estable
   del que dependen los stages.
 - **`models/`** — los MODELOS, fuera de `src/`. Cada uno (`models/<nombre>/`) es un
-  escenario autónomo: sus `stageNN_*`, sus faculties propias (p. ej. `mood/` en cognition),
-  sus **`uses/`** (consumidores: chat, agent…) y sus `experiments/`. Un stage solo se
+  escenario autónomo: sus stages agrupados en `stages/stageNN_*`, sus faculties propias
+  (p. ej. `mood/` en cognition), sus **`uses/`** (consumidores: chat, agent…), su
+  `data/` (corpus de TODOS sus stages), sus `experiments/` y sus **`docs/`** (la doc
+  PROPIA del modelo — el root `docs/` queda para el framework). Un stage solo se
   CONSUME y depende ÚNICAMENTE del SDK (`src/plugins/sdk`); helpers específicos de su
   modelo los importa intra-modelo. Borrar `models/<nombre>/` lo quita entero sin tocar el
   framework.

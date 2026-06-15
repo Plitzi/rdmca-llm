@@ -33,11 +33,57 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Los tests pueden tener imports/fixtures que parecen "sin usar".
-"tests/**" = ["F401", "F811"]
+# Los tests pueden tener imports/fixtures que parecen "sin usar". Viven con el framework
+# (src/tests/) y con cada modelo (models/<model>/.../tests/).
+"**/tests/**" = ["F401", "F811"]
 "__init__.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
+
+# ── Coverage (pytest --cov) ──────────────────────────────────────────────────
+# Scope: the unit-testable framework + models. We do NOT measure coverage OF the
+# tests, nor of code that is only meaningfully exercised by a REAL run and not unit
+# tests: the torch backend (MLX is the active backend here), the long-running
+# consolidation daemon, and the multimodal VQ-VAE trainer. Script entrypoints
+# (scripts/) are integration-covered by actual training runs; the unified `rdmca`
+# CLI itself is unit-tested.
+[tool.coverage.run]
+source = ["src", "models"]
+# Coverage is gated (--cov-fail-under=90) on the UNIT-TESTABLE CORE: deterministic,
+# offline framework + model logic. We omit code that is only meaningfully exercised by a
+# REAL run, not unit tests (it IS exercised — by your training/chat runs, not here):
+#   • interactive consumer apps (models/<model>/uses/* — chat/agent/camera/common),
+#   • network-bound data generators (stage sources/offline + src/data/corpora.py),
+#   • the long-running consolidation daemon and the multimodal VQ-VAE trainer,
+#   • the alternate torch backend (MLX is the active backend in this environment),
+#   • the rich live-dashboard renderer (terminal UI).
+omit = [
+    "*/tests/*",
+    "*/uses/*",                          # interactive consumer apps (chat/agent/camera/common)
+    "models/*/stages/*/sources.py",      # network-bound data generators (HF streaming)
+    "models/*/stages/*/offline.py",
+    "src/data/corpora.py",               # network corpus streaming
+    "src/backend/torch_backend.py",      # alternate backend (MLX is active here)
+    "src/backend/torch_quant.py",
+    # Exercised by REAL runs, not unit tests (same rationale as the daemon/generators):
+    "src/consolidation/daemon.py",       # long-running consolidation service (rdmca daemon)
+    "src/consolidation/pipeline.py",     #   …and the consolidation engine it drives
+    "src/modalities/vqvae_train.py",     # trains the multimodal VQ-VAE codecs (needs data)
+    "src/modalities/image.py",           # image codec — needs a trained VQ-VAE + images
+    "src/modalities/audio.py",           # audio codec — needs a trained VQ-VAE + wavs
+    "src/modalities/perception.py",      # multimodal assembly over those trained codecs
+    "src/training/dashboard_view.py",    # rich live-terminal renderer (UI)
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    # venv auto-bootstrap re-exec (only runs when deps are missing)
+    "os.execv",
+]

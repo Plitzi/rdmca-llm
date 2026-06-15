@@ -188,7 +188,7 @@ Examples:
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print("  Options: extend corpus, adjust thresholds, or --resume")
-        print("  See: docs/GUIDE.md")
+        print("  See: models/cognition/docs/GUIDE.md")
 
 
 if __name__ == "__main__":
