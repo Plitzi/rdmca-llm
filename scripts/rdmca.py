@@ -158,7 +158,7 @@ def _stage_prepared(number: int, level: int) -> bool:
 
 
 def _stage_trained(model: str, level: int, number: int) -> bool:
-    stage_dir = REPO / "dist" / "checkpoints" / model / f"level{level}" / f"stage{number}"
+    stage_dir = REPO / "dist" / model / "checkpoints" / f"level{level}" / f"stage{number}"
     return any((stage_dir / f).exists() for f in ("final.npz", "best.npz"))
 
 

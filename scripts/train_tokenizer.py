@@ -12,13 +12,13 @@ if os.path.exists(_venv) and os.path.abspath(sys.executable) != os.path.abspath(
 
 """
 Train SentencePiece BPE tokenizer — Bilingual EN + ES.
-Must be run AFTER prepare_data.py --stage 1.
+Must be run AFTER `rdmca prepare --level <N> --stage 1`.
 
-Output: dist/tokenizer/rdmca_spm.model  +  dist/tokenizer/rdmca_spm.vocab
+Output: dist/<model>/tokenizer/rdmca_spm.model  +  …/rdmca_spm.vocab
 
 Usage:
-  python scripts/train_tokenizer.py
-  python scripts/train_tokenizer.py --vocab_size 65536 --sample_mb 500
+  rdmca tokenizer --level 1
+  rdmca tokenizer --level 1 --vocab_size 65536 --sample_mb 500
 """
 import argparse
 import json
@@ -296,8 +296,6 @@ def show_summary(
 # Trained after text by a single command. Each modality is OPTIONAL: with no data
 # for it, it is SKIPPED rather than failing — text is the only required tokenizer.
 # The training loops themselves live in src/modalities/vqvae_train.py.
-AUDIO_OUT = "dist/tokenizer/audio_vqvae.npz"
-IMAGE_OUT = "dist/tokenizer/image_vqvae.npz"
 IMG_SIZE = 32  # CIFAR-scale default
 
 
@@ -309,7 +307,9 @@ def main():
     parser.add_argument(
         "--data_dir", default=None, help="Override the stage-1 data dir to sample from"
     )
-    parser.add_argument("--output_dir", default="dist/tokenizer")
+    parser.add_argument(
+        "--output_dir", default=None, help="Tokenizer output dir (default: dist/<model>/tokenizer)"
+    )
     parser.add_argument("--config", default=None, help="Explicit config path (overrides --level)")
     parser.add_argument(
         "--model",
@@ -363,6 +363,12 @@ def main():
     from src.config import select_model
 
     select_model(cfg, args.model)
+    # Tokenizer assets are per-model: default to dist/<model>/tokenizer/ (resolved AFTER
+    # the model is selected) so two models never share/clobber a tokenizer.
+    if args.output_dir is None:
+        from src.config import tokenizer_dir
+
+        args.output_dir = str(tokenizer_dir())
     langs = [l.strip() for l in args.lang.split(",")] if args.lang else get_languages(cfg)
     console.print(
         f"  Level: {cfg.get('level', 'custom')} ({cfg.get('name', '')}) | "
@@ -373,18 +379,18 @@ def main():
     # sets a small "child" vocab at low levels; it is auto-capped to data size below.
     vocab_target = args.vocab_size or (cfg.get("model", {}) or {}).get("vocab_size", 65536)
 
-    # Data dir: explicit > the level's stage-1 data dir > legacy default.
+    # Data dir: explicit flag wins; otherwise the registry resolves the active model's
+    # stage-1 corpus (single source of truth — tracks the per-model data layout).
     if args.data_dir:
         data_dir = Path(args.data_dir)
     else:
-        s1 = (cfg.get("curriculum", {}) or {}).get("stage1", {}) or {}
-        lvl = cfg.get("level")  # per-level layout: data/level{N}/stage1
-        default_dir = f"data/level{lvl}/stage1" if lvl is not None else "data/stage1"
-        data_dir = Path(s1.get("data_dir", default_dir))
+        from src.plugins import stage_data_dir
+
+        data_dir = Path(stage_data_dir(1, cfg))
     if not any(data_dir.glob("*.jsonl")):
-        console.print(f"[red]ERROR:[/red] No .jsonl files in {data_dir}")
         lvl = cfg.get("level", 1)
-        console.print(f"Run: python scripts/prepare_data.py --level {lvl} --stage 1 first")
+        console.print(f"[red]ERROR:[/red] No .jsonl files in {data_dir}")
+        console.print(f"Run: rdmca prepare --level {lvl} --stage 1 first")
         sys.exit(1)
 
     try:
@@ -543,6 +549,8 @@ def main():
     # ── Image + audio tokenizers (optional, skipped when data is absent) ───────
     if not args.text_only:
         console.print("\n[bold]Multimodal tokenizers[/bold] (skipped if no data):")
+        image_out = str(Path(args.output_dir) / "image_vqvae.npz")
+        audio_out = str(Path(args.output_dir) / "audio_vqvae.npz")
         train_image_tokenizer(
             console,
             args.images_dir,
@@ -552,7 +560,7 @@ def main():
             args.mm_steps,
             args.mm_batch,
             args.mm_lr,
-            IMAGE_OUT,
+            image_out,
             backend_name=args.backend,
         )
         train_audio_tokenizer(
@@ -563,11 +571,11 @@ def main():
             args.mm_steps,
             args.mm_batch,
             args.mm_lr,
-            AUDIO_OUT,
+            audio_out,
             backend_name=args.backend,
         )
 
-    console.print("\nNext: [bold]python scripts/train.py --stage 1[/bold]")
+    console.print(f"\nNext: [bold]rdmca train --level {cfg.get('level', 1)} --stage 1[/bold]")
 
 
 if __name__ == "__main__":

@@ -11,21 +11,22 @@ env/
 
 # ── Generated artifacts (dist/) ───────────────────────────────────────────────
 # Keep directory structure (.gitkeep), ignore the generated files
-dist/checkpoints/**/*.npz
-dist/checkpoints/**/*.opt
-dist/checkpoints/**/*.json
-dist/checkpoints/**/*.csv
-dist/checkpoints/**/*.png
-dist/benchmarks/*.json
-dist/benchmarks/*.csv
-dist/tokenizer/*.model
-dist/tokenizer/*.vocab
-dist/tokenizer/tokenizer_info.json
+dist/**/checkpoints/**/*.npz
+dist/**/checkpoints/**/*.opt
+dist/**/checkpoints/**/*.json
+dist/**/checkpoints/**/*.csv
+dist/**/checkpoints/**/*.png
+dist/**/benchmarks/*.json
+dist/**/benchmarks/*.csv
+dist/**/snapshots/*.npz
+dist/**/tokenizer/*.model
+dist/**/tokenizer/*.vocab
+dist/**/tokenizer/tokenizer_info.json
 # image/audio VQ-VAE tokenizers
-dist/tokenizer/*vqvae*
+dist/**/tokenizer/*vqvae*
 # per-run / backup tokenizers and any scratch backups
-dist/tokenizer*.bak/
-dist/tokenizer/*.json
+dist/**/tokenizer*.bak/
+dist/**/tokenizer/*.json
 *.bak
 *.bak/
 
@@ -41,8 +42,8 @@ models/**/data/**/*.val.jsonl
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log
 logs/*.json
-dist/snapshots/*.npz
-dist/snapshots/*.json
+dist/**/snapshots/*.npz
+dist/**/snapshots/*.json
 # long-term semantic store (consolidation)
 data/runtime/ltss.db
 # experience queue (chat → daemon)

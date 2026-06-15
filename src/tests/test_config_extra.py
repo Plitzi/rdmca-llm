@@ -60,3 +60,29 @@ def test_load_tokenizer_info_and_unified_vocab(tmp_path):
     assert info["vocab_size"] == 20480
     assert C.unified_vocab_size(info, 999) == 20480
     assert C.unified_vocab_size(None, 999) == 999
+
+
+def test_per_model_dist_paths_never_overlap():
+    """Build artifacts are namespaced under dist/<model>/ so two models can't clobber
+    each other's tokenizer/checkpoints (the per-model-dist guarantee)."""
+    from src.training.curriculum import model_ckpt_root
+
+    cog = C.model_dist_root("cognition")
+    hands = C.model_dist_root("hands_recognition")
+    assert cog.parts[-2:] == ("dist", "cognition")
+    assert hands.parts[-2:] == ("dist", "hands_recognition")
+    assert cog != hands
+
+    # Tokenizer + checkpoints live UNDER the per-model root, not a shared dir.
+    assert C.tokenizer_model_path("cognition").parts[-3:] == (
+        "cognition",
+        "tokenizer",
+        "rdmca_spm.model",
+    )
+    assert str(C.tokenizer_info_path("hands_recognition")).startswith(str(hands))
+
+    C.select_model({"model_name": "cognition"})
+    assert str(model_ckpt_root(1)) == "dist/cognition/checkpoints/level1"
+    C.select_model({"model_name": "hands_recognition"})
+    assert str(model_ckpt_root(0)) == "dist/hands_recognition/checkpoints/level0"
+    C.select_model({"model_name": "cognition"})  # reset for other tests

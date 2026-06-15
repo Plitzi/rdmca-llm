@@ -22,8 +22,8 @@ def build_data_loader(stage: int, cfg: dict):
 
     tokenizer = TextTokenizer()
     if not tokenizer.ready:
-        print("ERROR: tokenizer not found at dist/tokenizer/rdmca_spm.model")
-        print("  Run: python scripts/train_tokenizer.py --level <N>")
+        print(f"ERROR: tokenizer not found at {tokenizer.model_path}")
+        print("  Run: rdmca tokenizer --level <N>")
         sys.exit(1)
     # Rehearsal: cognitive stages after the first mix in a fraction of earlier base
     # stages' data, so learning a new faculty does not erode earlier ones (esp.
@@ -69,8 +69,5 @@ def build_data_loader(stage: int, cfg: dict):
         return loader
     except FileNotFoundError as e:
         print(f"ERROR: {e}")
-        print(
-            f"  Run: python scripts/prepare_data.py --level {cfg.get('level', '')} "
-            f"--stage {stage}".rstrip()
-        )
+        print(f"  Run: rdmca prepare --level {cfg.get('level', '')} --stage {stage}".rstrip())
         sys.exit(1)

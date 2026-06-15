@@ -31,7 +31,13 @@ GRAD_SPIKE_SIGMA = 3.0
 class SectorSnapshotManager:
     """Manages per-sector snapshots and rollback."""
 
-    def __init__(self, snapshot_dir: str = "snapshots"):
+    def __init__(self, snapshot_dir: str | None = None):
+        # Default to the active model's per-model dist root (dist/<model>/snapshots) so
+        # two models' rollback snapshots never collide; an explicit dir still wins.
+        if snapshot_dir is None:
+            from src.config import model_dist_root
+
+            snapshot_dir = model_dist_root() / "snapshots"
         self.snapshot_dir = Path(snapshot_dir)
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._cat_counts: dict[int, int] = {}

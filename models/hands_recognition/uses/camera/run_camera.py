@@ -31,7 +31,7 @@ proves the capture→preprocess→infer→draw pipeline.
 Usage:
   python models/hands_recognition/uses/camera/run_camera.py --selftest     # headless, no camera
   python models/hands_recognition/uses/camera/run_camera.py                # webcam (needs opencv)
-  python models/hands_recognition/uses/camera/run_camera.py --checkpoint dist/checkpoints/hands_recognition/level1/stage1/best.npz
+  python models/hands_recognition/uses/camera/run_camera.py --checkpoint dist/hands_recognition/checkpoints/level1/stage1/best.npz
   rdmca camera --model hands_recognition --selftest
 """
 import argparse

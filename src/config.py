@@ -4,7 +4,7 @@ config-path resolution and tokenizer/vocab metadata.
 
 The language selector is config-driven: `model.languages` in a profile/config
 is the canonical list. At tokenizer-training time the chosen languages (and the
-multimodal vocabulary layout) are persisted to dist/tokenizer/tokenizer_info.json,
+multimodal vocabulary layout) are persisted to dist/<model>/tokenizer/tokenizer_info.json,
 which every runtime component reads — so there is no language list hardcoded in
 the source.
 """
@@ -21,7 +21,28 @@ from .env import load_env
 load_env()  # populate os.environ from the project .env
 
 
-TOKENIZER_INFO = "dist/tokenizer/tokenizer_info.json"
+# ── Per-model build artifacts (dist/<model>/…) ──────────────────────────────
+# Everything a run PRODUCES — tokenizer, checkpoints, snapshots, benchmarks — lives
+# under a PER-MODEL root so two models never clobber each other's dist. Single source
+# of truth for the on-disk layout; defaults to the active model (set via select_model).
+def model_dist_root(model: str | None = None) -> Path:
+    from src.plugins import active_model
+
+    return Path("dist") / (model or active_model())
+
+
+def tokenizer_dir(model: str | None = None) -> Path:
+    """Where a model's tokenizer assets live: dist/<model>/tokenizer/."""
+    return model_dist_root(model) / "tokenizer"
+
+
+def tokenizer_model_path(model: str | None = None) -> Path:
+    return tokenizer_dir(model) / "rdmca_spm.model"
+
+
+def tokenizer_info_path(model: str | None = None) -> Path:
+    return tokenizer_dir(model) / "tokenizer_info.json"
+
 
 # Educational LEVELS replace the old hardware profiles. A level's size is set by
 # the INFORMATION it teaches (vocab/context/width/depth); the hardware only
@@ -170,9 +191,10 @@ def get_precision(cfg: dict) -> str:
     return prec
 
 
-def load_tokenizer_info(path: str = TOKENIZER_INFO) -> dict | None:
-    """Return persisted tokenizer/vocab metadata, or None if not trained yet."""
-    p = Path(path)
+def load_tokenizer_info(path: str | None = None) -> dict | None:
+    """Return persisted tokenizer/vocab metadata, or None if not trained yet.
+    Defaults to the active model's tokenizer_info.json (dist/<model>/tokenizer/)."""
+    p = Path(path) if path is not None else tokenizer_info_path()
     if not p.exists():
         return None
     try:

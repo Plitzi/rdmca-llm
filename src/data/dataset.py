@@ -119,7 +119,7 @@ class TextDataset:
         if not self._files:
             raise FileNotFoundError(
                 f"No .jsonl or .txt files found in {data_dir}. "
-                "Run: python scripts/prepare_data.py --stage N first."
+                "Run: rdmca prepare --level <N> --stage <N> first."
             )
 
     def _find_files(self) -> list[Path]:

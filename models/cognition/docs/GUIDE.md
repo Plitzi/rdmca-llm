@@ -47,7 +47,15 @@ pip install -r requirements.txt
 # Sanity-check the backend(s) you got:
 python -c "import mlx.core as mx; print(mx.default_device())"          # MLX → Device(gpu, 0)
 python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_available())"
+
+# Make the `rdmca` command available — LOCAL to this venv only (nothing global):
+printf '#!/bin/sh\nexec "%s/python" "%s/scripts/rdmca.py" "$@"\n' "$VIRTUAL_ENV/bin" "$PWD" \
+  > "$VIRTUAL_ENV/bin/rdmca" && chmod +x "$VIRTUAL_ENV/bin/rdmca"
 ```
+
+`rdmca` then works whenever the venv is active (its launcher lives in `.venv/bin/`, on PATH
+only with the venv activated — it is **not** installed system-wide). If you'd rather not add
+the shim, every command also runs as `python scripts/rdmca.py <command> …`.
 
 `pillow`/`soundfile` are only needed for the multimodal parts (loading images/audio).
 The main scripts (`scripts/train.py`, `models/cognition/uses/chat/run_chat.py`, `src/consolidation/daemon.py`) re-exec

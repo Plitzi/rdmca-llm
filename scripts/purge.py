@@ -15,8 +15,8 @@ Data pipeline (two distinct artifacts — don't confuse them):
     a re-download from the network; keeping the prepared data only skips re-preparing.
 
 Targets (pick any combination, or --all):
-  --checkpoints   dist/checkpoints/<model>/  + dist/snapshots/  (trained weights, frozen core, sectors)
-  --tokenizer     dist/tokenizer/    + dist/tokenizer*.bak (SentencePiece + image/audio VQ-VAE)
+  --checkpoints   dist/<model>/checkpoints/ + dist/<model>/snapshots/ (trained weights, frozen core, sectors)
+  --tokenizer     dist/<model>/tokenizer/  + .bak (SentencePiece + image/audio VQ-VAE)
   --data          models/<model>/data/*/level*/  (PREPARED corpora — output of prepare_data)
   --runtime       data/runtime/       (experiences.jsonl, ltss.db — consolidation memory)
   --logs          logs/               (daemon.log, cycle_*.json, human_queue.jsonl)
@@ -78,16 +78,20 @@ def _paths_for(target: str, level: int | None, model: str | None) -> list[Path]:
     spans every model, `level=None` spans every level."""
     lvl = f"level{level}" if level is not None else None
     mdl = model or "*"  # glob across models when unscoped
+    # Build artifacts live under a PER-MODEL dist root: dist/<model>/{checkpoints,tokenizer,snapshots}.
     if target == "checkpoints":
         if model and lvl:
-            return [REPO / "dist/checkpoints" / model / lvl]
+            return [REPO / "dist" / model / "checkpoints" / lvl]
         if model:
-            return [REPO / "dist/checkpoints" / model]
+            return [REPO / "dist" / model / "checkpoints", REPO / "dist" / model / "snapshots"]
         if lvl:
-            return sorted((REPO / "dist/checkpoints").glob(f"*/{lvl}"))
-        return [REPO / "dist/checkpoints", REPO / "dist/snapshots"]
-    if target == "tokenizer":  # global (trained per level into one dir)
-        return [REPO / "dist/tokenizer", *sorted((REPO / "dist").glob("tokenizer*.bak"))]
+            return sorted(REPO.glob(f"dist/*/checkpoints/{lvl}"))
+        return [*sorted(REPO.glob("dist/*/checkpoints")), *sorted(REPO.glob("dist/*/snapshots"))]
+    if target == "tokenizer":  # per-model: dist/<model>/tokenizer (+ any .bak)
+        return [
+            *sorted(REPO.glob(f"dist/{mdl}/tokenizer")),
+            *sorted(REPO.glob(f"dist/{mdl}/tokenizer*.bak")),
+        ]
     if target == "data":  # prepared corpora, under each model's single data/ (gitignored)
         glob = f"models/{mdl}/data/*/{lvl}" if lvl else f"models/{mdl}/data"
         return sorted(REPO.glob(glob))

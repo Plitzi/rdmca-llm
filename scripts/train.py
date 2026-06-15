@@ -15,10 +15,10 @@ except ModuleNotFoundError:
 """
 RDMCA Progressive Stage Trainer — CLI.
 
-Usage:
-  python scripts/train.py --level 1 --stage 1            # start a stage fresh
-  python scripts/train.py --level 1 --stage 1 --resume   # resume after a pause
-  python scripts/train.py --level 1 --stage 2            # next stage (prereq enforced)
+Usage (via the unified CLI):
+  rdmca train --level 1 --stage 1            # start a stage fresh
+  rdmca train --level 1 --stage 1 --resume   # resume after a pause
+  rdmca train --level 1 --stage 2            # next stage (prereq enforced)
 
 Each stage must pass its graduation gate before the next can begin. The foundational
 core is frozen permanently after the last ACTIVE cognitive stage (ethics/BCF);
@@ -41,9 +41,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/train.py --level 1 --stage 1
-  python scripts/train.py --level 1 --stage 1 --resume
-  python scripts/train.py --level 2 --stage 2
+  rdmca train --level 1 --stage 1
+  rdmca train --level 1 --stage 1 --resume
+  rdmca train --level 2 --stage 2
         """,
     )
     parser.add_argument(
@@ -156,7 +156,7 @@ Examples:
         prev = ckpt_root(cfg) / f"stage{prev_n}" / "stage_complete.json"
         if not prev.exists():
             print(f"ERROR: Stage {prev_n} must complete before Stage {args.stage}.")
-            print(f"  Run: python scripts/train.py --level {level} --stage {prev_n}")
+            print(f"  Run: rdmca train --level {level} --stage {prev_n}")
             sys.exit(1)
         print(f"  Stage {prev_n} prereq OK")
 
@@ -176,15 +176,13 @@ Examples:
             )
             print(f"\nStage {args.stage} complete ({tag}).")
             if later:
-                print(f"Next stage: python scripts/train.py{lvl_flag} --stage {later[0]}")
-            print(
-                f"Or chat now: python models/cognition/uses/chat/run_chat.py{lvl_flag} --stage {active[-1]}"
-            )
+                print(f"Next stage: rdmca train{lvl_flag} --stage {later[0]}")
+            print(f"Or chat now: rdmca chat{lvl_flag} --stage {active[-1]}")
         elif later:
-            print(f"\nNext: python scripts/train.py{lvl_flag} --stage {later[0]}")
+            print(f"\nNext: rdmca train{lvl_flag} --stage {later[0]}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
-            print(f"Next: python -m src.consolidation.daemon{lvl_flag} --once")
+            print(f"Next: rdmca daemon{lvl_flag} --once")
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print("  Options: extend corpus, adjust thresholds, or --resume")

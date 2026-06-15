@@ -5,7 +5,7 @@ RDMCA Data Preparation Script — config-driven, per level + stage
 Writes the training corpus for each curriculum stage of a LEVEL, using the
 sources, complexity filter and token budget declared in that level's config
 (`configs/levels/levelN.yaml`). Output:
-  models/<model>/stage{N}_<slug>/data/level{L}/{source}.jsonl   {"text": "...", "lang": "<code>"}
+  models/<model>/data/stage{NN}_<slug>/level{L}/{source}.jsonl   {"text": "...", "lang": "<code>"}
 plus a {source}.meta.json sidecar recording token count + whether the source
 was exhausted (used to decide if a re-run can skip it).
 
@@ -225,7 +225,7 @@ def main():
             sys.exit(1)
         raise  # anything else: show full traceback
 
-    print(f"\nDone. Next: python scripts/train_tokenizer.py --level {level}")
+    print(f"\nDone. Next: rdmca tokenizer --level {level}")
     sys.stdout.flush()
     sys.stderr.flush()
     # The HuggingFace datasets streaming iterators leave multiprocessing

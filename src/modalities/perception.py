@@ -24,8 +24,12 @@ from src.modalities.audio import AudioVQVAE
 from src.modalities.image import ImageVQVAE
 from src.modalities.text import TextTokenizer
 
-IMAGE_VQVAE_PATH = "dist/tokenizer/image_vqvae.npz"
-AUDIO_VQVAE_PATH = "dist/tokenizer/audio_vqvae.npz"
+
+def _vqvae_path(name: str) -> str:
+    """Per-model codec path: dist/<model>/tokenizer/<name> (active model)."""
+    from src.config import tokenizer_dir
+
+    return str(tokenizer_dir() / name)
 
 
 class MultimodalPerception:
@@ -64,17 +68,17 @@ class MultimodalPerception:
     # -- lazy tokenizer loading -----------------------------------------
     def _image(self) -> ImageVQVAE:
         if self.image is None:
-            self.image = ImageVQVAE.load(IMAGE_VQVAE_PATH)
+            self.image = ImageVQVAE.load(_vqvae_path("image_vqvae.npz"))
         if self.image is None:
             raise RuntimeError(
                 "Image tokenizer not trained. Run: "
-                "python scripts/train_tokenizer.py --images-dir path/ (or --image-dataset)"
+                "rdmca tokenizer --level <N> --images-dir path/ (or --image-dataset)"
             )
         return self.image
 
     def _audio(self) -> AudioVQVAE:
         if self.audio is None:
-            self.audio = AudioVQVAE.load(AUDIO_VQVAE_PATH)
+            self.audio = AudioVQVAE.load(_vqvae_path("audio_vqvae.npz"))
         if self.audio is None:
             raise RuntimeError(
                 "Audio tokenizer not trained. Run: "

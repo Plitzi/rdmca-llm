@@ -15,13 +15,13 @@ Benchmarks (each best-effort — skipped with a note if its dataset is offline):
   • mt_bench   — multi-turn chat quality; needs a strong external JUDGE model, so it is
                  only scored when --judge-cmd is given (otherwise reported as skipped)
 
-Results are written to dist/benchmarks/level{L}_stage{N}.json and appended to
-dist/benchmarks/history.csv so the evolution can be plotted/diffed over time.
+Results are written to dist/<model>/benchmarks/level{L}_stage{N}.json and appended to
+dist/<model>/benchmarks/history.csv so the evolution can be plotted/diffed over time.
 
 Usage:
   .venv/bin/python scripts/run_benchmarks.py --level 1 --stage 5
   .venv/bin/python scripts/run_benchmarks.py --level 1 --stage 5 --benchmarks wikitext lambada
-  .venv/bin/python scripts/run_benchmarks.py --checkpoint dist/checkpoints/level1/stage5/best.npz --level 1
+  rdmca bench --checkpoint dist/cognition/checkpoints/level1/stage5/best.npz --level 1
 """
 
 from __future__ import annotations
@@ -271,7 +271,7 @@ def main():
     from src.modalities.text import TextTokenizer
 
     _cfg_path = resolve_config_path(None, args.level)
-    select_model(load_config(_cfg_path), args.model)
+    _active_model = select_model(load_config(_cfg_path), args.model)
     la = Namespace(
         config=_cfg_path,
         level=args.level,
@@ -315,7 +315,7 @@ def main():
         "results": results,
     }
 
-    out_dir = ROOT / "dist" / "benchmarks"
+    out_dir = ROOT / "dist" / _active_model / "benchmarks"  # per-model dist root
     out_dir.mkdir(parents=True, exist_ok=True)
     out = Path(args.out) if args.out else out_dir / f"level{args.level}_stage{args.stage}.json"
     out.write_text(json.dumps(record, indent=2))

@@ -35,7 +35,9 @@ def build_stage_model(stage: int, cfg: dict, root: Path):
     # to the full 20480 leaves ~60% of rows without gradient and lets phantom
     # image/audio logits steal softmax mass → incoherent text. Train at the real text
     # vocab.
-    tok_info = Path("dist/tokenizer/tokenizer_info.json")
+    from src.config import tokenizer_info_path
+
+    tok_info = tokenizer_info_path()  # dist/<model>/tokenizer/tokenizer_info.json
     if tok_info.exists():
         with open(tok_info) as f:
             info = json.load(f)

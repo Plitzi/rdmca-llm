@@ -91,7 +91,7 @@ def main():
 
     tok = TextTokenizer()
     if not tok.ready:
-        raise SystemExit("Train the text tokenizer first: scripts/train_tokenizer.py")
+        raise SystemExit("Train the text tokenizer first: rdmca tokenizer --level <N>")
     mpl = MultimodalPerception(text_tok=tok)
 
     if args.images:

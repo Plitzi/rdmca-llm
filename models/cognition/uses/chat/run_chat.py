@@ -30,7 +30,7 @@ coherencia, gramática, razonamiento, etc.
 Uso:
   # Con checkpoint entrenado (Stage N completado)
   python models/cognition/uses/chat/run_chat.py --level 1 --stage 1
-  python models/cognition/uses/chat/run_chat.py --checkpoint dist/checkpoints/level1/stage1/final.npz
+  python models/cognition/uses/chat/run_chat.py --checkpoint dist/cognition/checkpoints/level1/stage1/final.npz
 
   # Sin datos entrenados — pesos random, solo verifica que el pipeline funciona
   python models/cognition/uses/chat/run_chat.py --dummy
@@ -186,7 +186,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
 
     tok_ready = tokenizer.ready
     if not tok_ready:
-        print("\n  [tokenizer] Not found — run: python scripts/train_tokenizer.py")
+        print("\n  [tokenizer] Not found — run: rdmca tokenizer --level <N>")
         print("  Using vocab IDs as proxy output (for pipeline testing only).\n")
 
     # Memory recall (read side): each turn the user message is embedded and the
@@ -543,7 +543,7 @@ def main():
 Examples:
   python models/cognition/uses/chat/run_chat.py --dummy                     # test pipeline (random weights)
   python models/cognition/uses/chat/run_chat.py --level 1 --stage 1         # load Stage 1 checkpoint
-  python models/cognition/uses/chat/run_chat.py --checkpoint dist/checkpoints/level1/stage3/final.npz
+  python models/cognition/uses/chat/run_chat.py --checkpoint dist/cognition/checkpoints/level1/stage3/final.npz
   python models/cognition/uses/chat/run_chat.py --level 1 --stage 1 --lang es --temp 0.8
   python models/cognition/uses/chat/run_chat.py --level 1 --stage 1 --system "You are a kind, simple assistant."
   python models/cognition/uses/chat/run_chat.py --level 1 --stage 1 --no-mood   # always neutral, just answer

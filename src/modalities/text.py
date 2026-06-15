@@ -24,7 +24,13 @@ DEFAULT_VOCAB_SIZE = 65536
 class TextTokenizer:
     """Thin wrapper around a trained SentencePiece model + tokenizer_info.json."""
 
-    def __init__(self, model_path: str = "dist/tokenizer/rdmca_spm.model"):
+    def __init__(self, model_path: str | None = None):
+        # Default to the ACTIVE model's tokenizer (dist/<model>/tokenizer/) so each model
+        # loads its own; an explicit path still wins (tests, cross-model tooling).
+        if model_path is None:
+            from src.config import tokenizer_model_path
+
+            model_path = tokenizer_model_path()
         self.model_path = Path(model_path)
         self._sp = None
         self.lang_tokens: dict[str, int] = {}
@@ -68,7 +74,7 @@ class TextTokenizer:
     ) -> list[int]:
         if not self._sp:
             raise RuntimeError(
-                f"Tokenizer not found at {self.model_path}. Run: python scripts/train_tokenizer.py"
+                f"Tokenizer not found at {self.model_path}. Run: rdmca tokenizer --level <N>"
             )
         ids = self._sp.EncodeAsIds(text)
         prefix: list[int] = []

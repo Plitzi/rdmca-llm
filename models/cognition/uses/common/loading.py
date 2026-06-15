@@ -134,10 +134,12 @@ def load_model(args):
     from src.model.transformer import RDMCAFoundational, set_model_precision
 
     model_dict = dict(cfg["model"])
-    # Sync vocab_size with trained tokenizer if available
+    # Sync vocab_size with trained tokenizer if available (per-model: dist/<model>/tokenizer/)
     import json
 
-    tok_info = Path("dist/tokenizer/tokenizer_info.json")
+    from src.config import tokenizer_info_path
+
+    tok_info = tokenizer_info_path()
     if tok_info.exists():
         # Use the real text vocab (IDs the tokenizer actually emits), NOT the full
         # multimodal layout size — see the same fix in the trainer. Must match the
@@ -193,10 +195,8 @@ def load_model(args):
     if ckpt_path is None or not ckpt_path.exists():
         stage_hint = args.stage or 1
         print("No checkpoint found. Options:")
-        print(
-            f"  Train first:  python scripts/train.py --stage {stage_hint} --config {args.config}"
-        )
-        print("  Or test now:  python models/cognition/uses/chat/run_chat.py --dummy")
+        print(f"  Train first:  rdmca train --stage {stage_hint} --config {args.config}")
+        print("  Or test now:  rdmca chat --dummy")
         sys.exit(1)
 
     print(f"  Loading checkpoint [{label}]: {ckpt_path}")

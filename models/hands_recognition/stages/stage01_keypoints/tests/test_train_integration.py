@@ -49,7 +49,7 @@ def test_train_stage_runs_and_learns(tmp_path, monkeypatch):
     assert ok is True  # skip_gate → graduates
 
     # Checkpoint artifacts were written by the real checkpoint path.
-    stage_dir = tmp_path / "dist" / "checkpoints" / "hands_recognition" / "level0" / "stage1"
+    stage_dir = tmp_path / "dist" / "hands_recognition" / "checkpoints" / "level0" / "stage1"
     assert (stage_dir / "final.npz").exists() or (stage_dir / "best.npz").exists()
     assert (stage_dir / "audit.json").exists()
 

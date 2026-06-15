@@ -202,7 +202,7 @@ def plot_overview(level: int, out: Path | None, plt, model: str = "cognition") -
     stages on a global step axis, with stage boundaries marked."""
     import json
 
-    base = ROOT / "dist" / "checkpoints" / model / f"level{level}"
+    base = ROOT / "dist" / model / "checkpoints" / f"level{level}"
     stages = sorted(
         int(p.name.replace("stage", ""))
         for p in base.glob("stage*")
@@ -328,7 +328,7 @@ def main():
     if args.csv:
         targets.append((Path(args.csv), Path(args.csv).parent.name))
     else:
-        base = ROOT / "dist" / "checkpoints" / args.model / f"level{args.level}"
+        base = ROOT / "dist" / args.model / "checkpoints" / f"level{args.level}"
         stages = args.stage or sorted(
             int(p.name.replace("stage", ""))
             for p in base.glob("stage*")

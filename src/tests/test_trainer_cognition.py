@@ -83,7 +83,7 @@ def test_train_stage_cognition_text_path(tmp_path, monkeypatch):
 
     ok = train_stage(stage=1, cfg=_CFG, plain=True)
     assert ok is True  # skip_gate → graduates after the budget
-    stage_dir = tmp_path / "dist" / "checkpoints" / "cognition" / "level0" / "stage1"
+    stage_dir = tmp_path / "dist" / "cognition" / "checkpoints" / "level0" / "stage1"
     assert (stage_dir / "final.npz").exists() or (stage_dir / "best.npz").exists()
     assert (stage_dir / "audit.json").exists()  # text-model audit (has n_heads/vocab/mrl)
 
