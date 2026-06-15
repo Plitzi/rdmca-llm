@@ -114,7 +114,9 @@ class GestureLoader:
         n_val = max(1, int(len(order) * val_fraction))
         keep = order[:n_val] if split == "val" else order[n_val:]
         self._samples = [samples[i] for i in keep]
-        self.epoch_tokens = len(self._samples)
+        # Same unit as the trainer's tokens_seen (batch_size · seq_len, seq_len = img_size), so
+        # the max_corpus_passes cap counts real passes over the gesture set (see FreiHandLoader).
+        self.epoch_tokens = len(self._samples) * self.img_size
         self._order = np.arange(len(self._samples))
         self._rng.shuffle(self._order)
         self._cursor = 0

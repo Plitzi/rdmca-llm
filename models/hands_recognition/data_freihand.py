@@ -213,7 +213,12 @@ class FreiHandLoader:
         np.random.default_rng(_SPLIT_SEED).shuffle(idx)
         n_val = max(1, int(len(idx) * val_fraction))
         self._indices = idx[:n_val] if split == "val" else idx[n_val:]
-        self.epoch_tokens = len(self._indices)  # "tokens" = samples → corpus-pass cap works
+        # The trainer accrues `tokens_seen += batch_size · seq_len` per step (seq_len =
+        # context_len = img_size for this net), so ONE pass over the images corresponds to
+        # `num_images · img_size` tokens. Report epoch_tokens in THAT unit so the
+        # max_corpus_passes cap means real passes (not ~1% of one — the bug that stopped a 20M
+        # run at ~371k = 3 × image_count).
+        self.epoch_tokens = len(self._indices) * self.img_size
         self._order = self._indices.copy()
         self._rng.shuffle(self._order)
         self._cursor = 0
