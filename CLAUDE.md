@@ -74,8 +74,14 @@ Un **modelo** es un escenario de entrenamiento bajo `models/<nombre>/` y agrupa 
 propios stages (cada modelo internamente corre un grupo de stages):
 - **`models/cognition/`** — el LLM conversacional/agéntico (los 10 stages actuales).
   Es el modelo **por defecto** (`cfg["model_name"]` ausente → `cognition`).
-- **`models/hands_recognition/`** — TODO (pose de manos para VR), el segundo modelo
-  que demuestra que el framework es agnóstico: solo es un stub con instrucciones.
+- **`models/hands_recognition/`** — un regresor de pose de mano (21 keypoints desde un
+  frame), el segundo modelo que DEMUESTRA que el framework es agnóstico: NO es un
+  transformer ni texto. Es real y entrenable a través del MISMO `ModelSpec`
+  ([models/hands_recognition/pose.py](models/hands_recognition/pose.py): `build_model`/
+  `build_loader`/`objective`/`evaluate`, métrica `mpjpe`, menor=mejor). Datos sintéticos
+  (sin descarga). Tiene UN stage (`stage01_keypoints/`), `moods: false`, y su caso de uso
+  es la **cámara** ([models/hands_recognition/uses/camera/](models/hands_recognition/uses/camera/),
+  `rdmca camera --model hands_recognition [--selftest]`).
 
 Cada modelo tiene además sus **experiments** propios (sondas de hipótesis) en
 `models/<nombre>/experiments/` — p. ej.
@@ -189,10 +195,12 @@ Nunca copies un helper en dos sitios — muévelo arriba y que ambos lo importen
 
 **CLI único: `rdmca`.** [scripts/rdmca.py](scripts/rdmca.py) es el ÚNICO punto de
 entrada para el developer: agrupa todo (`prepare`, `tokenizer`, `prepare-mm`, `train`,
-`bench`, `ood`, `plot`, `chat`, `agent`, `daemon`, `purge`) y reenvía los args a la
-herramienta real (así `rdmca train --help` muestra los args verdaderos — una sola fuente
-de verdad por comando, sin duplicar argparse). `rdmca info [--model M] [--level L]` es
-model-aware: lista modelos, niveles y stages, y marca qué está preparado/entrenado.
+`bench`, `ood`, `plot`, `chat`, `agent`, `camera`, `daemon`, `purge`) y reenvía los args a
+la herramienta real (así `rdmca train --help` muestra los args verdaderos — una sola fuente
+de verdad por comando, sin duplicar argparse). Los comandos que CONSUMEN un modelo (`chat`,
+`agent`, `camera`) resuelven el caso de uso bajo `models/<model>/uses/<app>/` — `--model`
+elige cuál (p. ej. `camera` es de `hands_recognition`). `rdmca info [--model M] [--level L]`
+es model-aware: lista modelos, niveles y stages, y marca qué está preparado/entrenado.
 Selección de modelo con `--model` (override de `cfg["model_name"]`) en los comandos que
 tocan stages.
 

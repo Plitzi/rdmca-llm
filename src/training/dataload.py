@@ -10,7 +10,7 @@ from src.plugins import get_stage, stage_data_dir
 from src.training.curriculum import is_behavioral_stage
 
 # A stage with this rehearsal fraction has "no specific profile" — it then defers to
-# the level's training.rehearsal_fraction (matching the old STAGE_REHEARSAL.get default).
+# the level's training.rehearsal_fraction.
 DEFAULT_REHEARSAL = 0.15
 
 

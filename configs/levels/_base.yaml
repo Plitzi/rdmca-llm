@@ -9,9 +9,9 @@
 # ║  (the level-0 smoke tier does).                                            ║
 # ║                                                                            ║
 # ║  NOTE the per-stage anti-forgetting profile (rehearsal_fraction, lr_scale) ║
-# ║  is a STAGE property and lives in CODE (src/training/stages.py:            ║
-# ║  STAGE_REHEARSAL / STAGE_LR_SCALE), applied at every level; override per   ║
-# ║  stage in a level's yaml only for a genuine exception.                     ║
+# ║  is a STAGE property and lives in its plugin (models/<model>/stageNN_*/     ║
+# ║  plugin.py), applied at every level; override per stage in a level's yaml   ║
+# ║  only for a genuine exception.                                             ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 backend: mlx                   # mlx | torch — most levels run mlx; big levels override.

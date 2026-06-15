@@ -65,7 +65,7 @@ training:
                               # (restored at stage end) is well-sampled on short stages.
   max_corpus_passes: 4         # cap re-reads of a small corpus (anti-overfit). If the
                                # corpus × this < n_tokens, the stage stops here (default 3).
-  rehearsal_fraction: 0.15     # global fallback for stages with no STAGE_REHEARSAL default.
+  rehearsal_fraction: 0.15     # global fallback for stages whose plugin sets no rehearsal_fraction.
 
 # ── Resource estimates (documented; the live guard recomputes from `model`). ──
 # These are reference figures so you can compare levels at a glance. The actual
