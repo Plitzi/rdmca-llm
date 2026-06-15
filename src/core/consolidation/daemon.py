@@ -75,11 +75,6 @@ def wait_for_idle() -> None:
         time.sleep(POLL_INTERVAL_SECS)
 
 
-def _ckpt_root(cfg: dict) -> Path:
-    level = cfg.get("level")  # NB: level 0 is valid → use `is None`
-    return Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
-
-
 def _build_model(cfg: dict):
     """Load the frozen foundational core + attach (and reload) LoRA sectors."""
     import numpy as np
@@ -99,7 +94,9 @@ def _build_model(cfg: dict):
     )
     model = RDMCAFoundational(model_cfg)
 
-    root = _ckpt_root(cfg)
+    from src.core.training.curriculum import ckpt_root
+
+    root = ckpt_root(cfg)
     frozen = root / "foundational" / "theta_f_frozen.npz"
     if not frozen.exists():
         logging.error(f"No frozen core at {frozen}. Train through Stage 5 first.")
@@ -266,6 +263,10 @@ def main():
 
     config_path = resolve_config_path(args.config, args.level)
     cfg = load_config(config_path)
+    # Select the active model so checkpoint paths resolve under the right model.
+    from src.models import set_active_model
+
+    set_active_model(cfg.get("model_name"))
     require_backend(cfg)  # selects the configured backend (mlx | torch)
 
     Path("logs").mkdir(exist_ok=True)

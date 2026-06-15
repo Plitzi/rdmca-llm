@@ -169,9 +169,9 @@ def load_model(args):
     # behaviour is added on top. Falls through to a plain checkpoint for cognitive
     # stages (or before any freeze).
     from src.core.model import sector_io
+    from src.core.training.curriculum import ckpt_root
 
-    level = cfg.get("level")
-    root = Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
+    root = ckpt_root(cfg)
     if not args.checkpoint and args.stage:
         label = sector_io.load_for_inference(model, root, args.stage)
         if label:

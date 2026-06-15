@@ -8,24 +8,25 @@ inputs: configs, `.env`, source code, `data/benchmarks/` (BCF probes you
 provide), or the shared HuggingFace download cache.
 
 Data pipeline (two distinct artifacts — don't confuse them):
-  HF cache (raw downloads)  →  prepare_data  →  data/level* (prepared corpora)  →  train
+  HF cache (raw downloads)  →  prepare_data  →  src/models/<model>/*/data/level* (prepared
+  corpora)  →  train
   • --data / --keep-data act on the PREPARED corpora (prepare_data's output).
   • --hf-cache acts on the RAW DOWNLOADS (prepare_data's input). Dropping it forces
-    a re-download from the network; keeping data/level* only skips re-preparing.
+    a re-download from the network; keeping the prepared data only skips re-preparing.
 
 Targets (pick any combination, or --all):
-  --checkpoints   dist/checkpoints/  + dist/snapshots/   (trained weights, frozen core, sectors)
+  --checkpoints   dist/checkpoints/<model>/  + dist/snapshots/  (trained weights, frozen core, sectors)
   --tokenizer     dist/tokenizer/    + dist/tokenizer*.bak (SentencePiece + image/audio VQ-VAE)
-  --data          data/level*/        (PREPARED corpora — output of prepare_data; not benchmarks/runtime)
+  --data          src/models/<model>/*/data/level*/  (PREPARED corpora — output of prepare_data)
   --runtime       data/runtime/       (experiences.jsonl, ltss.db — consolidation memory)
   --logs          logs/               (daemon.log, cycle_*.json, human_queue.jsonl)
   --hf-cache      ~/.cache/huggingface/{datasets,hub}  (RAW HF downloads — prepare_data's
                   input; honors HF_HOME / HF_DATASETS_CACHE / HF_HUB_CACHE). Opt-in only —
                   NOT in --all, shared across projects, slow to refill (re-downloads).
-  --keep-data     with --all, KEEP data/level* (skip re-preparing). Independent of --hf-cache.
+  --keep-data     with --all, KEEP the prepared corpora (skip re-preparing). Independent of --hf-cache.
 
-Scope with --level N to limit --checkpoints and --data to one level
-(tokenizer/runtime/logs/hf-cache are global and always purged in full when selected).
+Scope with --level N and/or --model NAME to limit --checkpoints and --data (else all
+levels/models). tokenizer/runtime/logs/hf-cache are global and always purged in full.
 
 Tracked `.gitkeep` markers are preserved: a purged folder that has one stays as
 an empty, tracked folder (the repo keeps its directory skeleton in git).
@@ -71,19 +72,25 @@ def _hf_cache_paths() -> list[Path]:
     return [datasets, hub]
 
 
-def _paths_for(target: str, level: int | None) -> list[Path]:
-    """Resolve a target name to the concrete paths it would remove."""
+def _paths_for(target: str, level: int | None, model: str | None) -> list[Path]:
+    """Resolve a target name to the concrete paths it would remove. Checkpoints and
+    prepared corpora are namespaced by MODEL (a package under src/models/); `model=None`
+    spans every model, `level=None` spans every level."""
     lvl = f"level{level}" if level is not None else None
+    mdl = model or "*"  # glob across models when unscoped
     if target == "checkpoints":
+        if model and lvl:
+            return [REPO / "dist/checkpoints" / model / lvl]
+        if model:
+            return [REPO / "dist/checkpoints" / model]
         if lvl:
-            return [REPO / "dist/checkpoints" / lvl]
+            return sorted((REPO / "dist/checkpoints").glob(f"*/{lvl}"))
         return [REPO / "dist/checkpoints", REPO / "dist/snapshots"]
     if target == "tokenizer":  # global (trained per level into one dir)
         return [REPO / "dist/tokenizer", *sorted((REPO / "dist").glob("tokenizer*.bak"))]
-    if target == "data":  # prepared corpora only — keep benchmarks/runtime
-        if lvl:
-            return [REPO / "data" / lvl]
-        return sorted((REPO / "data").glob("level*"))
+    if target == "data":  # prepared corpora, inside each stage package (gitignored)
+        glob = f"src/models/{mdl}/*/data/{lvl}" if lvl else f"src/models/{mdl}/*/data"
+        return sorted(REPO.glob(glob))
     if target == "runtime":
         return [REPO / "data/runtime"]
     if target == "logs":
@@ -172,6 +179,12 @@ def main() -> None:
         default=None,
         help="Limit --checkpoints/--data to one level (else all levels)",
     )
+    ap.add_argument(
+        "--model",
+        default=None,
+        help="Limit --checkpoints/--data to one model (a package under src/models/, "
+        "e.g. cognition); else every model.",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Preview only; delete nothing")
     ap.add_argument("--yes", "-y", action="store_true", help="Skip the confirmation prompt")
     args = ap.parse_args()
@@ -192,14 +205,19 @@ def main() -> None:
     seen: set[Path] = set()
     absent: list[str] = []
     for t in selected:
-        hits = [p for p in _paths_for(t, args.level) if p.exists() and p not in seen]
+        hits = [p for p in _paths_for(t, args.level, args.model) if p.exists() and p not in seen]
         if not hits:
             absent.append(t)
         for p in hits:
             seen.add(p)
             plan.append((t, p, _size_bytes(p)))
 
-    scope = f" (level {args.level})" if args.level is not None else ""
+    scope_bits = []
+    if args.model is not None:
+        scope_bits.append(f"model {args.model}")
+    if args.level is not None:
+        scope_bits.append(f"level {args.level}")
+    scope = f" ({', '.join(scope_bits)})" if scope_bits else ""
     print(f"\nPurge plan{scope}:")
     if not plan:
         print("  Nothing to delete — all selected targets are already absent.")
@@ -242,7 +260,7 @@ def main() -> None:
             print(f"  [error] could not remove {_display(p)}: {e}")
     print(f"\nDone — removed {removed}/{len(plan)} path(s), freed ~{_human(total)}.")
     print("Tracked .gitkeep markers are preserved (empty folders stay).")
-    print("Fresh start: prepare_data → train_tokenizer → train_stage.")
+    print("Fresh start: rdmca prepare → rdmca tokenizer → rdmca train.")
 
 
 if __name__ == "__main__":

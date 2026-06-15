@@ -168,9 +168,18 @@ carpeta común en vez de duplicarlo:
   `src/core/training/`, etc.).
 Nunca copies un helper en dos sitios — muévelo arriba y que ambos lo importen.
 
-**Scripts vs internos.** En [scripts/](scripts/) van SOLO los CLIs accesibles para el
-developer (train, prepare_data, train_tokenizer, run_benchmarks, plot_metrics, purge,
-ood_probe, prepare_multimodal). Los componentes de runtime/internos NO van en scripts:
-viven en su subsistema (p. ej. el daemon de consolidación en
-`src/core/consolidation/daemon.py`, ejecutable con `python -m src.core.consolidation.daemon`).
-Las apps que CONSUMEN el modelo (chat, agent) viven en `uses/`, no en `scripts/`.
+**CLI único: `rdmca`.** [scripts/rdmca.py](scripts/rdmca.py) es el ÚNICO punto de
+entrada para el developer: agrupa todo (`prepare`, `tokenizer`, `prepare-mm`, `train`,
+`bench`, `ood`, `plot`, `chat`, `agent`, `daemon`, `purge`) y reenvía los args a la
+herramienta real (así `rdmca train --help` muestra los args verdaderos — una sola fuente
+de verdad por comando, sin duplicar argparse). `rdmca info [--model M] [--level L]` es
+model-aware: lista modelos, niveles y stages, y marca qué está preparado/entrenado.
+Selección de modelo con `--model` (override de `cfg["model_name"]`) en los comandos que
+tocan stages.
+
+**Scripts vs internos.** Los scripts en [scripts/](scripts/) son los CLIs del developer
+(envueltos por `rdmca`). Los componentes de runtime/internos NO van en scripts: viven en
+su subsistema (p. ej. el daemon de consolidación en `src/core/consolidation/daemon.py`,
+ejecutable con `rdmca daemon` o `python -m src.core.consolidation.daemon`). Las apps que
+CONSUMEN el modelo (chat, agent) viven en `uses/`, no en `scripts/`. Al añadir un CLI
+nuevo, regístralo en `COMMANDS` de `rdmca.py`.

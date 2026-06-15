@@ -72,11 +72,9 @@ def load_mood_head(d_model: int, level=None, stage=None, checkpoint=None):
     if checkpoint:
         candidates.append(Path(checkpoint).parent / "mood_head.npz")
     elif stage is not None:
-        root = (
-            Path("dist/checkpoints")
-            if level is None
-            else Path("dist/checkpoints") / f"level{level}"
-        )
+        from src.core.training.curriculum import model_ckpt_root
+
+        root = model_ckpt_root(level)
         # Mood is only trained at conversational stages (1 + BCF). At any other stage
         # fall back to the NEAREST earlier head (stage, stage-1, …, 1) so chat still
         # has a mood head; the lexicon works regardless.

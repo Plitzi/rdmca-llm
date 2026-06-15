@@ -161,6 +161,12 @@ def main():
     )
     parser.add_argument("--stage", default="all", help="Stage number (1-5) or 'all'")
     parser.add_argument("--config", default=None, help="Explicit config path (overrides --level)")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model whose stages to prepare (package under src/models/, e.g. cognition). "
+        "Overrides the config's model_name; defaults to cognition.",
+    )
     parser.add_argument("--lang", default=None, help="Comma-separated override of config languages")
     parser.add_argument(
         "--limit", type=int, default=None, help="Limit each Wikipedia stream to N MB (testing)"
@@ -179,11 +185,11 @@ def main():
 
     cfg_path = resolve_config_path(args.config, args.level)
     cfg = load_config(cfg_path)
-    # Select the active model (registry default = cognition) before touching the
-    # stage registry, so it discovers THIS model's stage plugins and data dirs.
-    from src.models import set_active_model
+    # Select the active model (CLI --model wins; registry default = cognition) before
+    # touching the stage registry, so it discovers THIS model's stages and data dirs.
+    from src.core.config import select_model
 
-    set_active_model(cfg.get("model_name"))
+    select_model(cfg, args.model)
     level = get_level(cfg)  # NB: level 0 is valid → use `is None`
     if level is None:  # custom config w/o a level → least filtering
         level = args.level if args.level is not None else MAX_LEVEL

@@ -311,6 +311,12 @@ def main():
     )
     parser.add_argument("--output_dir", default="dist/tokenizer")
     parser.add_argument("--config", default=None, help="Explicit config path (overrides --level)")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model whose stage-1 data to sample (package under src/models/). "
+        "Overrides the config's model_name; defaults to cognition.",
+    )
     parser.add_argument("--lang", default=None, help="Comma-separated override of config languages")
     parser.add_argument(
         "--vocab_size",
@@ -353,6 +359,10 @@ def main():
 
     # Languages: --lang override > config(model.languages) > ['en']
     cfg = load_config(resolve_config_path(args.config, args.level))
+    # Select the active model so the stage-1 data dir resolves under it.
+    from src.core.config import select_model
+
+    select_model(cfg, args.model)
     langs = [l.strip() for l in args.lang.split(",")] if args.lang else get_languages(cfg)
     console.print(
         f"  Level: {cfg.get('level', 'custom')} ({cfg.get('name', '')}) | "

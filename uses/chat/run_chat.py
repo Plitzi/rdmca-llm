@@ -61,8 +61,8 @@ from uses.common import agent
 # require_backend() has selected the backend — so model classes bind to it.
 # Generation core (sampling, KV-cached decode loop, two-phase <think>/answer)
 # lives in uses/common/generate.py so the chat and agent runtimes share it.
-# Re-exported here for backward compatibility (tests + run_agent import via run_chat).
-from uses.common.generate import (  # noqa: F401  (re-exported for tests + run_agent)
+# Re-exported here as the shared import surface (run_agent + tests import these via run_chat).
+from uses.common.generate import (  # noqa: F401  (shared import surface: tests + run_agent)
     GEN_DEADLINE_S,
     IncrementalDecoder,
     _looping,
@@ -73,8 +73,8 @@ from uses.common.generate import (  # noqa: F401  (re-exported for tests + run_a
 from uses.common.interaction import InterruptGuard, SessionInput
 
 # Model + checkpoint loading lives in uses/common/loading.py so chat and agent
-# load models identically. Re-exported here (tests + run_agent import via run_chat).
-from uses.common.loading import (  # noqa: F401  (re-exported for tests + run_agent)
+# load models identically. Re-exported here as the shared import surface for them.
+from uses.common.loading import (  # noqa: F401  (shared import surface: tests + run_agent)
     _QUANT_MAX,
     _QUANT_MIN,
     describe_checkpoint_meta,

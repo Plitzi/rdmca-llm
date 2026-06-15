@@ -28,8 +28,8 @@ ops = B.ops
 SAFETY_SECTOR_IDS = (7,)
 
 
-# Compatibility shim: precision is now owned by the engine. Older call sites
-# import `set_model_precision` from here.
+# Precision is owned by the engine; this is the canonical helper call sites use to
+# cast a module's float params (training setup, checkpoint loading, the daemon).
 def set_model_precision(model, precision: str) -> None:
     """Cast all float parameters of a module to the given precision in place."""
     B.engine.set_precision(model, precision)

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.models import bcf_stage, get_stage, has_stage, is_behavioral
+from src.models import active_model, bcf_stage, get_stage, has_stage, is_behavioral
 
 # The ethics/BCF stage — the stage that runs the BCF probe and at which the mood head
 # is retrained. It is the stage flagged `is_freeze_point` in the registry, NOT a
@@ -73,10 +73,18 @@ def prev_active_stage(stage: int, cfg: dict) -> int | None:
     return max(below) if below else None
 
 
+def model_ckpt_root(level: int | None) -> Path:
+    """Checkpoint root for the ACTIVE model and a given level — the SINGLE source of
+    truth for the on-disk layout `dist/checkpoints/<model>/level<L>/`. Namespaced by
+    model first so two models never collide, then by level. (level 0 is valid → use
+    `is None`; a None level omits the level segment.)"""
+    base = Path("dist/checkpoints") / active_model()
+    return base if level is None else base / f"level{level}"
+
+
 def ckpt_root(cfg: dict) -> Path:
-    """Checkpoint root, namespaced by level so levels never collide."""
-    level = cfg.get("level")  # NB: level 0 is valid → use `is None`
-    return Path("dist/checkpoints") if level is None else Path("dist/checkpoints") / f"level{level}"
+    """Checkpoint root for a run, from its config's level (see model_ckpt_root)."""
+    return model_ckpt_root(cfg.get("level"))
 
 
 def cosine_lr(step: int, base_lr: float, min_lr: float, warmup: int, total: int) -> float:
