@@ -36,8 +36,12 @@ class _FakeCv2:
     """A minimal cv2 stand-in: yields two frames then stops; records draw calls."""
 
     COLOR_BGR2GRAY = 7
+    COLOR_BGR2RGB = 4
     FONT_HERSHEY_SIMPLEX = 0
     CAP_PROP_FPS = 5
+    CAP_PROP_FRAME_WIDTH = 3
+    CAP_PROP_FRAME_HEIGHT = 4
+    CAP_PROP_BUFFERSIZE = 38
 
     def __init__(self):
         self.lines = 0
@@ -72,10 +76,11 @@ class _FakeCv2:
         return _Cap()
 
     def cvtColor(self, frame, code):
-        return frame[:, :, 0]
+        return frame if code == self.COLOR_BGR2RGB else frame[:, :, 0]  # RGB keeps 3ch
 
     def resize(self, img, size):
-        return np.zeros(size, dtype=np.uint8)
+        shape = (size[1], size[0]) + ((img.shape[2],) if img.ndim == 3 else ())
+        return np.zeros(shape, dtype=np.uint8)
 
     def line(self, *a, **k):
         self.lines += 1
@@ -151,15 +156,40 @@ def test_main_passes_fps_choice(monkeypatch):
     assert fake.set_props.get(fake.CAP_PROP_FPS) == 60
 
 
-# ── width plumbing (the "trained but acts untrained" trap) ──────────────────────
-# The standard checkpoint discovery + trained_arch live in the framework and are covered by
-# src/tests/test_checkpoint_resolution.py. Here we only check the camera rebuilds the net at
-# the width it is told — if that's wrong the loaded weights shape-mismatch and stay random.
-def test_load_net_builds_at_given_width():
-    net = RC._load_net(None, hidden=64)
+# ── architecture plumbing (the "trained but acts untrained" trap) ───────────────
+# Standard checkpoint discovery + trained_arch live in the framework (covered by
+# src/tests/test_checkpoint_resolution.py). Here we only check the camera rebuilds the net to
+# MATCH the checkpoint's arch — if that's wrong the loaded weights shape-mismatch and stay
+# random. `arch` is the dict the camera gets from `trained_arch`.
+def test_load_net_defaults_to_synthetic_mlp():
+    net = RC._load_net(None)  # no arch → synthetic MLP at the default width
+    assert getattr(net.cfg, "arch", None) != "cnn" and net.cfg.d_model == RC._DEFAULT_HIDDEN
+
+
+def test_load_net_builds_mlp_at_trained_width():
+    net = RC._load_net(None, {"d_model": 64})
     assert net.cfg.d_model == 64
 
 
-def test_load_net_defaults_to_build_width():
-    net = RC._load_net(None)
-    assert net.cfg.d_model == RC._DEFAULT_HIDDEN
+def test_load_net_builds_cnn_from_arch():
+    arch = {"arch": "cnn", "img_size": 64, "in_channels": 3, "d_model": 32}
+    net = RC._load_net(None, arch)
+    assert net.cfg.arch == "cnn" and net.cfg.img_size == 64 and net.cfg.in_channels == 3
+
+
+def test_preprocess_shapes_match_arch():
+    # CNN → [C,H,W] at img_size; MLP → flat [_IN] grayscale. Driven entirely by net.cfg.
+    import numpy as _np
+
+    fake = _FakeCv2()
+    frame = _np.zeros((48, 64, 3), dtype=_np.uint8)
+    cnn = RC._load_net(None, {"arch": "cnn", "img_size": 64, "in_channels": 3, "d_model": 32})
+    assert RC._preprocess(cnn, frame, fake).shape == (3, 64, 64)
+    mlp = RC._load_net(None)
+    assert RC._preprocess(mlp, frame, fake).shape == (RC.IMG_SIZE * RC.IMG_SIZE,)
+
+
+def test_selftest_cnn_path(capsys):
+    net = RC._load_net(None, {"arch": "cnn", "img_size": 64, "in_channels": 3, "d_model": 32})
+    assert RC.selftest(net) == 0
+    assert "CNN" in capsys.readouterr().out

@@ -7,17 +7,27 @@ the **articulated hand skeleton** (every phalanx) for a live camera overlay.
 
 It trains and evaluates through the *same* `ModelSpec` seam as `cognition`
 ([../pose.py](../pose.py)): only the metric changes — **lower `mpjpe`** (mean keypoint
-error) is better. Data is **synthetic** (a Gaussian blob + a fixed, anatomically-plausible
-landmark constellation), so nothing is downloaded.
+error) is better.
+
+**Two modes, same model:**
+- **Synthetic demo (default)** — a tiny MLP on a Gaussian blob + a fixed landmark
+  constellation. Nothing is downloaded; it proves the pipeline but does **not** track a real
+  hand (it only learned the synthetic distribution).
+- **Real hands (opt-in)** — a small **CNN** trained on the **FreiHAND** dataset to detect a
+  real hand from the webcam. Enabled by a config + the dataset on disk (see
+  [Detect real hands](#detect-real-hands-freihand)). The camera auto-selects whichever
+  checkpoint you trained and rebuilds the matching architecture.
 
 ## Layout
 
 ```
 models/hands_recognition/
-  pose.py             HandPoseNet + LANDMARK_NAMES + HAND_CONNECTIONS + build_spec (ModelSpec)
+  pose.py             HandPoseNet (synthetic MLP) + HandPoseCNN (real) + build_spec (ModelSpec)
+  data_freihand.py    FreiHandLoader — real RGB hands → projected 21×2 keypoints
+  configs/hands2d.yaml real-hand training config (CNN + FreiHAND)
   stages/stage01_keypoints/   the single curriculum stage (keypoint regression)
   uses/camera/run_camera.py   live-camera use case (skeleton overlay + FPS HUD)
-  data/               prepared corpora (none — data is generated on the fly)
+  data/freihand/      the downloaded FreiHAND dataset (gitignored; only for real mode)
   docs/GUIDE.md       this file
 ```
 
@@ -52,6 +62,37 @@ rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level0/stage1/
 Checkpoints are namespaced by model: `dist/hands_recognition/checkpoints/level0/stage1/`.
 The gate metric is `mpjpe` (set the bar with `gate.max_mpjpe` in the level config).
 
+## Detect real hands (FreiHAND)
+
+The synthetic model above can't track a real hand. To detect **your** hand, train the CNN
+on real data — the **FreiHAND** dataset (real RGB hands + 21 keypoints):
+
+1. **Download** FreiHAND (FreiHAND_pub_v2) and **unzip into** `models/hands_recognition/data/freihand/`
+   — the folder must contain `training_xyz.json`, `training_K.json`, and `training/rgb/*.jpg`.
+   (Dataset page: https://lmb.informatik.uni-freiburg.de/projects/freihand/ — gitignored.)
+2. **Train** with the real-hand config (it selects the CNN + the real loader). Do **not**
+   pass `--level` (it would override `--config`):
+
+   ```bash
+   rdmca train --config models/hands_recognition/configs/hands2d.yaml
+   ```
+
+   Checkpoints land in `dist/hands_recognition/checkpoints/level1/stage1/`. The 2D keypoints
+   come from projecting the 3D labels with the camera intrinsics (`uv = K · xyz`, normalized).
+3. **Run the camera** — no flags needed: it auto-discovers the newest checkpoint, reads its
+   `audit.json` to rebuild the exact CNN (img_size / channels), and preprocesses each frame
+   to match training:
+
+   ```bash
+   rdmca uses camera
+   ```
+
+**v1 limitation:** this is a single-hand **regressor** — hold ONE hand so it roughly **fills
+the frame** (there is no detect-then-crop stage yet). It is **2D** (the overlay is a 2D
+skeleton); depth/3D would be a future `21×3` head. Tune size/speed in
+[../configs/hands2d.yaml](../configs/hands2d.yaml) (`model.img_size`, `model.in_channels`,
+`training.*`, `gate.max_mpjpe`).
+
 ## How it works
 
 - **Landmarks** (`LANDMARK_NAMES`, 21): `wrist`, then `{thumb,index,middle,ring,pinky}` ×
@@ -59,8 +100,10 @@ The gate metric is `mpjpe` (set the bar with `gate.max_mpjpe` in the level confi
 - **Skeleton** (`HAND_CONNECTIONS`, 21 bones): 6 palm edges (wrist→finger bases + across the
   knuckles) plus 3 phalanges per finger. Recognizing the 21 points reconstructs the whole
   articulated hand, which is what the overlay draws.
-- **Model**: a small MLP (frame → 21×2), trained with mean-squared error on the synthetic
-  constellation; `mean_keypoint_error` is the gate/eval metric.
+- **Model**: synthetic mode = a small MLP (frame → 21×2); real mode = `HandPoseCNN` (RGB
+  image → 21×2, strided convs + global pool + MLP head). Both train with mean-squared error;
+  `mean_keypoint_error` is the gate/eval metric. The camera rebuilds whichever one the
+  checkpoint was trained as (from its `audit.json` via the framework's `trained_arch`).
 
 See the framework docs ([../../../docs/README.md](../../../docs/README.md)) for how models,
 stages and the `ModelSpec` seam fit together.

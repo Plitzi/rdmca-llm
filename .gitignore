@@ -38,6 +38,8 @@ data/**/*.meta.json
 models/**/data/**/*.jsonl
 models/**/data/**/*.meta.json
 models/**/data/**/*.val.jsonl
+# Downloaded vision datasets (e.g. FreiHAND for hands_recognition) — large, regenerable.
+models/hands_recognition/data/freihand/
 
 # ── Runtime outputs ────────────────────────────────────────────────────────────
 logs/*.log

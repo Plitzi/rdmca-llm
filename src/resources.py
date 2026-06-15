@@ -155,9 +155,21 @@ def available_memory_gb() -> float:
 
 
 # ─────────────────────────── level helpers ──────────────────────────────────
+def _is_transformer(model: dict) -> bool:
+    """The memory/param estimators below assume the text transformer (vocab, attention
+    heads, MRL). A non-text model (e.g. the hand-pose CNN) has none of those; detect it by
+    the absence of `vocab_size` and fall back to the config's declared `resources` block."""
+    return "vocab_size" in model
+
+
 def estimate_for(cfg: dict, mode: str) -> float:
     """GB a config needs for `mode` ('train' | 'infer')."""
     model = cfg["model"]
+    if not _is_transformer(model):
+        # No token/attention estimate applies — use the config's own declared figures
+        # (small + safe default), so a non-transformer model doesn't need fake LM keys.
+        res = cfg.get("resources", {}) or {}
+        return float(res.get("est_train_mem_gb" if mode == "train" else "est_infer_mem_gb", 1.0))
     # Default fp32 (4 B/param) when unset — this module deliberately OVER-estimates
     # (see header). Assuming bf16 would HALVE the estimate and could green-light a
     # run that then OOMs; training defaults to bf16, so fp32 here is the safe side.
@@ -225,7 +237,14 @@ def announce(cfg: dict, mode: str = "train", stage: int | None = None) -> None:
     info = cfg.get("information", {}) or {}
     need = estimate_for(cfg, mode)
     have = available_memory_gb()
-    params_m = count_params(cfg["model"]) / 1e6
+    # Param count: the transformer formula for the text LM; for a non-text model use the
+    # config's declared `resources.est_params_m` (the real arch is the model's own).
+    model = cfg["model"]
+    params_m = (
+        count_params(model) / 1e6
+        if _is_transformer(model)
+        else float((cfg.get("resources", {}) or {}).get("est_params_m", 0.0))
+    )
     precision = (cfg.get("training", {}) or {}).get("precision", "bf16")
 
     print(f"\n  ── Level {level}: {name} ──")

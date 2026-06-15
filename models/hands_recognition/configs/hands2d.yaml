@@ -1,0 +1,65 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  hands_recognition · REAL 2D hand pose (FreiHAND + CNN)                     ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║  Opt-in config that trains the model to detect a REAL hand from the webcam ║
+# ║  (vs. the default synthetic MLP demo). Needs the FreiHAND dataset on disk   ║
+# ║  (see models/hands_recognition/docs/GUIDE.md). Train with:                  ║
+# ║    rdmca train --config models/hands_recognition/configs/hands2d.yaml       ║
+# ║  (do NOT pass --level — it would override --config). Checkpoints land in     ║
+# ║  dist/hands_recognition/checkpoints/level1/stage1/; the camera auto-loads.  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+model_name: hands_recognition
+level: 1
+inherit_base: false            # self-contained (this is not a text-LM level)
+backend: mlx                   # mlx | torch
+tier: edge
+
+information:
+  summary: "Detección de pose de mano 2D real (FreiHAND) con una CNN pequeña entrenada desde cero."
+  areas:
+    1: "Visión: 21 keypoints 2D de una mano real que llena el encuadre."
+
+# The hand-pose CNN. These are the ONLY model keys the hand-pose ModelSpec reads
+# (arch/img_size/in_channels/d_model=conv width). It is NOT a transformer, so it has no
+# vocab/heads — the resource estimator detects that and uses the `resources` block below.
+model:
+  arch: cnn
+  img_size: 128                # frames resized to 128×128 before the CNN
+  in_channels: 3               # RGB (skin colour helps); set 1 for grayscale
+  d_model: 128                 # conv width (channels at the deepest block + head width)
+
+dataset:
+  root: models/hands_recognition/data/freihand   # where you unzipped FreiHAND
+  augment: true                # horizontal-flip + brightness jitter (webcam robustness)
+
+training:
+  precision: fp32              # regression target; fp32 is stable and the model is tiny
+  lr: 1.0e-3
+  lr_min: 1.0e-4
+  weight_decay: 0.0
+  batch_size: 32
+  grad_accumulation: 1
+  warmup_steps: 200
+  save_every: 500
+  eval_every: 500
+  clip_grad_norm: 1.0
+  # Run length is n_tokens // (batch_size · img_size · grad_acc) steps. With the defaults
+  # 20M ⇒ ~4 880 steps (~5 passes over FreiHAND). Lower it for a quick smoke train.
+
+resources:
+  est_params_m: 0.12           # the real CNN param count (used by the announce/guard)
+  est_train_mem_gb: 0.8
+  est_infer_mem_gb: 0.3
+  min_ram_gb: 2
+
+gate:
+  max_mpjpe: 0.07              # graduate when mean keypoint error ≤ 0.07 (normalized coords)
+
+skip_gate: false
+
+curriculum:
+  stage1:
+    name: "Hand keypoint regression (real)"
+    entry_level: 1
+    n_tokens: 20_000_000       # ⇒ ~4 880 steps at the defaults above

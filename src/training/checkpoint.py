@@ -118,6 +118,12 @@ def write_stage_audit(
             "vocab_size": getattr(model_cfg, "vocab_size", None),
             "context_len": getattr(model_cfg, "context_len", None),
             "mrl_dims": list(getattr(model_cfg, "mrl_dims", []) or []),
+            # Vision-model geometry (None for the text LM): lets a consumer rebuild the
+            # EXACT net from the checkpoint — e.g. the camera reconstructs the hand CNN at
+            # the trained arch/size instead of guessing (which silently shape-mismatched).
+            "arch": getattr(model_cfg, "arch", None),
+            "img_size": getattr(model_cfg, "img_size", None),
+            "in_channels": getattr(model_cfg, "in_channels", None),
         },
         "hparams": {
             "lr": tcfg.get("lr"),

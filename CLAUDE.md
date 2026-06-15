@@ -80,10 +80,14 @@ propios stages (cada modelo internamente corre un grupo de stages):
   frame), el segundo modelo que DEMUESTRA que el framework es agnóstico: NO es un
   transformer ni texto. Es real y entrenable a través del MISMO `ModelSpec`
   ([models/hands_recognition/pose.py](models/hands_recognition/pose.py): `build_model`/
-  `build_loader`/`objective`/`evaluate`, métrica `mpjpe`, menor=mejor). Datos sintéticos
-  (sin descarga). Tiene UN stage (`stage01_keypoints/`), `moods: false`, y su caso de uso
-  es la **cámara** ([models/hands_recognition/uses/camera/](models/hands_recognition/uses/camera/),
-  `rdmca camera --model hands_recognition [--selftest]`).
+  `build_loader`/`objective`/`evaluate`, métrica `mpjpe`, menor=mejor). Dos arquitecturas bajo
+  el MISMO spec: **MLP sintético** (default, sin descarga — demuestra el pipeline pero NO
+  rastrea una mano real) y **CNN real** opt-in (`model.arch: cnn` + dataset FreiHAND en
+  `data/freihand/`, loader en `data_freihand.py`, config `configs/hands2d.yaml`) que detecta
+  una mano real 2D. `build_spec` elige arch+loader según el config. Tiene UN stage
+  (`stage01_keypoints/`), `moods: false`, y su caso de uso es la **cámara**
+  ([models/hands_recognition/uses/camera/](models/hands_recognition/uses/camera/),
+  `rdmca uses camera [--selftest]`) — reconstruye la arch del checkpoint (vía `trained_arch`).
 
 Cada modelo tiene además sus **experiments** propios (sondas de hipótesis) en
 `models/<nombre>/experiments/` — p. ej.

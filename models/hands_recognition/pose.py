@@ -1,16 +1,19 @@
-"""hands_recognition — a small hand-pose regressor + its ModelSpec.
+"""hands_recognition — hand-pose regressors + their ModelSpec.
 
-A deliberately compact, self-contained vision model that proves the framework is
-task-agnostic: NOT a transformer and NOT text. It regresses the 21 standard hand
-landmarks (wrist + four joints per finger, x/y in [0, 1]) from a downscaled grayscale
-frame; together with `HAND_CONNECTIONS` (the bones/phalanges) those landmarks form an
-articulated hand SKELETON the camera overlay draws. The data is SYNTHETIC (a bright blob
-at a random spot → a fixed, anatomically-plausible landmark constellation around it), so
-the whole pipeline runs with no dataset download — a real, learnable toy task.
+A compact vision model that proves the framework is task-agnostic: NOT a transformer and
+NOT text. It regresses the 21 standard hand landmarks (wrist + four joints per finger,
+x/y in [0, 1]); with `HAND_CONNECTIONS` (the bones/phalanges) those form an articulated
+hand SKELETON the camera overlay draws. Two interchangeable architectures, same ModelSpec:
 
-Built on the shared backend (`src.backend`), so it trains/infers on MLX or torch like
-the rest of the framework. The camera use case (uses/camera) consumes this net live and
-overlays the skeleton (every phalanx) on the webcam feed.
+  • HandPoseNet — a tiny MLP on a downscaled grayscale frame, trained on SYNTHETIC data
+    (a blob + a fixed landmark constellation). No download; proves the pipeline but does
+    not track a REAL hand.
+  • HandPoseCNN — a small CNN on an RGB image, trained on the real FreiHAND dataset (see
+    data_freihand.py) to detect a real hand. Opt-in via configs/hands2d.yaml.
+
+`build_spec` picks the arch + loader from the config (`model.arch`, `dataset.root`). Built
+on the shared backend (`src.backend`) → trains/infers on MLX or torch. The camera use case
+(uses/camera) rebuilds whichever arch the checkpoint was trained as and overlays the skeleton.
 """
 
 from __future__ import annotations
@@ -117,6 +120,68 @@ def build_pose_net(hidden: int = 256) -> HandPoseNet:
     return net
 
 
+class HandPoseCNN(nn.Module):
+    """Small CNN for REAL 2D hand pose: an RGB (or gray) image [N, C, H, W] in [0,1] →
+    21×2 keypoints in [0,1]. Four stride-2 conv blocks (so H,W shrink 16×) + global average
+    pool + a small MLP head. Unlike the synthetic MLP this keeps spatial structure, so it
+    can learn a real hand from real images (FreiHAND). Trained via the real-data loader."""
+
+    def __init__(self, img_size: int = 128, in_channels: int = 3, width: int = 128):
+        super().__init__()
+        self.c1 = nn.Conv2d(in_channels, width // 8, 3, stride=2, padding=1)  # H/2
+        self.c2 = nn.Conv2d(width // 8, width // 4, 3, stride=2, padding=1)  # H/4
+        self.c3 = nn.Conv2d(width // 4, width // 2, 3, stride=2, padding=1)  # H/8
+        self.c4 = nn.Conv2d(width // 2, width, 3, stride=2, padding=1)  # H/16
+        self.head1 = nn.Linear(width, width)
+        self.head2 = nn.Linear(width, _OUT)
+        # Record the input geometry so the trainer's audit captures it and the camera can
+        # rebuild the EXACT net from the checkpoint (no silent shape-mismatch).
+        self.cfg = SimpleNamespace(
+            arch="cnn",
+            img_size=img_size,
+            in_channels=in_channels,
+            d_model=width,
+            n_layers=4,
+            context_len=img_size,
+        )
+
+    def __call__(self, x):  # x: [N, C, H, W] in [0,1]
+        h = ops.relu(self.c1(x))
+        h = ops.relu(self.c2(h))
+        h = ops.relu(self.c3(h))
+        h = ops.relu(self.c4(h))
+        h = ops.mean(h, axis=(2, 3))  # global average pool → [N, width]
+        h = ops.relu(self.head1(h))
+        return ops.sigmoid(self.head2(h))  # [N, _OUT] in [0,1]
+
+    def count_params(self, include_sectors: bool = True) -> int:
+        w, cin = self.cfg.d_model, self.cfg.in_channels
+
+        def conv(i, o):
+            return i * o * 9 + o  # 3×3 kernel + bias
+
+        return (
+            conv(cin, w // 8)
+            + conv(w // 8, w // 4)
+            + conv(w // 4, w // 2)
+            + conv(w // 2, w)
+            + (w * w + w)
+            + (w * _OUT + _OUT)
+        )
+
+
+def build_pose_cnn(model_cfg: dict) -> HandPoseCNN:
+    """Construct the real-hand CNN from a config's `model` block (img_size / in_channels /
+    conv_width), with weights allocated by a dummy forward pass."""
+    img_size = int(model_cfg.get("img_size", 128))
+    in_channels = int(model_cfg.get("in_channels", 3))
+    width = int(model_cfg.get("conv_width", model_cfg.get("d_model", 128)))
+    net = HandPoseCNN(img_size, in_channels, width)
+    _ = net(ops.array(np.zeros((1, in_channels, img_size, img_size), dtype=np.float32)))
+    B.engine.eval(net.parameters())
+    return net
+
+
 def synth_batch(n: int, seed: int | None = None) -> tuple[np.ndarray, np.ndarray]:
     """A batch of (frames, keypoints): a Gaussian blob at a random centre, with the hand
     constellation laid around it. frames [n, _IN] float32, keypoints [n, _OUT] in [0,1]."""
@@ -178,14 +243,42 @@ def build_spec(cfg: dict):
     Lower `mpjpe` (mean keypoint error) is better, matching the trainer's ratchet."""
     from src.plugins import ModelSpec
 
+    def _real_dataset_root(cfg: dict) -> str | None:
+        return (cfg.get("dataset", {}) or {}).get("root")
+
+    def _make_real_loader(cfg: dict, split: str):
+        from models.hands_recognition.data_freihand import FreiHandLoader
+
+        mcfg = cfg.get("model", {}) or {}
+        dcfg = cfg.get("dataset", {}) or {}
+        tcfg = cfg.get("training", {}) or {}
+        return FreiHandLoader(
+            root=dcfg["root"],
+            batch_size=int(tcfg.get("batch_size", 32)),
+            img_size=int(mcfg.get("img_size", 128)),
+            in_channels=int(mcfg.get("in_channels", 3)),
+            split=split,
+            seed=int(tcfg.get("seed", 0)),
+            augment=bool(dcfg.get("augment", False)) and split == "train",
+        )
+
     def build_model(stage: int, cfg: dict, root):
+        mcfg = cfg.get("model", {}) or {}
         seed = int((cfg.get("training", {}) or {}).get("seed", 0))
         B.engine.set_seed(seed)
-        net = build_pose_net(int(cfg.get("model", {}).get("d_model", 256)))
         precision = (cfg.get("training", {}) or {}).get("precision", "fp32")
+        # arch="cnn" → real-hand CNN; otherwise the synthetic MLP (default, retro-compatible).
+        net = (
+            build_pose_cnn(mcfg)
+            if mcfg.get("arch") == "cnn"
+            else build_pose_net(int(mcfg.get("d_model", 256)))
+        )
         return net, net.cfg, None, precision, seed
 
     def build_loader(stage: int, cfg: dict):
+        # Real dataset present → train on real hands; else fall back to the synthetic stream.
+        if _real_dataset_root(cfg):
+            return _make_real_loader(cfg, "train")
         bs = int((cfg.get("training", {}) or {}).get("batch_size", 32))
         return _SynthLoader(bs, seed=int((cfg.get("training", {}) or {}).get("seed", 0)))
 
@@ -195,14 +288,20 @@ def build_spec(cfg: dict):
 
     def evaluate(model, stage, val_batches=None, cfg=None, log=print, step=None):
         B.engine.set_eval(model)
-        # The trainer hands us its raw val batches (numpy from next_batch); wrap them so
-        # the metric works whoever the caller is (trainer or a direct unit test).
-        errs = [
-            mean_keypoint_error(model(ops.array(f)), ops.array(k)) for f, k in (val_batches or [])
-        ]
+        cfg = cfg or {}
+        if _real_dataset_root(cfg):
+            # Honest gate: a HELD-OUT val split, not the training crops make_val_batches
+            # hands us at stage 1. Re-read each eval (infrequent; cheap JSON).
+            vloader = _make_real_loader(cfg, "val")
+            n = min(8, max(1, vloader.num_batches()))
+            batches = [vloader.next_batch() for _ in range(n)]
+        else:
+            # The trainer hands raw numpy val batches (synthetic path) — wrap for the metric.
+            batches = val_batches or []
+        errs = [mean_keypoint_error(model(ops.array(f)), ops.array(k)) for f, k in batches]
         B.engine.set_train(model)
         score = float(np.mean(errs)) if errs else float("inf")
-        threshold = float(((cfg or {}).get("gate", {}) or {}).get("max_mpjpe", 0.05))
+        threshold = float((cfg.get("gate", {}) or {}).get("max_mpjpe", 0.05))
         passed = score <= threshold
         tag = f"step={step:,} | " if step is not None else ""
         log(f"[gate] {tag}mpjpe={score:.4f} <= {threshold:.4f} -> {'PASS' if passed else 'fail'}")
