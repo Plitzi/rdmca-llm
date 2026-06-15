@@ -1,5 +1,5 @@
 """
-Tests for the ingestion normalization + garbage gate (src/core/data/textnorm.py):
+Tests for the ingestion normalization + garbage gate (src/data/textnorm.py):
 
   - format noise is normalized (NFKC, smart quotes/dashes → ASCII, control chars,
     inline-whitespace collapse) while CONTENT (incl. accents) is preserved;
@@ -15,8 +15,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.core.data.loader import _split_turns
-from src.core.data.textnorm import (
+from src.data.loader import _split_turns
+from src.data.textnorm import (
     clean_record_text,
     conversational_quality_ok,
     is_garbage,

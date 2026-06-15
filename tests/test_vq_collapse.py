@@ -1,6 +1,6 @@
 """
 Tests for VQ-VAE codebook-collapse prevention (EMA + dead-code reset) in
-src/core/modalities/vq.py. Default (ema=False) must be unchanged; ema=True must move the
+src/modalities/vq.py. Default (ema=False) must be unchanged; ema=True must move the
 codebook toward the data and recycle dead entries instead of letting them die.
 """
 
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import mlx.core as mx
 import numpy as np
 
-from src.core.modalities.vq import VectorQuantizer
+from src.modalities.vq import VectorQuantizer
 
 
 def test_default_behavior_unchanged():

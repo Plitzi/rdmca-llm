@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from fixes_common import B, tiny_model
 
-import src.core.backend as backend
+import src.backend as backend
 
 # ─────────────────────────── grad accumulation (C4) ──────────────────────────
 
@@ -64,7 +64,7 @@ def test_clip_grads_noop_when_under_threshold():
 def test_backend_surface_complete_both():
     import warnings
 
-    from src.core.backend.base import check_surface
+    from src.backend.base import check_surface
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # benign "switching backend" notice

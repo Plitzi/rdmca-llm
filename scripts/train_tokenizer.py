@@ -44,13 +44,13 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from src.core.config import get_languages, load_config, resolve_config_path
-from src.core.modalities.vocab import (
+from src.config import get_languages, load_config, resolve_config_path
+from src.modalities.vocab import (
     CONTROL_SPECIALS,
     build_modality_layout,
     tokenizer_symbols,
 )
-from src.core.modalities.vqvae_train import train_audio_tokenizer, train_image_tokenizer
+from src.modalities.vqvae_train import train_audio_tokenizer, train_image_tokenizer
 
 console = Console()
 
@@ -171,7 +171,7 @@ def train_spm(
     import tempfile
     import threading
 
-    # Single source of truth (src/core/modalities/vocab.py): per-language tags +
+    # Single source of truth (src/modalities/vocab.py): per-language tags +
     # modality boundaries + every stage's control delimiters (<think>, <tool_call>,
     # …). Registered as user-defined symbols so they tokenize atomically instead of
     # BPE-splitting into combos the corpus never contains. New stage marker → add it
@@ -295,7 +295,7 @@ def show_summary(
 # ── Multimodal VQ-VAE tokenizers (image + audio) ──────────────────────────────
 # Trained after text by a single command. Each modality is OPTIONAL: with no data
 # for it, it is SKIPPED rather than failing — text is the only required tokenizer.
-# The training loops themselves live in src/core/modalities/vqvae_train.py.
+# The training loops themselves live in src/modalities/vqvae_train.py.
 AUDIO_OUT = "dist/tokenizer/audio_vqvae.npz"
 IMAGE_OUT = "dist/tokenizer/image_vqvae.npz"
 IMG_SIZE = 32  # CIFAR-scale default
@@ -360,7 +360,7 @@ def main():
     # Languages: --lang override > config(model.languages) > ['en']
     cfg = load_config(resolve_config_path(args.config, args.level))
     # Select the active model so the stage-1 data dir resolves under it.
-    from src.core.config import select_model
+    from src.config import select_model
 
     select_model(cfg, args.model)
     langs = [l.strip() for l in args.lang.split(",")] if args.lang else get_languages(cfg)

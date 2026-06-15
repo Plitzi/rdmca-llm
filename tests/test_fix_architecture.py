@@ -207,7 +207,7 @@ def test_mrl_loss_mask_equals_manual_restricted_mean():
 
 
 def test_moe_top_k_restored_on_grow():
-    from src.core.model.moe import SectorGate
+    from src.model.moe import SectorGate
 
     g = SectorGate(d_model=32, n_experts=1, top_k=2)
     assert g.top_k == 1  # capped to available experts

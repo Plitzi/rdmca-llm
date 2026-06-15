@@ -5,13 +5,13 @@ model + fake tokenizer + corpus-writer the suites reuse. Not collected as tests.
 import json
 from typing import ClassVar
 
-import src.core.backend as backend
+import src.backend as backend
 
 backend.select("mlx")  # bind model/loader modules to MLX
 B = backend.current()
 
-from src.core.model.config import ModelConfig
-from src.core.model.transformer import RDMCAFoundational
+from src.model.config import ModelConfig
+from src.model.transformer import RDMCAFoundational
 
 
 def tiny_model() -> RDMCAFoundational:

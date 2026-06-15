@@ -30,12 +30,17 @@ run next.
 Run `rdmca` (no args) for the grouped command list, or `rdmca <command> --help`
 for a command's own options.
 
+Select the MODEL with `--model NAME` (default `cognition`): for build/train/eval
+commands it is forwarded to the tool; for a `Run` command it picks which model's use
+case to launch (models/<model>/uses/<app>/). `rdmca info` lists the models.
+
 Typical flow (model defaults to `cognition`):
-    rdmca info                         # what models/levels/stages exist + status
-    rdmca prepare  --level 1 --stage 1 # build that stage's corpus
-    rdmca tokenizer --level 1          # train the tokenizer
-    rdmca train    --level 1 --stage 1 # train the stage
-    rdmca chat     --level 1 --stage 1 # talk to it
+    rdmca info                          # what models/levels/stages exist + status
+    rdmca prepare  --level 1 --stage 1  # build that stage's corpus
+    rdmca tokenizer --level 1           # train the tokenizer
+    rdmca train    --level 1 --stage 1  # train the stage
+    rdmca chat     --level 1 --stage 1  # talk to it
+    rdmca camera --model hands_recognition   # a different model's use case
 """
 
 import subprocess
@@ -44,43 +49,39 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
-# Each command → (group, target, one-line help). A target is ("script", relpath)
-# run as a file, or ("module", dotted) run with `python -m`. Args are forwarded
-# verbatim, so each tool's own argparse stays the single source of truth.
-COMMANDS: dict[str, tuple[str, tuple[str, str], str]] = {
+# Each command → (group, kind, target, help). Kinds:
+#   "script" — scripts/<target>; model-aware ones get `--model NAME` forwarded.
+#   "run"    — a model use case at models/<model>/uses/<target>/run_<target>.py
+#              (the MODEL chooses which use case exists; `--model` selects it).
+#   "module" — `python -m <target>`.
+#   "builtin"— handled in-process here (info).
+# Args are forwarded verbatim, so each tool's own argparse is the single source of truth.
+COMMANDS: dict[str, tuple[str, str, str, str]] = {
     # Data
-    "prepare": ("Data", ("script", "scripts/prepare_data.py"), "Build a stage's training corpus"),
-    "tokenizer": (
-        "Data",
-        ("script", "scripts/train_tokenizer.py"),
-        "Train the tokenizer (+ VQ-VAE)",
-    ),
-    "prepare-mm": ("Data", ("script", "scripts/prepare_multimodal.py"), "Build image/audio pairs"),
+    "prepare": ("Data", "script", "scripts/prepare_data.py", "Build a stage's training corpus"),
+    "tokenizer": ("Data", "script", "scripts/train_tokenizer.py", "Train the tokenizer (+ VQ-VAE)"),
+    "prepare-mm": ("Data", "script", "scripts/prepare_multimodal.py", "Build image/audio pairs"),
     # Train
-    "train": ("Train", ("script", "scripts/train.py"), "Train a stage (gated curriculum)"),
+    "train": ("Train", "script", "scripts/train.py", "Train a stage (gated curriculum)"),
     # Evaluate
-    "bench": ("Evaluate", ("script", "scripts/run_benchmarks.py"), "Run external benchmarks"),
-    "ood": ("Evaluate", ("script", "scripts/ood_probe.py"), "Out-of-distribution probe"),
-    "plot": ("Evaluate", ("script", "scripts/plot_metrics.py"), "Plot training metrics"),
-    # Run (consume the trained model)
-    "chat": (
-        "Run",
-        ("script", "models/cognition/uses/chat/run_chat.py"),
-        "Interactive chat with a checkpoint",
-    ),
-    "agent": ("Run", ("script", "models/cognition/uses/agent/run_agent.py"), "Agent tool-use loop"),
-    "daemon": (
-        "Run",
-        ("module", "src.core.consolidation.daemon"),
-        "Consolidation daemon (learn from experience)",
-    ),
+    "bench": ("Evaluate", "script", "scripts/run_benchmarks.py", "Run external benchmarks"),
+    "ood": ("Evaluate", "script", "scripts/ood_probe.py", "Out-of-distribution probe"),
+    "plot": ("Evaluate", "script", "scripts/plot_metrics.py", "Plot training metrics"),
+    # Run a model's use case (resolved under the selected model's uses/)
+    "chat": ("Run", "run", "chat", "Interactive chat (cognition)"),
+    "agent": ("Run", "run", "agent", "Agent tool-use loop (cognition)"),
+    "camera": ("Run", "run", "camera", "Live camera inference (hands_recognition)"),
+    "daemon": ("Run", "module", "src.consolidation.daemon", "Consolidation daemon (cognition)"),
     # Maintenance
-    "purge": ("Maintenance", ("script", "scripts/purge.py"), "Delete generated artifacts"),
+    "purge": ("Maintenance", "script", "scripts/purge.py", "Delete generated artifacts"),
     # Discovery (built-in, handled here)
-    "info": ("Discovery", ("builtin", "info"), "List models, levels, stages + status"),
+    "info": ("Discovery", "builtin", "info", "List models, levels, stages + status"),
 }
 
 GROUP_ORDER = ["Data", "Train", "Evaluate", "Run", "Maintenance", "Discovery"]
+
+# `script` commands that accept a `--model` flag (forwarded). Others (prepare-mm) don't.
+_MODEL_AWARE_SCRIPTS = {"prepare", "tokenizer", "train", "bench", "ood", "plot", "purge"}
 
 
 def _print_overview() -> None:
@@ -89,17 +90,48 @@ def _print_overview() -> None:
     width = max(len(name) for name in COMMANDS)
     for group in GROUP_ORDER:
         print(f"\n  {group}")
-        for name, (grp, _target, help_text) in COMMANDS.items():
+        for name, (grp, _kind, _target, help_text) in COMMANDS.items():
             if grp == group:
                 print(f"    {name:<{width}}  {help_text}")
 
 
+def _extract_model(rest: list[str]) -> tuple[str | None, list[str]]:
+    """Pull a `--model NAME` / `--model=NAME` out of the forwarded args (so the CLI can
+    both route by model AND re-add it for the scripts that want it). Returns (model, rest)."""
+    out: list[str] = []
+    model = None
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok == "--model" and i + 1 < len(rest):
+            model = rest[i + 1]
+            i += 2
+            continue
+        if tok.startswith("--model="):
+            model = tok.split("=", 1)[1]
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return model, out
+
+
 def _dispatch(name: str, rest: list[str]) -> int:
-    _group, (kind, target), _help = COMMANDS[name]
-    if kind == "script":
-        cmd = [sys.executable, str(REPO / target), *rest]
-    else:  # module
+    _group, kind, target, _help = COMMANDS[name]
+    model, rest = _extract_model(rest)
+    if kind == "run":
+        # A use case belongs to a model: models/<model>/uses/<app>/run_<app>.py
+        model = model or "cognition"
+        app_path = REPO / "models" / model / "uses" / target / f"run_{target}.py"
+        if not app_path.exists():
+            print(f"rdmca: model '{model}' has no '{name}' use case ({app_path} not found).")
+            return 2
+        cmd = [sys.executable, str(app_path), *rest]
+    elif kind == "module":
         cmd = [sys.executable, "-m", target, *rest]
+    else:  # script
+        fwd = ["--model", model] if (model and name in _MODEL_AWARE_SCRIPTS) else []
+        cmd = [sys.executable, str(REPO / target), *rest, *fwd]
     return subprocess.call(cmd, cwd=str(REPO))
 
 
@@ -129,7 +161,7 @@ def _stage_trained(model: str, level: int, number: int) -> bool:
 def _cmd_info(rest: list[str]) -> int:
     import argparse
 
-    from src.core.config import available_levels
+    from src.config import available_levels
     from src.plugins import all_stages, bcf_stage, set_active_model
 
     ap = argparse.ArgumentParser(prog="rdmca info", description="List models, levels, stages.")

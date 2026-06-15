@@ -30,9 +30,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root on path
 
-from src.core.config import SUPPORTED_PRECISIONS, get_precision, require_backend
-from src.core.training.curriculum import ckpt_root, load_config, prev_active_stage, stage_enabled
-from src.core.training.trainer import train_stage
+from src.config import SUPPORTED_PRECISIONS, get_precision, require_backend
+from src.training.curriculum import ckpt_root, load_config, prev_active_stage, stage_enabled
+from src.training.trainer import train_stage
 
 
 def main():
@@ -99,13 +99,13 @@ Examples:
     )
     args = parser.parse_args()
 
-    from src.core.config import resolve_config_path
+    from src.config import resolve_config_path
 
     cfg_path = resolve_config_path(args.config, args.level)
     cfg = load_config(cfg_path)
     # Select the active model (CLI --model wins; registry default = cognition) before
     # anything touches the stage registry, so it discovers THIS model's stage plugins.
-    from src.core.config import select_model
+    from src.config import select_model
 
     select_model(cfg, args.model)
     # Precision override (CLI wins over config). Set before the guard/announce so the
@@ -184,7 +184,7 @@ Examples:
             print(f"\nNext: python scripts/train.py{lvl_flag} --stage {later[0]}")
         else:
             print("\nAll stages complete. Foundational core frozen.")
-            print(f"Next: python -m src.core.consolidation.daemon{lvl_flag} --once")
+            print(f"Next: python -m src.consolidation.daemon{lvl_flag} --once")
     else:
         print(f"\nStage {args.stage} gate not passed.")
         print("  Options: extend corpus, adjust thresholds, or --resume")

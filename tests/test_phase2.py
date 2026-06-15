@@ -11,9 +11,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np
 import pytest
 
-from src.core.memory.episodic_buffer import EpisodicBuffer, Experience
-from src.core.memory.ltss import LTSS, LTSSNode
-from src.core.memory.mrf import THETA_RETAIN, mrf
+from src.memory.episodic_buffer import EpisodicBuffer, Experience
+from src.memory.ltss import LTSS, LTSSNode
+from src.memory.mrf import THETA_RETAIN, mrf
 
 
 @pytest.fixture
@@ -81,9 +81,9 @@ def test_rollback_integrity(tmp_path):
     import mlx.optimizers as optim
     from mlx.utils import tree_flatten
 
-    from src.core.consolidation.snapshot import SectorSnapshotManager
-    from src.core.model.lora import build_all_sectors, masked_sector_update
-    from src.core.model.transformer import ModelConfig, RDMCAFoundational
+    from src.consolidation.snapshot import SectorSnapshotManager
+    from src.model.lora import build_all_sectors, masked_sector_update
+    from src.model.transformer import ModelConfig, RDMCAFoundational
 
     cfg = ModelConfig(
         vocab_size=512, d_model=64, n_layers=2, n_heads=2, ffn_dim=128, mrl_dims=[32, 64]
@@ -114,8 +114,8 @@ def test_rollback_integrity(tmp_path):
 
 def test_bcf_adversarial_routing():
     """Adversarial experiences must be penalized to R⁺ < 0 (adv-buffer bound)."""
-    from src.core.relevance.engine import RelevanceEngine
-    from src.core.relevance.penalty import is_adversarial
+    from src.relevance.engine import RelevanceEngine
+    from src.relevance.penalty import is_adversarial
 
     re = RelevanceEngine(ltss=None)
     re.update_state(np.zeros(256, dtype=np.float32))

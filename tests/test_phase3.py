@@ -4,8 +4,8 @@ Phase 3 Acceptance Tests — Image Modality (VQ-VAE + unified vocab)
 
 import numpy as np
 
-from src.core.modalities.image import ImageVQVAE
-from src.core.modalities.vocab import IMAGE_VOCAB_SIZE, build_modality_layout
+from src.modalities.image import ImageVQVAE
+from src.modalities.vocab import IMAGE_VOCAB_SIZE, build_modality_layout
 
 
 def test_vqvae_roundtrip_shapes():
@@ -24,7 +24,7 @@ def test_vqvae_trains_one_step():
 
     Backend-neutral: the VQ-VAE is channels-first (NCHW), so the input batch is
     [B, 3, H, W]. Runs on whichever backend is active (mlx | torch)."""
-    import src.core.backend as backend
+    import src.backend as backend
 
     B = backend.current()
     m = ImageVQVAE(img_size=32)
@@ -47,7 +47,7 @@ def test_unified_vocab_layout_disjoint():
 
 def test_image_tokens_offset_into_unified_range():
     """Perception offsets raw codebook ids into the image range + boundaries."""
-    from src.core.modalities.perception import MultimodalPerception
+    from src.modalities.perception import MultimodalPerception
 
     info = {
         "modality_layout": build_modality_layout(8000),

@@ -20,7 +20,7 @@ and is imported intra-model (see models/cognition/mood).
 
 from __future__ import annotations
 
-from src.core.modalities.vocab import REASONING_SPECIALS
+from src.modalities.vocab import REASONING_SPECIALS
 from src.plugins.base import SourceBuilder, StageGate, StageKind, StagePlugin
 from src.plugins.sdk.agentic import (
     AGENTIC_SYSTEM_PROMPT,

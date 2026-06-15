@@ -27,9 +27,9 @@ import itertools
 import numpy as np
 import pytest
 
-from src.core.data.loader import DataLoader, TextDataset
-from src.core.modalities.text import BOS_ID, EOS_ID
-from src.core.training import trainer as T
+from src.data.loader import DataLoader, TextDataset
+from src.modalities.text import BOS_ID, EOS_ID
+from src.training import trainer as T
 
 
 # ─────────────────────────── fakes / helpers ────────────────────────────────

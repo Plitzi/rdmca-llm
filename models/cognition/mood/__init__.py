@@ -9,7 +9,7 @@ say, a hand-pose detector), so all of it lives here, not in the framework core:
 
 `post_stage` is the model's stage-completion hook: the trainer calls it after a
 cognitive stage finishes (discovered by name on this package — see
-src.core.training.heads), and it trains+saves the mood head when the stage is
+src.training.heads), and it trains+saves the mood head when the stage is
 conversational and moods are enabled. This is how the agnostic core trains a
 cognition-specific head without ever importing this package.
 """
@@ -74,7 +74,7 @@ def post_stage(model, stage: int, cfg: dict, ckpt_dir: Path, precision: str) -> 
         )
         return
     try:
-        from src.core.modalities.text import TextTokenizer
+        from src.modalities.text import TextTokenizer
 
         train_mood_head(
             model,

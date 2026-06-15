@@ -194,7 +194,7 @@ def plot_stage(csv_path: Path, out: Path | None, label: str, plt) -> Path | None
     return out
 
 
-def plot_overview(level: int, out: Path | None, plt) -> Path | None:
+def plot_overview(level: int, out: Path | None, plt, model: str = "cognition") -> Path | None:
     """The WHOLE-CURRICULUM panorama: one figure across every trained stage so you
     can see the model's evolution end-to-end. Top — each stage's ENTRY PP vs its final
     best PP (grouped bars + Δ%), the offset-corrected 'did this stage improve its own
@@ -202,7 +202,7 @@ def plot_overview(level: int, out: Path | None, plt) -> Path | None:
     stages on a global step axis, with stage boundaries marked."""
     import json
 
-    base = ROOT / "dist" / "checkpoints" / f"level{level}"
+    base = ROOT / "dist" / "checkpoints" / model / f"level{level}"
     stages = sorted(
         int(p.name.replace("stage", ""))
         for p in base.glob("stage*")
@@ -290,6 +290,7 @@ def plot_overview(level: int, out: Path | None, plt) -> Path | None:
 def main():
     ap = argparse.ArgumentParser(description="Plot RDMCA training metrics.")
     ap.add_argument("--level", type=int, default=1, help="level (default 1)")
+    ap.add_argument("--model", default="cognition", help="model to plot (default: cognition)")
     ap.add_argument(
         "--stage",
         type=int,
@@ -320,14 +321,14 @@ def main():
         sys.exit(1)
 
     if args.overview:
-        plot_overview(args.level, Path(args.out) if args.out else None, plt)
+        plot_overview(args.level, Path(args.out) if args.out else None, plt, args.model)
         return
 
     targets: list[tuple[Path, str]] = []
     if args.csv:
         targets.append((Path(args.csv), Path(args.csv).parent.name))
     else:
-        base = ROOT / "dist" / "checkpoints" / f"level{args.level}"
+        base = ROOT / "dist" / "checkpoints" / args.model / f"level{args.level}"
         stages = args.stage or sorted(
             int(p.name.replace("stage", ""))
             for p in base.glob("stage*")

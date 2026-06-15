@@ -96,7 +96,7 @@ class StagePlugin:
 class ModelSpec:
     """How the framework BUILDS, TRAINS and EVALUATES one model — the seam that makes
     the engine task/modality-agnostic. The default (a text LLM) lives in
-    `src/core/training/model_spec.py`; a model package overrides it by exposing a module-
+    `src/training/model_spec.py`; a model package overrides it by exposing a module-
     level `SPEC = ModelSpec(...)` (or `build_spec(cfg) -> ModelSpec`), so the same
     trainer can train, say, a hand-pose model instead of a conversational LLM.
 

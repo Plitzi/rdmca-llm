@@ -84,9 +84,9 @@ from models.cognition.uses.common.loading import (  # noqa: F401  (shared import
     resolve_stage_checkpoint,
 )
 from models.cognition.uses.common.loading import load_mood_head as _load_mood_head
-from src.core.memory.experience_log import detect_correction, load_experiences, log_experience
-from src.core.modalities.text import BOS_ID
-from src.core.observability import ContextReport, count_tokens
+from src.memory.experience_log import detect_correction, load_experiences, log_experience
+from src.modalities.text import BOS_ID
+from src.observability import ContextReport, count_tokens
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Chat loop
@@ -196,7 +196,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     recall = None
     if tok_ready:
         try:
-            from src.core.memory.recall import MemoryRecall
+            from src.memory.recall import MemoryRecall
 
             recall = MemoryRecall(model, tokenizer)
             print("  Memory recall: on (LTSS + experiences, injected as <mem>).")
@@ -210,7 +210,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     cm = None
     if getattr(args, "context_slots", False) and tok_ready:
         try:
-            from src.core.routing.context_manager import build_context_manager
+            from src.routing.context_manager import build_context_manager
 
             cm = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
             gate_on = getattr(model, "gate", None) is not None
@@ -672,7 +672,7 @@ Examples:
         np.random.seed(args.seed)
 
     from models.cognition.mood import moods_enabled
-    from src.core.config import load_config, resolve_config_path
+    from src.config import load_config, resolve_config_path
 
     args.config = resolve_config_path(args.config, args.level)
     # Moods are a cognition feature; honor the config switch (a model with `moods: false`,
@@ -687,7 +687,7 @@ Examples:
 
     print("Loading model…")
     model, mcfg = load_model(args)
-    from src.core.modalities.text import TextTokenizer
+    from src.modalities.text import TextTokenizer
 
     tokenizer = TextTokenizer()
 
@@ -700,7 +700,7 @@ Examples:
     # Optional multimodal grounding prefix (image/audio) via the perception layer.
     args.mm_prefix = []
     if args.image or args.audio:
-        from src.core.modalities.perception import MultimodalPerception
+        from src.modalities.perception import MultimodalPerception
 
         mpl = MultimodalPerception(text_tok=tokenizer)
         segments = []

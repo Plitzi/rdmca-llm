@@ -47,11 +47,11 @@ Separación de nivel raíz: **`src/` = SOLO el framework; `models/` = los modelo
 de `src/`). El framework NUNCA importa un modelo (lo descubre por nombre vía el registry);
 un modelo SÍ consume el framework.
 
-- **`src/core/`** — el FRAMEWORK, **agnóstico a la tarea**: todo lo general
+- **`src/`** — el FRAMEWORK, **agnóstico a la tarea**: todo lo general
   (`backend/`, `model/`, `modalities/`, `data/`, `training/`, `consolidation/`,
   `memory/`, `relevance/`, `routing/` + `config.py`, `env.py`, `resources.py`,
   `observability.py`). Cambiando el modelo, este mismo framework entrena OTRO tipo de
-  modelo. **El core NUNCA importa un modelo/stage concreto** ni importa de un `uses/`.
+  modelo. **El framework NUNCA importa un modelo/stage concreto** ni importa de un `uses/`.
 - **`src/plugins/`** — el SISTEMA de plugins (framework, NO es un plugin): el contrato
   (`base.py` → `StagePlugin`/`ModelSpec`), el `registry.py` que descubre los modelos en
   `models/`, y el **SDK** ([src/plugins/sdk/](src/plugins/sdk/)) — el único import estable
@@ -89,7 +89,7 @@ ANTES de tocar el registry, para que descubra los stages de ESE modelo.
 **`ModelSpec`** ([src/plugins/base.py](src/plugins/base.py)) es la costura que hace el motor
 agnóstico a la tarea/modalidad. El trainer NUNCA construye la red, el loader, la pérdida ni
 el gate directamente: se los pide al `ModelSpec` activo (resuelto en
-[src/core/training/model_spec.py](src/core/training/model_spec.py)). El spec por defecto
+[src/training/model_spec.py](src/training/model_spec.py)). El spec por defecto
 (`text-lm`) cablea las piezas del LLM de texto (`setup.build_stage_model`,
 `dataload.build_data_loader`, la objetivo MRL+aux, `gates.evaluate_gate`), así `cognition`
 se comporta idéntico que antes. Un modelo sobreescribe cualquier pieza exponiendo
@@ -97,19 +97,19 @@ se comporta idéntico que antes. Un modelo sobreescribe cualquier pieza exponien
 `evaluate`, **menor score es mejor** (una métrica higher-is-better devuelve p. ej.
 `1-accuracy`), para que el ratchet del trainer siga siendo agnóstico a la métrica.
 
-**Código específico del modelo vive CON el modelo.** El core solo contiene lo
+**Código específico del modelo vive CON el modelo.** El framework solo contiene lo
 REUSABLE/general del framework; nada atado a un modelo concreto. Si una faculty solo
 tiene sentido para un modelo (p. ej. los **moods/emociones** son de cognition — no
 sirven a un detector de manos), va en `models/<modelo>/` (ver
-[models/cognition/mood/](models/cognition/mood/)), NO en `src/core` ni en el SDK.
-- El core NUNCA importa el modelo. Para efectos secundarios específicos del modelo al
+[models/cognition/mood/](models/cognition/mood/)), NO en `src` ni en el SDK.
+- El framework NUNCA importa el modelo. Para efectos secundarios específicos del modelo al
   terminar un stage (p. ej. entrenar el mood head de cognition), el trainer invoca un
   **hook opcional** `post_stage(model, stage, cfg, ckpt_dir, precision)` que el paquete
   del modelo expone — descubierto por nombre vía `model_hook(...)` (mismo patrón que
   `SPEC`). Así el core agnóstico dispara trabajo del modelo sin importarlo.
 - Un **stage** importa helpers GENERALES del framework solo desde el SDK; los helpers
   ESPECÍFICOS de su modelo los importa intra-modelo (de `models/<modelo>/…`), nunca
-  de otro modelo ni de `src/core`. Borrar el modelo se lleva su faculty y sus stages.
+  de otro modelo ni de `src`. Borrar el modelo se lleva su faculty y sus stages.
 - `uses/` (consumidores) importa la faculty del modelo directamente (p. ej.
   `from models.cognition.mood import MoodTracker`). El SDK permanece libre de mood.
 
@@ -154,16 +154,16 @@ colecciona ambos (`testpaths = tests models`); el `conftest.py` de la raíz pone
 repo en `sys.path`.
 
 Otros puntos clave del refactor:
-- Entrenador descompuesto en [src/core/training/](src/core/training/) (`trainer`,
+- Entrenador descompuesto en [src/training/](src/training/) (`trainer`,
   `setup`, `gates`, `checkpoint`, `dataload`, `valdata`, `heads`, `curriculum`); CLI en
   [scripts/train.py](scripts/train.py). El daemon en
-  `python -m src.core.consolidation.daemon` (src/core/consolidation/daemon.py).
+  `python -m src.consolidation.daemon` (src/consolidation/daemon.py).
 - Núcleo de generación en [models/cognition/uses/common/generate.py](models/cognition/uses/common/generate.py) y carga de
   modelo/checkpoint en [models/cognition/uses/common/loading.py](models/cognition/uses/common/loading.py) — son
   CONSUMIDORES (los reusan chat y agent), por eso viven en `uses/`, no en el framework.
 - La metadata de stages (gates, nombres, rehearsal, lr_scale, freeze point, mood) vive
   SOLO en los plugins y la sirve `src.plugins` (registry) — no hay tablas duplicadas. (Los
-  antiguos `src/data/graded.py` y el shim `src/core/training/stages.py` se ELIMINARON.)
+  antiguos `src/data/graded.py` y el shim `src/training/stages.py` se ELIMINARON.)
 
 ## Convenciones de código (OBLIGATORIO)
 
@@ -181,10 +181,10 @@ empieces a sentir un archivo pesado o con responsabilidades mezcladas, pártelo.
 carpeta común en vez de duplicarlo:
 - compartido entre plugins/stages → el **SDK de plugins** (`src/plugins/sdk/`), que es el
   único contrato del que dependen los plugins; **nunca** un `_shared` dentro de `plugins/`
-  ni un import directo de `src/core` desde un plugin;
+  ni un import directo de `src` desde un plugin;
 - compartido entre consumidores (chat/agent) → `models/cognition/uses/common/`;
-- compartido en el framework agnóstico → su subsistema en `src/core/` (entrenamiento →
-  `src/core/training/`, etc.).
+- compartido en el framework agnóstico → su subsistema en `src/` (entrenamiento →
+  `src/training/`, etc.).
 Nunca copies un helper en dos sitios — muévelo arriba y que ambos lo importen.
 
 **CLI único: `rdmca`.** [scripts/rdmca.py](scripts/rdmca.py) es el ÚNICO punto de
@@ -198,7 +198,7 @@ tocan stages.
 
 **Scripts vs internos.** Los scripts en [scripts/](scripts/) son los CLIs del developer
 (envueltos por `rdmca`). Los componentes de runtime/internos NO van en scripts: viven en
-su subsistema (p. ej. el daemon de consolidación en `src/core/consolidation/daemon.py`,
-ejecutable con `rdmca daemon` o `python -m src.core.consolidation.daemon`). Las apps que
+su subsistema (p. ej. el daemon de consolidación en `src/consolidation/daemon.py`,
+ejecutable con `rdmca daemon` o `python -m src.consolidation.daemon`). Las apps que
 CONSUMEN el modelo (chat, agent) viven en `uses/`, no en `scripts/`. Al añadir un CLI
 nuevo, regístralo en `COMMANDS` de `rdmca.py`.

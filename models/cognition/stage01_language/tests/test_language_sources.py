@@ -22,7 +22,7 @@ def test_dailydialog_extractor_builds_quality_transcript():
     """The DailyDialog corpus entry must turn alternating utterances into a clean
     User:/Assistant: exchange that passes the conversational-quality gate — and be
     exception-free on a missing/renamed schema (so a bad mirror is just empty)."""
-    from src.core.data.textnorm import conversational_quality_ok
+    from src.data.textnorm import conversational_quality_ok
 
     extractors = dict(_DIALOGUE_CORPORA["en"])
     assert "roskoN/dailydialog" in extractors

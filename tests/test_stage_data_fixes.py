@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-from src.core.data.loader import DataLoader, TextDataset
+from src.data.loader import DataLoader, TextDataset
 from src.plugins.sdk import blend, cycle_records
 
 

@@ -13,7 +13,7 @@ Where the data comes from is per-source:
   - Lower levels use each stage plugin's OWN simple/graded sources (tinystories,
     dialogue, arithmetic, analogies, agentic/MCP/skills, reasoning) — small,
     conversational/structured (see models/<model>/stageNN_*/sources.py).
-  - Higher levels add the FULL external corpora (src/core/data/corpora.py: Wikipedia per
+  - Higher levels add the FULL external corpora (src/data/corpora.py: Wikipedia per
     language, ARC, GSM8K, MATH, ethics), with Wikipedia routed to a stage by category
     keywords (STAGE_KEYWORDS) and prose readability-graded (Flesch-Kincaid).
 
@@ -49,9 +49,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.core.data.corpora import full_corpus_streamers, setup_hf_token
-from src.core.data.jsonl_writer import validate_jsonl, write_jsonl
-from src.core.data.textnorm import conversational_quality_ok  # ingestion content gate
+from src.data.corpora import full_corpus_streamers, setup_hf_token
+from src.data.jsonl_writer import validate_jsonl, write_jsonl
+from src.data.textnorm import conversational_quality_ok  # ingestion content gate
 
 # Sources that are free prose and SHOULD be readability-graded. Everything else
 # (dialogue, tool/skill/MCP JSON, arithmetic, analogies, causal) is conversational
@@ -71,9 +71,9 @@ def prepare_stage_for_level(
     """Prepare graded data for one (level, stage), reading the level config's
     curriculum entry: which sources, the complexity filter, the token budget and
     the output dir. Skips stages whose entry_level is above this level."""
-    from src.core.training.curriculum import stage_enabled
     from src.plugins import stage_data_dir, stream_source
     from src.plugins.sdk import passes_filter
+    from src.training.curriculum import stage_enabled
 
     curriculum = cfg.get("curriculum", {}) or {}
     stage_key = f"stage{stage}"
@@ -175,7 +175,7 @@ def main():
 
     setup_hf_token()
 
-    from src.core.config import (
+    from src.config import (
         MAX_LEVEL,
         get_languages,
         get_level,
@@ -187,7 +187,7 @@ def main():
     cfg = load_config(cfg_path)
     # Select the active model (CLI --model wins; registry default = cognition) before
     # touching the stage registry, so it discovers THIS model's stages and data dirs.
-    from src.core.config import select_model
+    from src.config import select_model
 
     select_model(cfg, args.model)
     level = get_level(cfg)  # NB: level 0 is valid → use `is None`

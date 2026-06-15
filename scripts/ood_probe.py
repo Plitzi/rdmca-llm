@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 from models.cognition.uses.common import agent
-from src.core.modalities.text import BOS_ID
+from src.modalities.text import BOS_ID
 
 
 def _resolve_config(level):
@@ -92,9 +92,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--level", type=int, default=1)
     p.add_argument("--stage", type=int, required=True)
+    p.add_argument("--model", default=None, help="Model to probe (default: cognition)")
     p.add_argument("--maxtok", type=int, default=64)
     args = p.parse_args()
     args.config = _resolve_config(args.level)
+    from src.config import load_config, select_model
+
+    select_model(load_config(args.config), args.model)
     args.checkpoint = None
     args.dummy = False
     args.quant = "none"
@@ -104,7 +108,7 @@ def main():
 
     print("Loading model…")
     model, mcfg = load_model(args)
-    from src.core.modalities.text import TextTokenizer
+    from src.modalities.text import TextTokenizer
 
     tokenizer = TextTokenizer()
     if not tokenizer.ready:

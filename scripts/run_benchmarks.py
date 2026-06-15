@@ -57,7 +57,7 @@ ALL = ["wikitext", "lambada", "mmlu", "gsm8k", "mt_bench"]
 def _logits_np(model, ids):
     """Full-sequence logits [S, V] as numpy for a single token sequence. Uses the
     backend's to_numpy (logits are bf16 at inference; numpy has no bfloat16)."""
-    import src.core.backend as backend
+    import src.backend as backend
 
     ops = backend.current().ops
     out = model.logits(ops.array(np.asarray([ids], dtype=np.int64)))
@@ -105,7 +105,7 @@ def bench_wikitext(model, tok, limit, log) -> dict:
     ) or _try_dataset(lambda: load_dataset("wikitext", "wikitext-2-raw-v1", split="test"), log)
     if ds is None:
         return {"skipped": True}
-    import src.core.backend as backend
+    import src.backend as backend
 
     ops, engine = backend.current().ops, backend.current().engine
     text = "\n".join(r["text"] for r in ds if r["text"].strip())
@@ -248,6 +248,7 @@ def main():
     ap = argparse.ArgumentParser(description="Run external benchmarks on a checkpoint.")
     ap.add_argument("--level", type=int, default=1)
     ap.add_argument("--stage", type=int, default=None)
+    ap.add_argument("--model", default=None, help="Model to benchmark (default: cognition)")
     ap.add_argument("--checkpoint", type=str, default=None)
     ap.add_argument("--benchmarks", nargs="*", default=ALL, choices=ALL)
     ap.add_argument(
@@ -266,11 +267,13 @@ def main():
         sys.exit(1)
 
     from models.cognition.uses.chat.run_chat import generate, load_model
-    from src.core.config import resolve_config_path
-    from src.core.modalities.text import TextTokenizer
+    from src.config import load_config, resolve_config_path, select_model
+    from src.modalities.text import TextTokenizer
 
+    _cfg_path = resolve_config_path(None, args.level)
+    select_model(load_config(_cfg_path), args.model)
     la = Namespace(
-        config=resolve_config_path(None, args.level),
+        config=_cfg_path,
         level=args.level,
         stage=args.stage,
         checkpoint=args.checkpoint,

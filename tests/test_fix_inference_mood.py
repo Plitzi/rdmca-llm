@@ -65,7 +65,7 @@ def test_top_k_restricts_choices():
 
 
 def test_tokenizer_symbols_include_control_and_modality():
-    from src.core.modalities.vocab import CONTROL_SPECIALS, tokenizer_symbols
+    from src.modalities.vocab import CONTROL_SPECIALS, tokenizer_symbols
 
     syms = tokenizer_symbols(["en", "es"])
     for s in (
@@ -83,7 +83,7 @@ def test_tokenizer_symbols_include_control_and_modality():
 
 def test_agent_think_delimiters_match_registry():
     from models.cognition.uses.common.agent import THINK_CLOSE, THINK_OPEN
-    from src.core.modalities.vocab import REASONING_SPECIALS
+    from src.modalities.vocab import REASONING_SPECIALS
 
     assert [THINK_OPEN, THINK_CLOSE] == REASONING_SPECIALS
 
@@ -267,7 +267,7 @@ def test_mood_head_learns_to_separate_moods():
 
 
 def test_context_report_accounting_and_billing_dict():
-    from src.core.observability import ContextReport
+    from src.observability import ContextReport
 
     r = ContextReport(
         surface="chat",
@@ -306,7 +306,7 @@ def test_context_report_accounting_and_billing_dict():
 
 
 def test_count_tokens_is_safe():
-    from src.core.observability import count_tokens
+    from src.observability import count_tokens
 
     class _T:
         def encode(self, t, add_bos=True, add_eos=True):

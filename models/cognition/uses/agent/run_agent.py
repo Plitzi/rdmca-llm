@@ -34,7 +34,7 @@ from models.cognition.uses.chat import (
 )  # reuse model loading + generation
 from models.cognition.uses.common import agent
 from models.cognition.uses.common.interaction import InterruptGuard, SessionInput
-from src.core.config import resolve_config_path
+from src.config import resolve_config_path
 
 # Tools available to the agent (add your own here). Deliberately NOT a calculator
 # — arithmetic is a learned skill (stage 3) the model should do itself; a tool for
@@ -207,7 +207,7 @@ def main() -> None:
     # Moods are a cognition feature; honor the config switch (a model with `moods: false`
     # runs neutral). An explicit --no-mood still wins.
     from models.cognition.mood import moods_enabled
-    from src.core.config import load_config
+    from src.config import load_config
 
     if not args.no_mood and not moods_enabled(load_config(cfg_path)):
         args.no_mood = True
@@ -222,7 +222,7 @@ def main() -> None:
     )
     print("Loading model…")
     model, mcfg = chat.load_model(load_args)
-    from src.core.modalities.text import TextTokenizer
+    from src.modalities.text import TextTokenizer
 
     tokenizer = TextTokenizer()
 
@@ -276,7 +276,7 @@ def main() -> None:
     memory = ""
     if tokenizer.ready:
         try:
-            from src.core.memory.recall import MemoryRecall
+            from src.memory.recall import MemoryRecall
 
             mems = MemoryRecall(model, tokenizer).recall(args.query)
             memory = "\n".join(f"- {m.text.strip()}" for m in mems)
@@ -292,7 +292,7 @@ def main() -> None:
     context_mgr = enc = dec = None
     if getattr(args, "context_slots", False) and tokenizer.ready:
         try:
-            from src.core.routing.context_manager import build_context_manager
+            from src.routing.context_manager import build_context_manager
 
             context_mgr = build_context_manager(model, tokenizer, context_len=mcfg.context_len)
 
@@ -343,8 +343,8 @@ def main() -> None:
         print(f"\nAgent: (no final answer — {result.get('note', 'stopped')})")
 
     # ── Context & token accounting (same report every surface uses) ──────────
-    from src.core.memory.experience_log import load_experiences
-    from src.core.observability import ContextReport, count_tokens
+    from src.memory.experience_log import load_experiences
+    from src.observability import ContextReport, count_tokens
 
     header = agent.build_agent_prompt(TOOLS, args.query, skill_md, args.think, system=sys_persona)
     reasoning = " ".join(s.get("thinking", "") for s in result["steps"]) + (

@@ -18,12 +18,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from models.cognition.mood import mood_system_phrase
-from src.core.memory.recall import (
+from src.memory.recall import (
     MEM_CLOSE,  # noqa: F401  (re-exported for callers)
     MEM_OPEN,  # noqa: F401  (re-exported for callers)
     memory_block,
 )
-from src.core.modalities.vocab import REASONING_SPECIALS
+from src.modalities.vocab import REASONING_SPECIALS
 
 OUTPUT_FORMATS = ("text", "json")
 

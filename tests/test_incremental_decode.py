@@ -80,7 +80,7 @@ def test_byte_fallback_split():
 # ── 5. real tokenizer if available ───────────────────────────────────────────
 def test_real_tokenizer_roundtrip():
     try:
-        from src.core.modalities.text import TextTokenizer
+        from src.modalities.text import TextTokenizer
 
         tok = TextTokenizer()
     except Exception:

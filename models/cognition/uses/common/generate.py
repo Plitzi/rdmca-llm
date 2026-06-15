@@ -11,7 +11,7 @@ import time
 
 import numpy as np
 
-import src.core.backend as backend
+import src.backend as backend
 from models.cognition.uses.common import agent
 
 # Anti-logic-bomb generation guards. Generation is already bounded by

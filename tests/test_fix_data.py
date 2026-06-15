@@ -15,7 +15,7 @@ from fixes_common import FakeTok, write_corpus
 def test_experience_log_only_saves_signal_bearing_turns():
     """A turn with no feedback is NOT saved (no benefit); a corrected turn learns the
     CORRECTION, not the model's wrong answer."""
-    from src.core.memory.experience_log import detect_correction, load_experiences, log_experience
+    from src.memory.experience_log import detect_correction, load_experiences, log_experience
 
     with tempfile.TemporaryDirectory() as td:
         p = str(Path(td) / "e.jsonl")
@@ -39,8 +39,8 @@ def test_experience_log_only_saves_signal_bearing_turns():
 def test_relevance_feedback_overrides_utility():
     """A `corrected` experience must score higher R⁺ than the same content unlabeled —
     feedback is the ground-truth Utility (error-driven learning gets the boost)."""
-    from src.core.memory.episodic_buffer import Experience
-    from src.core.relevance.engine import RelevanceEngine
+    from src.memory.episodic_buffer import Experience
+    from src.relevance.engine import RelevanceEngine
 
     re = RelevanceEngine(ltss=None)
     re.update_state(np.zeros(64, dtype=np.float32))
@@ -99,7 +99,7 @@ def test_dialogue_interleave_and_emotion_balance():
 def test_confidence_validator_routes_by_knowledge():
     """The confidence-gated validator: human-labelled or high-coherence → self-approve;
     mid → defer (no external source); very low → escalate to human."""
-    from src.core.consolidation.validation import (
+    from src.consolidation.validation import (
         ExperienceValidator,
         HumanReviewSource,
     )
@@ -135,7 +135,7 @@ def test_confidence_validator_routes_by_knowledge():
 
 def test_validator_external_stubs_are_inert_until_configured():
     """Unconfigured peer-model / web-research sources are skipped, not crash."""
-    from src.core.consolidation.validation import (
+    from src.consolidation.validation import (
         PeerModelSource,
         WebResearchSource,
         default_validator,
@@ -160,7 +160,7 @@ def test_validator_external_stubs_are_inert_until_configured():
 def test_loader_interleaves_sources_no_block():
     """Records from both files must be mixed throughout — not one whole file then
     the other (which caused catastrophic forgetting)."""
-    from src.core.data.loader import TextDataset
+    from src.data.loader import TextDataset
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -180,7 +180,7 @@ def test_loader_interleaves_sources_no_block():
 def test_loader_source_weights_oversample():
     """A small file with a high source weight should contribute a much larger
     share than its size alone would give."""
-    from src.core.data.loader import TextDataset
+    from src.data.loader import TextDataset
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -215,7 +215,7 @@ def test_loader_source_weights_oversample():
 
 
 def test_loader_excludes_val_files_from_training():
-    from src.core.data.loader import TextDataset
+    from src.data.loader import TextDataset
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -234,7 +234,7 @@ def test_loader_excludes_val_files_from_training():
 
 
 def test_write_jsonl_routes_holdout():
-    from src.core.data.jsonl_writer import write_jsonl
+    from src.data.jsonl_writer import write_jsonl
 
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "src.jsonl"
@@ -254,7 +254,7 @@ def test_write_jsonl_routes_holdout():
 
 
 def test_split_turns_detects_conversation_vs_prose():
-    from src.core.data.loader import _split_turns
+    from src.data.loader import _split_turns
 
     convo = "System: be nice.\nUser: hi there\nAssistant: hello!"
     roles = [r for r, _ in _split_turns(convo)]
@@ -266,8 +266,8 @@ def test_split_turns_detects_conversation_vs_prose():
 def test_completion_mask_trains_only_response_turns():
     """A transcript trains the Assistant turn (+ a turn-final EOS) and masks the
     System/User context, so the loss teaches answering, not transcript modelling."""
-    from src.core.data.loader import TextDataset
-    from src.core.modalities.text import EOS_ID
+    from src.data.loader import TextDataset
+    from src.modalities.text import EOS_ID
 
     ds = TextDataset.__new__(TextDataset)
     ds.tokenizer = FakeTok()
@@ -281,7 +281,7 @@ def test_completion_mask_trains_only_response_turns():
 
 
 def test_completion_mask_drops_record_with_no_response():
-    from src.core.data.loader import TextDataset
+    from src.data.loader import TextDataset
 
     ds = TextDataset.__new__(TextDataset)
     ds.tokenizer = FakeTok()
@@ -290,7 +290,7 @@ def test_completion_mask_drops_record_with_no_response():
 
 
 def test_loader_with_mask_yields_token_mask_pairs():
-    from src.core.data.loader import TextDataset
+    from src.data.loader import TextDataset
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -307,7 +307,7 @@ def test_loader_with_mask_yields_token_mask_pairs():
 def test_completion_mask_handles_system_prefixed_record():
     """A System-prefixed transcript still masks System+User and trains only the
     Assistant turn — the enriched data stays compatible with completion masking."""
-    from src.core.data.loader import TextDataset
+    from src.data.loader import TextDataset
 
     ds = TextDataset.__new__(TextDataset)
     ds.tokenizer = FakeTok()

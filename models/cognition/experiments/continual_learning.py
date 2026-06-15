@@ -46,8 +46,8 @@ import mlx.optimizers as optim
 from mlx.utils import tree_flatten
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-from src.core.model.transformer import RDMCAFoundational, ModelConfig
-from src.core.model.lora import SectorAdapter, LoRAConfig, masked_sector_update
+from src.model.transformer import RDMCAFoundational, ModelConfig
+from src.model.lora import SectorAdapter, LoRAConfig, masked_sector_update
 
 
 # ---------------------------------------------------------------------------

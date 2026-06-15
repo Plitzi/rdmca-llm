@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src import plugins as stages
-from src.core.training.curriculum import stage_enabled
+from src.training.curriculum import stage_enabled
 
 
 def test_all_stages_enabled_by_default():

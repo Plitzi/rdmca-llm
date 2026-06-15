@@ -13,8 +13,8 @@ import mlx.core as mx
 import numpy as np
 import pytest
 
-from src.core.model.transformer import ModelConfig, RDMCAFoundational
-from src.core.relevance.engine import RelevanceEngine
+from src.model.transformer import ModelConfig, RDMCAFoundational
+from src.relevance.engine import RelevanceEngine
 
 # ---------------------------------------------------------------------------
 # Model sanity
@@ -84,8 +84,8 @@ def test_re_latency():
     machine / cold CI — a real regression makes scoring orders slower, not 2x."""
     import time
 
-    from src.core.memory.episodic_buffer import Experience
-    from src.core.memory.ltss import LTSS
+    from src.memory.episodic_buffer import Experience
+    from src.memory.ltss import LTSS
 
     ltss = LTSS(db_path=":memory:")
     re = RelevanceEngine(ltss=ltss)
@@ -105,7 +105,7 @@ def test_re_latency():
 
 def test_re_novelty():
     """Highly novel experience must score N > 0.7."""
-    from src.core.relevance.engine import novelty
+    from src.relevance.engine import novelty
 
     e = np.random.randn(256).astype(np.float32)
     s = -e  # opposite direction → max novelty
@@ -126,7 +126,7 @@ def _small_model():
 
 def test_sector_zero_output_init():
     """Attaching zero-init sectors must not change logits (Guide §1.6.2)."""
-    from src.core.model.lora import build_all_sectors
+    from src.model.lora import build_all_sectors
 
     m = _small_model()
     m.train(False)
@@ -143,7 +143,7 @@ def test_sector_isolation():
     import mlx.optimizers as optim
     from mlx.utils import tree_flatten
 
-    from src.core.model.lora import build_all_sectors, masked_sector_update
+    from src.model.lora import build_all_sectors, masked_sector_update
 
     m = _small_model()
     m.attach_sectors(build_all_sectors(d_model=64, n_layers=2))

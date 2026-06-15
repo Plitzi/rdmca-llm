@@ -15,8 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
-import src.core.backend as backend
-from src.core.config import get_precision, load_config, require_backend
+import src.backend as backend
+from src.config import get_precision, load_config, require_backend
 
 # Quantization is not limited to a fixed menu: both backends do grouped-affine weight
 # quantization at any bit-width in this range. 4-bit is just the smallest useful tier
@@ -53,7 +53,7 @@ def _apply_quant(model, quant) -> None:
     """Quantize model weights to a given bit-width for limited hardware; no-op for
     None/'none'. `quant` may be an int bit-width or a raw --quant string (parsed
     here). Real grouped-affine quantization on both backends at any 2–8 bit width
-    — see engine.quantize in src/core/backend/{mlx,torch}_backend.py."""
+    — see engine.quantize in src/backend/{mlx,torch}_backend.py."""
     bits = parse_quant(quant)
     if bits is None:
         return
@@ -130,8 +130,8 @@ def load_model(args):
     R.guard(cfg, mode="infer", force=getattr(args, "force", False))
 
     # Import model modules now that the backend is selected.
-    from src.core.model.config import ModelConfig
-    from src.core.model.transformer import RDMCAFoundational, set_model_precision
+    from src.model.config import ModelConfig
+    from src.model.transformer import RDMCAFoundational, set_model_precision
 
     model_dict = dict(cfg["model"])
     # Sync vocab_size with trained tokenizer if available
@@ -168,8 +168,8 @@ def load_model(args):
     # trained LoRA sectors — so language/reasoning stays intact and tool/skill
     # behaviour is added on top. Falls through to a plain checkpoint for cognitive
     # stages (or before any freeze).
-    from src.core.model import sector_io
-    from src.core.training.curriculum import ckpt_root
+    from src.model import sector_io
+    from src.training.curriculum import ckpt_root
 
     root = ckpt_root(cfg)
     if not args.checkpoint and args.stage:

@@ -4,8 +4,8 @@ Phase 4 Acceptance Tests — Audio modality & Parametric Growth (PGQ)
 
 import numpy as np
 
-from src.core.modalities.audio import N_MELS, AudioVQVAE, logmel
-from src.core.modalities.vocab import AUDIO_VOCAB_SIZE
+from src.modalities.audio import N_MELS, AudioVQVAE, logmel
+from src.modalities.vocab import AUDIO_VOCAB_SIZE
 
 
 def _sine(secs=1.0, sr=16000, f=220.0):
@@ -31,9 +31,9 @@ def test_pgq_expansion_grows_rank():
     """Saturation → PGQ expands the busiest sector's LoRA rank in place."""
     import mlx.core as mx
 
-    from src.core.consolidation.pgq import PGQ
-    from src.core.model.lora import build_all_sectors
-    from src.core.model.transformer import ModelConfig, RDMCAFoundational
+    from src.consolidation.pgq import PGQ
+    from src.model.lora import build_all_sectors
+    from src.model.transformer import ModelConfig, RDMCAFoundational
 
     m = RDMCAFoundational(
         ModelConfig(
@@ -72,9 +72,9 @@ def test_pgq_new_sector_creation():
     """High GNS instantiates a brand-new sector on the model."""
     import mlx.core as mx
 
-    from src.core.consolidation.pgq import PGQ
-    from src.core.model.lora import build_all_sectors
-    from src.core.model.transformer import ModelConfig, RDMCAFoundational
+    from src.consolidation.pgq import PGQ
+    from src.model.lora import build_all_sectors
+    from src.model.transformer import ModelConfig, RDMCAFoundational
 
     m = RDMCAFoundational(
         ModelConfig(

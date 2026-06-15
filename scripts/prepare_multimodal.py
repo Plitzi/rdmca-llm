@@ -28,8 +28,8 @@ import argparse
 import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.core.modalities.perception import MultimodalPerception, load_audio
-from src.core.modalities.text import TextTokenizer
+from src.modalities.perception import MultimodalPerception, load_audio
+from src.modalities.text import TextTokenizer
 
 OUT_DIR = Path("data/level5/stage2")
 
