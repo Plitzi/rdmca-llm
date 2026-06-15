@@ -539,8 +539,8 @@ def build_spec(cfg: dict):
 
     def objective(model, batch):
         if not is_heatmap:
-            frames, keypts = batch
-            return _mse(model(frames), keypts)
+            frames, keypts = batch  # raw numpy from the synthetic loader — convert here
+            return _mse(model(ops.array(frames)), ops.array(keypts))
         stage = getattr(model, "_active_stage", 1)
         if stage >= 3:
             return _objective_gesture(model, batch)

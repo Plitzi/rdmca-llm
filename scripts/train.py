@@ -66,8 +66,8 @@ Examples:
     parser.add_argument(
         "--stage",
         type=int,
-        required=True,
-        help="Curriculum stage number (validated against the level's config)",
+        default=1,
+        help="Curriculum stage number (validated against the level's config). Default: 1.",
     )
     parser.add_argument(
         "--level",

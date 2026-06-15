@@ -347,19 +347,19 @@ def train_stage(stage: int, cfg: dict, resume: bool = False, plain: bool = False
             # Gradient accumulation — TRUE accumulation: sum the per-micro-batch
             # gradients (mean over grad_acc) so the effective batch is really
             # bs×grad_acc. ga==1 stays on a zero-overhead fast path.
+            # The loader's batch is passed RAW to the model spec's objective — its shape is
+            # the model's concern, not the loop's (text LM: (tokens, mask); hands: a multi-hand
+            # tuple). Each objective converts numpy → backend arrays for the pieces it uses, so
+            # the loop stays task-agnostic.
             acc_loss = 0.0
             if grad_acc == 1:
-                toks_np, mask_np = data_loader.next_batch()
-                batch = (B.ops.array(toks_np), B.ops.array(mask_np))
-                loss, grads = loss_and_grad_fn(model, batch)
+                loss, grads = loss_and_grad_fn(model, data_loader.next_batch())
                 B.engine.eval(loss)
                 acc_loss = B.engine.item(loss)
             else:
                 running = None
                 for _ in range(grad_acc):
-                    toks_np, mask_np = data_loader.next_batch()
-                    batch = (B.ops.array(toks_np), B.ops.array(mask_np))
-                    loss, g = loss_and_grad_fn(model, batch)
+                    loss, g = loss_and_grad_fn(model, data_loader.next_batch())
                     B.engine.eval(loss)
                     acc_loss += B.engine.item(loss)
                     running = B.engine.accumulate_grads(running, g, model)

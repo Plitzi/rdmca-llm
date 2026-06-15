@@ -81,3 +81,46 @@ def test_training_reduces_keypoint_error():
     after = mean_keypoint_error(net(x), y)
     assert after < before * 0.6, f"training did not learn: {before:.4f} -> {after:.4f}"
     assert np.isfinite(after)
+
+
+def test_train_stage_runs_on_multihand_heatmap(tmp_path, monkeypatch):
+    """The REAL train_stage loop on the MULTI-HAND heatmap detector (stage 1) with a tiny FAKE
+    FreiHAND tree — guards the loop staying batch-agnostic (the loader's 7-tuple flows through
+    objective without the old (tokens, mask) unpack). No download; checkpoints under tmp."""
+    import json
+
+    from PIL import Image
+
+    root = tmp_path / "freihand"
+    (root / "training" / "rgb").mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    xyz = [(rng.random((21, 3)) * 0.1 + [0.0, 0.0, 0.5]).tolist() for _ in range(8)]
+    k = [[[200.0, 0.0, 112.0], [0.0, 200.0, 112.0], [0.0, 0.0, 1.0]] for _ in range(8)]
+    (root / "training_xyz.json").write_text(json.dumps(xyz))
+    (root / "training_K.json").write_text(json.dumps(k))
+    for i in range(8):
+        Image.fromarray((rng.random((96, 96, 3)) * 255).astype("uint8")).save(
+            root / "training" / "rgb" / f"{i:08d}.jpg"
+        )
+
+    monkeypatch.chdir(tmp_path)
+    set_active_model("hands_recognition")
+    from src.training.trainer import train_stage
+
+    cfg = {
+        "model_name": "hands_recognition",
+        "level": 1,
+        "skip_gate": True,
+        "gate": {"max_mpjpe": 5.0},
+        "model": {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 16,
+                  "heatmap_size": 16, "dims": 3, "n_hands": 2},
+        "dataset": {"root": str(root), "localize": True},
+        "curriculum": {"stage1": {"n_tokens": 4000}},
+        "training": {"precision": "fp32", "lr": 1e-3, "lr_min": 1e-4, "weight_decay": 0.0,
+                     "batch_size": 4, "grad_accumulation": 1, "warmup_steps": 1,
+                     "save_every": 1000, "eval_every": 1000, "clip_grad_norm": 1.0,
+                     "max_corpus_passes": 1, "early_stop_patience": 0, "seed": 0},
+    }  # fmt: skip
+    assert train_stage(stage=1, cfg=cfg, plain=True) is True  # skip_gate → graduates
+    stage_dir = tmp_path / "dist" / "hands_recognition" / "checkpoints" / "level1" / "stage1"
+    assert (stage_dir / "final.npz").exists() or (stage_dir / "best.npz").exists()

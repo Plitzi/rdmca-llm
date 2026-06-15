@@ -27,8 +27,11 @@ def _default_spec(cfg: dict) -> ModelSpec:
     aux_w = float((cfg.get("moe", {}) or {}).get("aux_loss_weight", 0.01))
 
     def objective(model, batch):
-        toks, mask = batch  # (tokens, loss_mask) — completion-only CE
-        return model.mrl_loss(toks, mask) + aux_w * model.aux_loss()
+        import src.backend as backend
+
+        ops = backend.current().ops
+        toks, mask = batch  # raw (tokens, loss_mask) numpy from the loader — convert here
+        return model.mrl_loss(ops.array(toks), ops.array(mask)) + aux_w * model.aux_loss()
 
     return ModelSpec(
         name="text-lm",
