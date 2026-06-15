@@ -2,12 +2,11 @@
 # ║  hands_recognition · shared base for every level                           ║
 # ╠══════════════════════════════════════════════════════════════════════════╣
 # ║  Levels differ ONLY in MODEL SIZE / scope (img_size, heatmap_size, width); ║
-# ║  the curriculum (the single hand-keypoint stage) and everything else live   ║
-# ║  here once and are inherited (deep-merged) by each levelN.yaml. The shared   ║
-# ║  training cadence + resource block come from `tier: vision-edge`            ║
-# ║  (src/levels.py). Run a level with, e.g.:                                   ║
-# ║    rdmca prepare --model hands_recognition --level 1   # downloads FreiHAND  ║
-# ║    rdmca train   --model hands_recognition --level 1                         ║
+# ║  the CURRICULUM (3 stages) and everything else live here once and are        ║
+# ║  inherited by each levelN.yaml. Training cadence + resources come from        ║
+# ║  `tier: vision-edge` (src/levels.py). Run a level with, e.g.:                ║
+# ║    rdmca prepare --model hands_recognition --level 1   # FreiHAND (st1/2)    ║
+# ║    rdmca train   --model hands_recognition --level 1   # stage1 → 2 → 3      ║
 # ║    rdmca uses camera                                                         ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -16,17 +15,21 @@ backend: mlx                   # mlx | torch
 # NOTE: `tier:` (the shared training-cadence/resource scaffold from src/levels.py) is read
 # from the LEVEL file BEFORE this base is merged, so each levelN.yaml declares its own tier.
 
-# The heatmap FCN. img_size / heatmap_size / d_model (the SIZE knobs) come from each level;
-# the rest is shared. It is NOT a transformer, so the resource estimator uses the tier block.
+# The MULTI-HAND heatmap FCN. img_size / heatmap_size / d_model (the SIZE knobs) come from each
+# level; the rest is shared. It is NOT a transformer, so the resource estimator uses the tier.
 model:
-  arch: heatmap                # encoder-decoder → 21 spatial heatmaps + a depth branch
+  arch: heatmap                # encoder-decoder → per-slot 21 heatmaps + depth + presence
   in_channels: 3               # RGB (skin colour helps); set 1 for grayscale
   dims: 3                      # 3 = predict + score depth (x,y,z); 2 = planar only
+  n_hands: 2                   # hand SLOTS detected at once (VR: both hands)
   depth_weight: 0.1            # weight of the depth-MSE term relative to the heatmap MSE
+  presence_weight: 0.5         # weight of the per-slot presence BCE (stage 1)
+  # n_gestures defaults to the gesture vocabulary in data_gestures.GESTURES
 
 dataset:
-  root: models/hands_recognition/data/freihand   # where `rdmca prepare` unzips FreiHAND
-  localize: true               # paste the hand at a random position/scale (detect anywhere)
+  root: models/hands_recognition/data/freihand     # `rdmca prepare` unzips FreiHAND here (st1/2)
+  gesture_root: models/hands_recognition/data/gestures  # gesture dataset here (stage 3)
+  localize: true               # paste hands at random positions/scales (detect anywhere)
   augment: true                # horizontal-flip + brightness jitter (webcam robustness)
 
 training:                      # batch_size / warmup / save_every / eval_every from the tier
@@ -35,12 +38,25 @@ training:                      # batch_size / warmup / save_every / eval_every f
   weight_decay: 0.0
 
 gate:
-  max_mpjpe: 0.12              # graduate when mean 3D keypoint error ≤ 0.12 (xy[0,1] + z units)
+  max_mpjpe: 0.12              # stage 1: mean 3D keypoint error ≤ 0.12 (xy[0,1] + z units)
+  max_handstate_err: 0.30      # stage 2: 1 − accuracy (handedness + finger state)
+  max_gesture_err: 0.30        # stage 3: 1 − gesture-classification accuracy
 
 skip_gate: false
 
-curriculum:                    # ONE stage = the model's whole curriculum, active at every level
+# The model's curriculum: stage 1 (cognitive base, the multi-hand detector) is frozen, then the
+# behavioral heads — handedness/finger state, then gestures — train on top. All present at every
+# level (entry_level 0); levels change only the model SIZE.
+curriculum:
   stage1:
-    name: "Hand keypoint heatmaps (real, localized, 3D)"
+    name: "Multi-hand keypoint heatmaps (real, localized, 3D)"
     entry_level: 0
     n_tokens: 20_000_000       # ⇒ ~5 passes over FreiHAND at the tier's batch_size
+  stage2:
+    name: "Handedness + finger state"
+    entry_level: 0
+    n_tokens: 5_000_000        # a small head on the frozen backbone — short run
+  stage3:
+    name: "Hand gestures"
+    entry_level: 0
+    n_tokens: 5_000_000        # a small head on the frozen backbone — short run

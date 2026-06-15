@@ -76,26 +76,31 @@ Un **modelo** es un escenario de entrenamiento bajo `models/<nombre>/` y agrupa 
 propios stages (cada modelo internamente corre un grupo de stages):
 - **`models/cognition/`** — el LLM conversacional/agéntico (los 10 stages actuales).
   Es el modelo **por defecto** (`cfg["model_name"]` ausente → `cognition`).
-- **`models/hands_recognition/`** — un estimador de pose de mano (21 keypoints desde un
-  frame), el segundo modelo que DEMUESTRA que el framework es agnóstico: NO es un
-  transformer ni texto. Es real y entrenable a través del MISMO `ModelSpec`
+- **`models/hands_recognition/`** — un estimador de pose de mano **multi-mano para VR**, el
+  segundo modelo que DEMUESTRA que el framework es agnóstico: NO es un transformer ni texto. Es
+  real y entrenable a través del MISMO `ModelSpec`
   ([models/hands_recognition/pose.py](models/hands_recognition/pose.py): `build_model`/
-  `build_loader`/`objective`/`evaluate`, métrica `mpjpe`, menor=mejor). Dos arquitecturas bajo
-  el MISMO spec: **MLP sintético** (default, sin descarga — demuestra el pipeline pero NO
-  rastrea una mano real, 21×2 que llena el cuadro) y **FCN de heatmaps real** opt-in
-  (`model.arch: heatmap` + dataset FreiHAND en `data/freihand/`, loader en `data_freihand.py`):
-  encoder-decoder que emite 21 heatmaps espaciales + una rama de profundidad; **soft-argmax**
-  localiza la mano EN CUALQUIER PARTE del cuadro y recupera 3D (x,y + z relativo a la muñeca).
-  `build_spec` elige arch+loader según el config. Sus niveles están en la forma per-modelo
-  estándar (`configs/levels/_base.yaml` + `level0`/`level1`, que difieren SOLO en tamaño del
-  modelo — img_size/heatmap_size/width; el único stage de keypoints es su currículo en cada
-  nivel), así `rdmca {prepare,train} --model hands_recognition [--level N]` NO necesita
-  `--config`. La descarga de FreiHAND es parte del **prepare** vía el hook de modelo
-  `prepare_stage` (descubierto por `model_hook`, mismo patrón que `post_stage`). Tiene
-  UN stage (`stage01_keypoints/`), `moods: false`, y su caso de uso es la **cámara**
-  ([models/hands_recognition/uses/camera/](models/hands_recognition/uses/camera/),
-  `rdmca uses camera [--selftest]`) — reconstruye la arch del checkpoint (vía `trained_arch`) y
-  dibuja el esqueleto con la profundidad codificada en color.
+  `build_loader`/`objective`/`evaluate`; menor=mejor en cada gate). Dos arquitecturas bajo el
+  MISMO spec: **MLP sintético** (default, sin descarga — fallback/CI, una mano 2D que llena el
+  cuadro) y **FCN de heatmaps multi-mano** (`model.arch: heatmap`, dataset FreiHAND en
+  `data/freihand/`, loader en `data_freihand.py`): encoder-decoder que por slot (hasta
+  `n_hands`, default 2) emite 21 heatmaps + rama de profundidad + logit de presencia;
+  **soft-argmax** localiza CADA mano EN CUALQUIER PARTE del cuadro y recupera 3D. **Tres stages
+  comparten el backbone** (patrón core-congelado + cabezas behavioral del framework): stage 1
+  `keypoints` (cognitivo, base congelada, multi-mano), stage 2 `handstate` (behavioral:
+  izquierda/derecha + estado por dedo), stage 3 `gestures` (behavioral: gesto aprendido, p. ej.
+  thumbs-up). `build_model` adjunta/congela por stage; `objective` despacha por
+  `model._active_stage`, `evaluate` por stage. La descarga de datos es parte del **prepare** vía
+  el hook `prepare_stage` (descubierto por `model_hook`, mismo patrón que `post_stage`) y
+  despacha por stage: FreiHAND (st1/2) vs dataset de gestos (st3, `data_gestures.py`). Sus
+  niveles están en la forma per-modelo estándar (`configs/levels/_base.yaml` con el currículo de
+  3 stages + `level0`/`level1`, que difieren SOLO en tamaño), así `rdmca {prepare,train} --model
+  hands_recognition [--level N]` NO necesita `--config`. `moods: false`. Su caso de uso es la
+  **cámara** ([models/hands_recognition/uses/camera/](models/hands_recognition/uses/camera/),
+  `rdmca uses camera [--selftest] [--fps 60] [--resolution WxH]`) — reconstruye arch+cabezas del
+  checkpoint (vía `trained_arch` + el `stageN` del path), dibuja hasta 2 esqueletos con
+  profundidad en color y etiqueta L/R + dedos + gesto; resolución de captura desacoplada del
+  tamaño de entrada del modelo (720p/1080p+ sin perder fps).
 
 Cada modelo tiene además sus **experiments** propios (sondas de hipótesis) en
 `models/<nombre>/experiments/` — p. ej.

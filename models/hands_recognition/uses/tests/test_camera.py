@@ -21,17 +21,22 @@ def test_load_net_random_and_missing_checkpoint(capsys, tmp_path):
 def test_predict_returns_keypoints():
     net = RC._load_net(None)
     frame = np.zeros(RC.IMG_SIZE * RC.IMG_SIZE, dtype=np.float32)
-    pts, z = RC._predict(net, frame)
-    assert pts.shape == (RC.N_KEYPOINTS, 2)
-    assert z is None  # the synthetic MLP predicts only 2D (no depth branch)
+    hands = RC._predict(net, frame)
+    assert len(hands) == 1  # the synthetic MLP returns a single hand
+    assert hands[0]["pts"].shape == (RC.N_KEYPOINTS, 2)
+    assert hands[0]["z"] is None  # MLP predicts only 2D (no depth branch)
 
 
-def test_predict_heatmap_returns_keypoints_and_depth():
-    net = RC._load_net(None, {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32})
+def test_predict_heatmap_returns_per_hand_keypoints_and_depth():
+    net = RC._load_net(
+        None, {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32, "n_hands": 2}
+    )
     img = np.zeros((3, 64, 64), dtype=np.float32)
-    pts, z = RC._predict(net, img)
-    assert pts.shape == (RC.N_KEYPOINTS, 2) and z.shape == (RC.N_KEYPOINTS,)
-    assert pts.min() >= 0.0 and pts.max() <= 1.0  # soft-argmax localizes within the frame
+    hands = RC._predict(net, img, presence_thresh=-1.0)  # force both slots
+    assert len(hands) == 2  # multi-hand: up to n_hands detections
+    for hand in hands:
+        assert hand["pts"].shape == (RC.N_KEYPOINTS, 2) and hand["z"].shape == (RC.N_KEYPOINTS,)
+        assert hand["pts"].min() >= 0.0 and hand["pts"].max() <= 1.0  # localized within the frame
 
 
 def test_selftest_runs(capsys):
@@ -72,6 +77,9 @@ class _FakeCv2:
 
             def set(self, prop, val):
                 cap.set_props[prop] = val
+
+            def get(self, prop):
+                return cap.set_props.get(prop, 0)
 
             def read(self):
                 self._n += 1
@@ -132,6 +140,23 @@ def test_run_camera_60fps_paces_loop(monkeypatch):
     assert fake.set_props.get(fake.CAP_PROP_FPS) == 60
     assert fake.wait_delays and 1 <= fake.wait_delays[0] <= int(1000 / 60)
     assert any("target 60" in t for t in fake.hud_texts)
+
+
+def test_parse_resolution():
+    assert RC._parse_resolution("auto") == (1280, 720)
+    assert RC._parse_resolution("") == (1280, 720)
+    assert RC._parse_resolution("1920x1080") == (1920, 1080)
+    assert RC._parse_resolution("garbage") == (1280, 720)  # bad spec → safe default
+
+
+def test_run_camera_applies_requested_resolution(monkeypatch):
+    fake = _FakeCv2()
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+    net = RC._load_net(None)
+    assert RC.run_camera(net, camera_index=0, target_fps=60, resolution=(1920, 1080)) == 0
+    assert fake.set_props.get(fake.CAP_PROP_FRAME_WIDTH) == 1920
+    assert fake.set_props.get(fake.CAP_PROP_FRAME_HEIGHT) == 1080
+    assert any("1920x1080" in t for t in fake.hud_texts)  # HUD shows capture resolution
 
 
 def test_run_camera_without_opencv(monkeypatch, capsys):
@@ -196,6 +221,26 @@ def test_preprocess_shapes_match_arch():
     assert RC._preprocess(fcn, frame, fake).shape == (3, 64, 64)
     mlp = RC._load_net(None)
     assert RC._preprocess(mlp, frame, fake).shape == (RC.IMG_SIZE * RC.IMG_SIZE,)
+
+
+def test_predict_heatmap_with_state_head_reports_handedness_and_fingers():
+    # A stage-2 checkpoint adds the handedness/finger head → each detected hand carries them.
+    net = RC._build_from_arch(
+        {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32, "n_hands": 2}, stage=2
+    )
+    assert hasattr(net, "state_head")
+    hands = RC._predict(net, np.zeros((3, 64, 64), dtype=np.float32), presence_thresh=-1.0)
+    for hand in hands:
+        assert hand["handed"] in (0, 1) and hand["fingers"].shape == (5,)
+
+
+def test_draw_hand_label_uses_handedness():
+    fake = _FakeCv2()
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    hand = {"pts": np.full((RC.N_KEYPOINTS, 2), 0.5, np.float32), "handed": 1,
+            "fingers": np.array([1, 1, 0, 0, 1])}  # fmt: skip
+    RC._draw_hand_label(fake, frame, hand)
+    assert any("L" in t and "3f" in t for t in fake.hud_texts)  # left hand, 3 fingers extended
 
 
 def test_selftest_heatmap_path(capsys):

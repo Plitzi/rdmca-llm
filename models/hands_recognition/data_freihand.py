@@ -114,20 +114,43 @@ def _download_resumable(url: str, part_path: Path) -> None:
         raise RuntimeError("FreiHAND download incomplete — re-run to resume.")
 
 
+# Per-finger (pip, tip) landmark indices — used to derive the extended/curled state of each
+# finger from the 3D keypoints (a finger is "extended" when its tip is farther from the wrist
+# than its middle joint). Order: thumb, index, middle, ring, pinky (matches the 5 head logits).
+_FINGER_PIP_TIP = ((3, 4), (6, 8), (10, 12), (14, 16), (18, 20))
+
+
+def finger_states(xyz: np.ndarray) -> np.ndarray:
+    """[21,3] hand keypoints → [5] in {0,1}: per finger, 1 if EXTENDED (tip farther from the
+    wrist than the mid joint), else 0 (curled). Wrist = landmark 0. Mirror-invariant geometry,
+    so it's the free finger-state label for the stage-2 head."""
+    wrist = xyz[0]
+    out = np.zeros(5, dtype=np.float32)
+    for i, (pip, tip) in enumerate(_FINGER_PIP_TIP):
+        d_tip = np.linalg.norm(xyz[tip] - wrist)
+        d_pip = np.linalg.norm(xyz[pip] - wrist)
+        out[i] = 1.0 if d_tip > d_pip else 0.0
+    return out
+
+
 class FreiHandLoader:
-    """Yields heatmap-supervision batches from a deterministic train/val split of FreiHAND
-    for the heatmap FCN (HandHeatmapNet):
+    """Yields MULTI-HAND heatmap-supervision batches from a deterministic train/val split of
+    FreiHAND for HandHeatmapNet. Each sample composites up to `n_hands` real hands onto a random
+    background at random positions/scales (some possibly MIRRORED → left hands), then assigns
+    them to POSITIONAL slots (left-most hand → slot 0). Returns:
 
-        (images   [N, C, H, W]   in [0,1],
-         heatmaps [N, 21, hs, hs] Gaussian targets at each keypoint,
-         z        [N, 21]         root-relative, scale-normalized depth,
-         kpts     [N, 21, 2]      (x,y) in [0,1] — ground truth for the mpjpe metric)
+        (images     [N, C, H, W]          in [0,1],
+         heatmaps   [N, n_hands·21, hs, hs] Gaussian targets per slot (zeros for absent slots),
+         z          [N, n_hands·21]         root-relative, scale-normalized depth per slot,
+         presence   [N, n_hands]            1 if a hand occupies the slot, else 0,
+         kpts       [N, n_hands, 21, 2]     (x,y) in [0,1] — ground truth for the mpjpe metric,
+         handedness [N, n_hands]            0=right, 1=left (from the mirror flag),
+         finger     [N, n_hands, 5]         per-finger extended/curled — labels for stage 2)
 
-    With `localize=True` the hand image is scaled and pasted at a RANDOM position/scale on a
-    random background canvas (and the keypoints follow), so the FCN learns to find the hand
-    ANYWHERE in the frame — not just filling it. Depth z is each keypoint's camera-z minus
-    the wrist's, divided by the wrist→middle-MCP bone length (so it is scale-invariant).
-    Mirrors the synthetic loader's telemetry + no-op skip/index surface."""
+    Localization (always on for multi-hand) is what lets the FCN find hands ANYWHERE in the
+    frame — the foundation for VR. Depth z is each keypoint's camera-z minus its wrist's,
+    divided by the wrist→middle-MCP bone length (scale-invariant). Mirrors the synthetic
+    loader's telemetry + no-op skip/index surface."""
 
     def __init__(
         self,
@@ -142,7 +165,8 @@ class FreiHandLoader:
         heatmap_size: int = 32,
         localize: bool = True,
         sigma: float = 1.5,
-        localize_scale: tuple[float, float] = (0.35, 0.95),
+        localize_scale: tuple[float, float] = (0.35, 0.6),
+        n_hands: int = 2,
     ):
         self.root = Path(root)
         self.batch_size = batch_size
@@ -153,6 +177,7 @@ class FreiHandLoader:
         self.localize = localize
         self.sigma = sigma
         self.localize_scale = localize_scale
+        self.n_hands = n_hands
         self._rng = np.random.default_rng(seed)
         # Telemetry the trainer reads (no replay/corpus concepts for on-the-fly vision data).
         self.passes = 0
@@ -196,6 +221,17 @@ class FreiHandLoader:
     def num_batches(self) -> int:
         return max(1, len(self._indices) // self.batch_size)
 
+    def _next_index(self) -> int:
+        """The next image index in the shuffled epoch order (reshuffles at the boundary). A
+        sample consumes one index per composited hand, so this centralizes the wraparound."""
+        if self._cursor >= len(self._order):
+            self._cursor = 0
+            self.passes += 1
+            self._rng.shuffle(self._order)
+        idx = int(self._order[self._cursor])
+        self._cursor += 1
+        return idx
+
     def _gaussian_heatmaps(self, kpts: np.ndarray) -> np.ndarray:
         """kpts [21,2] in [0,1] → [21, hs, hs] target heatmaps, a Gaussian bump per keypoint
         (peak at the keypoint, std `sigma` on the heatmap grid). Off-canvas keypoints simply
@@ -208,60 +244,99 @@ class FreiHandLoader:
         d2 = (xx[None] - gx) ** 2 + (yy[None] - gy) ** 2  # [21,hs,hs]
         return np.exp(-d2 / (2.0 * self.sigma**2)).astype(np.float32)
 
-    def _load_one(self, image_idx: int):
-        """One training sample → (chw [C,H,W], kpts [21,2] in [0,1], z [21], heatmaps
-        [21,hs,hs]). With `localize`, the hand is composited onto a random background at a
-        random position/scale; otherwise it is resized to fill the frame."""
+    def _place_one_hand(self, arr: np.ndarray):
+        """Composite ONE real hand onto the canvas `arr` (in place) at a random position/scale,
+        possibly MIRRORED (→ left hand). Returns (kpts [21,2] in canvas [0,1], z [21],
+        handedness 0/1, finger_state [5], mean_x) — mean_x sets the positional slot order."""
         from PIL import Image
 
+        size = self.img_size
+        image_idx = self._next_index()
         anno = self._anno_of[image_idx]
         img = Image.open(self._files[image_idx]).convert("RGB")
-        w0, h0 = img.size  # original resolution (PIL gives width, height)
+        w0, h0 = img.size
         uv = (self._k[anno] @ self._xyz[anno].T).T  # [21,3]
-        uv = uv[:, :2] / uv[:, 2:3]  # pixel coords in original resolution
-        kpts = (uv / np.array([w0, h0], dtype=np.float32)).astype(np.float32)  # → [0,1]
-        z = self._z[anno].copy()  # [21] root-relative depth
+        kpts = ((uv[:, :2] / uv[:, 2:3]) / np.array([w0, h0], np.float32)).astype(np.float32)
+        z = self._z[anno].copy()
+        finger = finger_states(self._xyz[anno])  # geometric, mirror-invariant
+        mirror = self.localize and self._rng.random() < 0.5  # FreiHAND is right; mirror → left
 
-        size = self.img_size
         if self.localize:
             lo, hi = self.localize_scale
             stamp = max(8, int(size * self._rng.uniform(lo, hi)))
-            stamp_arr = np.asarray(img.resize((stamp, stamp)), dtype=np.float32) / 255.0
             ox = int(self._rng.integers(0, size - stamp + 1))
             oy = int(self._rng.integers(0, size - stamp + 1))
-            # Random background (a base colour + light noise) so the net must LOCALIZE the hand.
-            base = self._rng.uniform(0.0, 1.0, size=3).astype(np.float32)
-            arr = np.clip(base + 0.1 * self._rng.standard_normal((size, size, 3)), 0.0, 1.0)
-            arr[oy : oy + stamp, ox : ox + stamp] = stamp_arr
-            kpts = (np.array([ox, oy], np.float32) + kpts * stamp) / size  # → canvas [0,1]
         else:
-            arr = np.asarray(img.resize((size, size)), dtype=np.float32) / 255.0  # fills frame
+            stamp, ox, oy = size, 0, 0  # fills the frame
+        stamp_arr = np.asarray(img.resize((stamp, stamp)), dtype=np.float32) / 255.0
+        if mirror:
+            stamp_arr = stamp_arr[:, ::-1, :].copy()
+            kpts[:, 0] = 1.0 - kpts[:, 0]
+        arr[oy : oy + stamp, ox : ox + stamp] = stamp_arr
+        kpts = (np.array([ox, oy], np.float32) + kpts * stamp) / size  # → canvas [0,1]
+        return kpts, z, (1 if mirror else 0), finger, float(kpts[:, 0].mean())
+
+    def _n_present(self) -> int:
+        """How many hands to composite this sample. Favors 1–n_hands, with a small chance of 0
+        (an empty scene → teaches presence=0). Without localization, always a single hand."""
+        if not self.localize:
+            return 1
+        if self.n_hands == 2:
+            return int(self._rng.choice([0, 1, 2], p=[0.05, 0.35, 0.60]))
+        return int(self._rng.integers(1, self.n_hands + 1))
+
+    def _compose_sample(self):
+        """Build one multi-hand training sample. Returns the per-slot targets (see class docs):
+        (chw, heatmaps [n_hands·21,hs,hs], z [n_hands·21], presence [n_hands], kpts
+        [n_hands,21,2], handedness [n_hands], finger [n_hands,5])."""
+        size, hs, n_hands = self.img_size, self.heatmap_size, self.n_hands
+        base = self._rng.uniform(0.0, 1.0, size=3).astype(np.float32)  # random background
+        arr = np.clip(base + 0.1 * self._rng.standard_normal((size, size, 3)), 0.0, 1.0)
+        hands = [self._place_one_hand(arr) for _ in range(self._n_present())]
+        hands.sort(key=lambda h: h[4])  # POSITIONAL slots: left-most hand → slot 0
 
         if self.augment:
-            if self._rng.random() < 0.5:  # horizontal flip (mirror x of every keypoint)
-                arr = arr[:, ::-1, :].copy()
-                kpts[:, 0] = 1.0 - kpts[:, 0]
             arr = np.clip(arr * self._rng.uniform(0.7, 1.3), 0.0, 1.0)  # brightness jitter
-
         if self.in_channels == 1:
             arr = arr.mean(axis=2, keepdims=True)
-        chw = np.transpose(arr, (2, 0, 1)).astype(np.float32)  # [C,H,W]
-        return chw, kpts, z, self._gaussian_heatmaps(kpts)
+        chw = np.transpose(arr, (2, 0, 1)).astype(np.float32)
+
+        heatmaps = np.zeros((n_hands * N_KEYPOINTS, hs, hs), dtype=np.float32)
+        z = np.zeros(n_hands * N_KEYPOINTS, dtype=np.float32)
+        presence = np.zeros(n_hands, dtype=np.float32)
+        kpts = np.zeros((n_hands, N_KEYPOINTS, 2), dtype=np.float32)
+        handedness = np.zeros(n_hands, dtype=np.int64)
+        finger = np.zeros((n_hands, 5), dtype=np.float32)
+        for slot, (k, zz, hand, fing, _mx) in enumerate(hands[:n_hands]):
+            s = slot * N_KEYPOINTS
+            heatmaps[s : s + N_KEYPOINTS] = self._gaussian_heatmaps(k)
+            z[s : s + N_KEYPOINTS] = zz
+            presence[slot] = 1.0
+            kpts[slot] = k
+            handedness[slot] = hand
+            finger[slot] = fing
+        return chw, heatmaps, z, presence, kpts, handedness, finger
 
     def next_batch(self):
-        n, c, size, hs = self.batch_size, self.in_channels, self.img_size, self.heatmap_size
+        n, c, size, hs, nh = (
+            self.batch_size,
+            self.in_channels,
+            self.img_size,
+            self.heatmap_size,
+            self.n_hands,
+        )
         imgs = np.zeros((n, c, size, size), dtype=np.float32)
-        heatmaps = np.zeros((n, N_KEYPOINTS, hs, hs), dtype=np.float32)
-        z = np.zeros((n, N_KEYPOINTS), dtype=np.float32)
-        kpts = np.zeros((n, N_KEYPOINTS, 2), dtype=np.float32)
+        heatmaps = np.zeros((n, nh * N_KEYPOINTS, hs, hs), dtype=np.float32)
+        z = np.zeros((n, nh * N_KEYPOINTS), dtype=np.float32)
+        presence = np.zeros((n, nh), dtype=np.float32)
+        kpts = np.zeros((n, nh, N_KEYPOINTS, 2), dtype=np.float32)
+        handedness = np.zeros((n, nh), dtype=np.int64)
+        finger = np.zeros((n, nh, 5), dtype=np.float32)
         for b in range(n):
-            if self._cursor >= len(self._order):  # epoch boundary → reshuffle
-                self._cursor = 0
-                self.passes += 1
-                self._rng.shuffle(self._order)
-            imgs[b], kpts[b], z[b], heatmaps[b] = self._load_one(int(self._order[self._cursor]))
-            self._cursor += 1
-        return imgs, heatmaps, z, kpts
+            imgs[b], heatmaps[b], z[b], presence[b], kpts[b], handedness[b], finger[b] = (
+                self._compose_sample()
+            )
+        return imgs, heatmaps, z, presence, kpts, handedness, finger
 
     # Vision data is generated/streamed on the fly: the text-stream skip/index is a no-op.
     def skip(self, n: int) -> int:

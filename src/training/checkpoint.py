@@ -126,6 +126,7 @@ def write_stage_audit(
             "in_channels": getattr(model_cfg, "in_channels", None),
             "heatmap_size": getattr(model_cfg, "heatmap_size", None),
             "dims": getattr(model_cfg, "dims", None),
+            "n_hands": getattr(model_cfg, "n_hands", None),
         },
         "hparams": {
             "lr": tcfg.get("lr"),
