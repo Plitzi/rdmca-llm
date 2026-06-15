@@ -38,6 +38,14 @@ def active_model() -> str:
     return _ACTIVE_MODEL
 
 
+def model_hook(name: str):
+    """An OPTIONAL model-provided callable looked up by name on the active model package
+    (e.g. `post_stage`), or None. Lets the agnostic core invoke model-specific side
+    effects without importing the model — the same discovery pattern as the ModelSpec."""
+    pkg = importlib.import_module(f"src.models.{_ACTIVE_MODEL}")
+    return getattr(pkg, name, None)
+
+
 def _discover(model: str) -> dict[int, StagePlugin]:
     """Import every stageNN_* sub-package of `src/models/<model>/` and collect its
     PLUGIN, keyed by number. Validates unique numbers and ≤1 freeze point."""
@@ -104,11 +112,6 @@ def bcf_stage() -> int | None:
 
 def is_behavioral(number: int) -> bool:
     return get_stage(number).is_behavioral
-
-
-def mood_stages() -> set[int]:
-    """Stages whose completion (re)trains the mood head."""
-    return {p.number for p in all_stages() if p.trains_mood}
 
 
 # ── data sources ───────────────────────────────────────────────────────────────

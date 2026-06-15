@@ -11,14 +11,15 @@ Surface:
   • text utilities — stable_hash, passes_filter, flesch_kincaid_grade
   • conversational shaping — persona_for, prepend_system, hash01, STORY_PROMPTS
   • tool/agent transcript helpers — hermes_events, hermes_to_transcript, AGENTIC_SYSTEM_PROMPT
-  • model I/O a plugin may need — emotion_to_mood, REASONING_SPECIALS
+  • tokenizer specials a plugin may need — REASONING_SPECIALS
 
-The SDK itself bridges to the framework core; plugins never reach past it.
+The SDK itself bridges to the framework core; plugins never reach past it. Anything
+MODEL-specific (e.g. cognition's moods/emotions) is NOT here — it lives with the model
+and is imported intra-model (see src/models/cognition/mood).
 """
 
 from __future__ import annotations
 
-from src.core.modalities.moods import emotion_to_mood
 from src.core.modalities.vocab import REASONING_SPECIALS
 from src.models.base import SourceBuilder, StageGate, StageKind, StagePlugin
 from src.models.sdk.agentic import (
@@ -48,7 +49,6 @@ __all__ = [
     "StagePlugin",
     "blend",
     "cycle_records",
-    "emotion_to_mood",
     "flesch_kincaid_grade",
     "hash01",
     "hermes_events",

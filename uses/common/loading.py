@@ -212,7 +212,7 @@ def load_model(args):
 
 def load_mood_head(model, args, mcfg):
     """Load this stage's mood head via the shared loader (None ⇒ stay neutral)."""
-    from src.core.model.mood import load_mood_head as _load_mood_head
+    from src.models.cognition.mood import load_mood_head as _load_mood_head
 
     head = _load_mood_head(
         mcfg.d_model,

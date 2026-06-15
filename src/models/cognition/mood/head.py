@@ -1,6 +1,6 @@
 """
 Mood head — a lightweight emotional-state classifier on top of the foundational
-hidden states (same probe pattern as the BCF safety head, see src/model/bcf.py).
+hidden states (same probe pattern as the BCF safety head, see src/core/model/bcf.py).
 
 Goal (RDMCA conversational layer): give the model a conversation-driven mood that
 defaults to NEUTRAL and only shifts when the dialogue clearly carries an emotion —
@@ -20,7 +20,7 @@ Backend-neutral (written against `src.core.backend.current()`).
 from __future__ import annotations
 
 import src.core.backend as backend
-from src.core.modalities.moods import (  # shared light taxonomy (no backend)
+from src.models.cognition.mood.lexicon import (  # shared light taxonomy (no backend)
     MOOD_INDEX,
     MOOD_MARGIN,
     MOODS,

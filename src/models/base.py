@@ -63,8 +63,9 @@ class StagePlugin:
     lr_scale: float = 1.0
     # Graduation gate (None for behavioral stages, which ship as LoRA sectors).
     gate: StageGate | None = None
-    # Whether the mood head is (re)trained when this stage completes — only
-    # meaningful at conversational stages (see registry.mood_stages).
+    # Whether this stage trains a model-specific auxiliary head on completion — for
+    # cognition, the conversation mood head (see src/models/cognition/mood.post_stage).
+    # Only meaningful at conversational stages; harmless (False) for other models.
     trains_mood: bool = False
     # The core freezes right after the last ACTIVE stage flagged here (the BCF stage).
     is_freeze_point: bool = False

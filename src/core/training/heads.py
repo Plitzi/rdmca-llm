@@ -1,5 +1,9 @@
-"""Auxiliary heads + the stage-completion seam: the BCF head, the conversation mood
-head, and the side effects when a stage finishes (persist sector / freeze the core)."""
+"""Auxiliary heads + the stage-completion seam: the BCF head and the side effects when a
+stage finishes (persist sector / freeze the core / the active model's `post_stage` hook).
+
+Model-specific completion work (e.g. cognition's mood head) is NOT here — the trainer
+invokes the active model's optional `post_stage` hook so the agnostic core never imports
+a model. See src/models/cognition/mood for that hook."""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ import numpy as np
 import src.core.backend as backend
 from src.core.training.checkpoint import freeze_model
 from src.core.training.curriculum import BCF_STAGE, is_behavioral_stage, last_cognitive_stage
-from src.models import get_stage
+from src.models import model_hook
 
 
 def train_bcf_head(
@@ -53,36 +57,6 @@ def train_bcf_head(
     backend.current().engine.save_weights(head, str(ckpt_dir / "bcf_head.npz"))
 
 
-def maybe_train_mood_head(model, stage: int, cfg: dict, ckpt_dir: Path, precision: str) -> None:
-    """Train + save the conversation mood head beside this stage's checkpoint. Best-
-    effort and OFF the critical path: gated by `training.mood_head` (default on) and
-    silently skipped if the labeled data is unavailable — it must never fail a stage."""
-    if not cfg.get("training", {}).get("mood_head", True):
-        return
-    # Mood is a CONVERSATIONAL faculty — only (re)train it on conversational stages
-    # (stage 1 + the frozen-core BCF stage). The stage plugin declares this.
-    if not get_stage(stage).trains_mood:
-        print(
-            f"  [mood] stage {stage} is not conversational — keeping the existing "
-            "head (chat falls back to the nearest earlier head + lexicon)"
-        )
-        return
-    try:
-        from src.core.modalities.text import TextTokenizer
-        from src.core.model.mood import train_mood_head as _train_mood
-
-        _train_mood(
-            model,
-            TextTokenizer(),
-            ckpt_dir,
-            level=cfg.get("level"),
-            stage=stage,
-            precision=precision,
-        )
-    except Exception as e:
-        print(f"  [mood] skipped ({type(e).__name__}: {e})")
-
-
 def on_stage_complete(
     model, stage: int, cfg: dict, root: Path, ckpt_dir: Path, precision: str, adapter=None
 ) -> None:
@@ -95,9 +69,12 @@ def on_stage_complete(
         if adapter is not None:
             print(f"  Behavioral sector saved: {sector_io.save_sector(adapter, root, stage)}")
         return
-    # Cognitive stage finished: train the conversation mood head on this checkpoint's
-    # core so the stage is chat-ready with mood tracking — no separate script needed.
-    maybe_train_mood_head(model, stage, cfg, ckpt_dir, precision)
+    # Cognitive stage finished: let the active model run its own completion hook (e.g.
+    # cognition trains the conversation mood head on this checkpoint's core), so the
+    # agnostic core stays out of model-specific work.
+    post_stage = model_hook("post_stage")
+    if post_stage is not None:
+        post_stage(model, stage, cfg, ckpt_dir, precision)
     if stage == last_cognitive_stage(cfg):
         if stage == BCF_STAGE:
             train_bcf_head(model, ckpt_dir, precision)

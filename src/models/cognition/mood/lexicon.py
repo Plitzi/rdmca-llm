@@ -1,8 +1,11 @@
 """
-Mood taxonomy — the single source of truth for the conversational mood palette,
-the emotion→mood mapping and the SYSTEM-channel annotation. Kept here (no heavy
-imports, like vocab.py) so BOTH the data pipeline (scripts/prepare_data and the stage sources
-— no MLX) and the runtime mood head (src/model/mood.py — MLX) share one definition.
+Mood taxonomy — the single source of truth for the cognition model's conversational
+mood palette, the emotion→mood mapping and the SYSTEM-channel annotation. Kept light
+(no heavy imports) so BOTH the data pipeline (the stage sources — no MLX) and the
+runtime mood head (head.py — MLX) share one definition.
+
+Moods are a COGNITION feature (emotions don't apply to other model types), so this
+package lives with the model, not in the framework core.
 
 The mood rides on the SYSTEM prompt as plain text (`System: … (mood: happy)`), so
 it needs NO new tokenizer symbols and works with the existing checkpoint. NEUTRAL
@@ -11,6 +14,15 @@ until the conversation clearly carries an emotion.
 """
 
 from __future__ import annotations
+
+
+def moods_enabled(cfg: dict) -> bool:
+    """Whether the conversational MOOD feature is active for this run — the single
+    switch honored by the cognition stage-completion hook (mood-head training), chat
+    and agent. A non-conversational model sets `moods: false` (and declares no
+    `trains_mood` stages). Default on."""
+    return bool(cfg.get("moods", True))
+
 
 # NEUTRAL is index 0 and the fallback. Every non-neutral class has training data
 # (EmpatheticDialogues' 32 emotions collapse onto it below).

@@ -21,6 +21,11 @@ backend: mlx                   # mlx | torch — most levels run mlx; big levels
 # training plateaus (early-stop ships the best). Override per run with `--skip-gate`.
 skip_gate: false
 
+# Conversational MOOD feature (cognition). One switch for training (mood-head training),
+# chat and agent. Set `false` to run neutral everywhere — and a non-conversational model
+# (e.g. hand-pose detection) sets it false (its stages also declare no `trains_mood`).
+moods: true
+
 # ── Training defaults — only the keys identical across levels. Each level sets the
 #    rest (lr, lr_min, weight_decay, batch_size, warmup_steps, save_every, eval_every,
 #    max_corpus_passes) to suit its size. ─────────────────────────────────────────────

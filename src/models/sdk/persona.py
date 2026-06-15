@@ -1,16 +1,16 @@
-"""System personas + mood annotation, shared by the conversational sources.
+"""System personas, shared by the conversational sources.
 
 These shape REGISTER, not facts. A fraction of the conversational/instruction data
-is given a `System:` persona so the model learns to CONDITION on a system prompt;
-emotional dialogues carry a `(mood: …)` tag on that SAME channel so tone is driven
-by an explicit, neutral-by-default mood. All plain ASCII — no new tokenizer symbols.
+is given a `System:` persona so the model learns to CONDITION on a system prompt. A
+caller may also pass a pre-rendered annotation (e.g. the cognition model's
+`(mood: …)` tag) to ride on that SAME channel — but this module stays model-agnostic
+and never depends on a specific feature like moods. All plain ASCII — no new
+tokenizer symbols.
 """
 
 from __future__ import annotations
 
 import hashlib
-
-from src.core.modalities.moods import mood_system_phrase
 
 SYSTEM_PERSONAS: list[str] = [
     "You are a helpful, friendly assistant. Answer simply and directly.",
@@ -41,9 +41,9 @@ def persona_for(key: str) -> str:
     return SYSTEM_PERSONAS[int(hash01(key) * len(SYSTEM_PERSONAS)) % len(SYSTEM_PERSONAS)]
 
 
-def prepend_system(text: str, persona: str, mood: str = "neutral") -> str:
-    """Add a `System:` line (with an optional non-neutral `(mood: …)` tag) above a
-    User:/Assistant: transcript so the model learns to condition on it."""
-    tag = mood_system_phrase(mood)
-    system_line = f"System: {persona}" + (f" {tag}" if tag else "")
+def prepend_system(text: str, persona: str, annotation: str = "") -> str:
+    """Add a `System:` line above a User:/Assistant: transcript so the model learns to
+    condition on it. `annotation` is an optional pre-rendered tag the caller appends on
+    the same channel (e.g. cognition's `(mood: happy)`); empty adds nothing."""
+    system_line = f"System: {persona}" + (f" {annotation}" if annotation else "")
     return f"{system_line}\n{text}"

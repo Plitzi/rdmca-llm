@@ -92,7 +92,7 @@ def test_agent_think_delimiters_match_registry():
 
 
 def test_emotion_maps_to_mood_palette():
-    from src.core.modalities.moods import MOODS, emotion_to_mood
+    from src.models.cognition.mood import MOODS, emotion_to_mood
 
     assert emotion_to_mood("joyful") == "happy"
     assert emotion_to_mood("terrified") == "afraid"
@@ -105,7 +105,7 @@ def test_emotion_maps_to_mood_palette():
 
 
 def test_mood_system_phrase_neutral_is_empty():
-    from src.core.modalities.moods import mood_system_phrase
+    from src.models.cognition.mood import mood_system_phrase
 
     assert mood_system_phrase("neutral") == ""  # default adds nothing
     assert mood_system_phrase("happy") == "(mood: happy)"
@@ -132,9 +132,10 @@ def test_agent_prompt_prepends_system_persona():
 def test_data_enrichment_system_and_story():
     """instruct system injection yields a System line; story reframing is a NATURAL
     User→Assistant request with NO system prompt (telling a story needs no persona)."""
+    from src.models.cognition.mood import mood_system_phrase
     from src.models.sdk import STORY_PROMPTS, prepend_system
 
-    sysd = prepend_system("User: q\nAssistant: a", "You are kind.", "happy")
+    sysd = prepend_system("User: q\nAssistant: a", "You are kind.", mood_system_phrase("happy"))
     assert sysd.startswith("System: You are kind. (mood: happy)\nUser:")
     # the story-request format the stream emits
     story = f"User: {STORY_PROMPTS[0]}\nAssistant: Once upon a time."
@@ -143,14 +144,14 @@ def test_data_enrichment_system_and_story():
 
 
 def test_classify_mood_defaults_neutral_without_head():
-    from src.core.model.mood import classify_mood
+    from src.models.cognition.mood import classify_mood
 
     mood, _conf = classify_mood(None, None, None, "anything")
     assert mood == "neutral"
 
 
 def test_mood_tracker_neutral_without_head():
-    from src.core.model.mood import MoodTracker
+    from src.models.cognition.mood import MoodTracker
 
     t = MoodTracker(None)
     assert t.update(None, None, "I am so happy!") == "neutral"  # one msg ⇒ inertia
@@ -160,7 +161,7 @@ def test_lexicon_mood_fixes_broken_classifications():
     """The learned 11M head was near-random ('im good'→angry, 'my dog died'→caring,
     requests→emotion). The lexicon is the reliable floor: clear cues map correctly,
     requests/questions stay neutral, and negation flips a positive cue to sad."""
-    from src.core.modalities.moods import lexicon_mood
+    from src.models.cognition.mood import lexicon_mood
 
     cases = {
         "im good": "happy",
@@ -184,7 +185,7 @@ def test_lexicon_mood_fixes_broken_classifications():
 def test_mood_tracker_lexicon_drives_mood_without_a_head():
     """No learned head needed: a sustained emotional tone is detected by the lexicon
     alone (the head is only an optional refinement)."""
-    from src.core.model.mood import MoodTracker
+    from src.models.cognition.mood import MoodTracker
 
     t = MoodTracker(None, alpha=0.5)
     last = "neutral"
@@ -199,8 +200,8 @@ def test_mood_tracker_lexicon_drives_mood_without_a_head():
 def test_mood_tracker_builds_and_decays_over_conversation(monkeypatch):
     """Conversation-aware mood: one message isn't enough (inertia), a sustained tone
     takes hold, and it decays back to neutral — emotion is the WHOLE exchange."""
-    import src.core.model.mood as mood
-    from src.core.model.mood import MOOD_INDEX, MOODS, MoodTracker
+    import src.models.cognition.mood.head as mood
+    from src.models.cognition.mood import MOOD_INDEX, MOODS, MoodTracker
 
     happy = [0.0] * len(MOODS)
     happy[MOOD_INDEX["happy"]] = 1.0
@@ -220,8 +221,8 @@ def test_mood_tracker_builds_and_decays_over_conversation(monkeypatch):
 
 
 def test_mood_tracker_reset(monkeypatch):
-    import src.core.model.mood as mood
-    from src.core.model.mood import MOOD_INDEX, MOODS, MoodTracker
+    import src.models.cognition.mood.head as mood
+    from src.models.cognition.mood import MOOD_INDEX, MOODS, MoodTracker
 
     happy = [0.0] * len(MOODS)
     happy[MOOD_INDEX["happy"]] = 1.0
@@ -239,7 +240,7 @@ def test_mood_head_learns_to_separate_moods():
     + train step are wired): loss drops over a few steps on frozen features."""
     import mlx.core as mx
 
-    from src.core.model.mood import MoodHead, mood_loss
+    from src.models.cognition.mood import MoodHead, mood_loss
 
     head = MoodHead(d_model=32, hidden=16)
     opt = B.engine.make_optimizer(head, 1e-2, 0.0)

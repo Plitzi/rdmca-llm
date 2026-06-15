@@ -52,9 +52,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root on path
 
 from src.core.memory.experience_log import detect_correction, load_experiences, log_experience
-from src.core.modalities.moods import MOODS
 from src.core.modalities.text import BOS_ID
 from src.core.observability import ContextReport, count_tokens
+from src.models.cognition.mood import MOODS
 from uses.common import agent
 
 # Model/tokenizer modules are imported lazily inside load_model() — only AFTER
@@ -153,7 +153,7 @@ def chat_loop(model, mcfg, tokenizer, args) -> None:
     current_mood = mood_pin if (mood_pin in MOODS and not mood_off) else "neutral"
     mood_auto = (not mood_off) and (mood_pin not in MOODS) and (mood_head is not None)
     # Conversation-aware running mood (memory across turns), neutral by default.
-    from src.core.model.mood import MoodTracker
+    from src.models.cognition.mood import MoodTracker
 
     mood_tracker = MoodTracker(mood_head)
     if mood_off:
@@ -667,9 +667,14 @@ Examples:
     if args.seed is not None:  # reproducible sampling across runs
         np.random.seed(args.seed)
 
-    from src.core.config import resolve_config_path
+    from src.core.config import load_config, resolve_config_path
+    from src.models.cognition.mood import moods_enabled
 
     args.config = resolve_config_path(args.config, args.level)
+    # Moods are a cognition feature; honor the config switch (a model with `moods: false`,
+    # e.g. a detection model, runs neutral). An explicit --no-mood still wins.
+    if not args.no_mood and not moods_enabled(load_config(args.config)):
+        args.no_mood = True
 
     if not args.dummy and args.stage is None and args.checkpoint is None:
         print("Specify --stage N, --checkpoint PATH, or --dummy")

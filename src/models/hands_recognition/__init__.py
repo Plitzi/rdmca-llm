@@ -14,6 +14,7 @@ reference wiring):
         • objective       — keypoint regression / classification loss
         • gate_metric     — e.g. "pck" / "accuracy" (higher-is-better), evaluated by a
                             gate evaluator registered for that metric_key.
-  3. Write a level config with `model_name: hands_recognition`.
+  3. Write a level config with `model_name: hands_recognition` and `moods: false`
+     (moods are a cognition feature — see src.models.cognition.mood).
   4. Put its hypothesis probes under `experiments/` within this package.
 """

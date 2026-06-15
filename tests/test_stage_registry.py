@@ -82,10 +82,6 @@ def test_freeze_point_and_kinds():
         assert stages.is_behavioral(n)
 
 
-def test_mood_stages():
-    assert stages.mood_stages() == {1, 7}
-
-
 def test_active_stages_respects_entry_level():
     # entry_level is the FIRST level a stage becomes active (active when entry_level
     # <= level). Every stage's entry_level is 0 or 1, so all are active at level 1.

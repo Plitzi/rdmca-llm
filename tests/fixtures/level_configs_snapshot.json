@@ -187,6 +187,7 @@
   "1": {
     "backend": "mlx",
     "skip_gate": false,
+    "moods": true,
     "training": {
       "precision": "bf16",
       "grad_accumulation": 1,
@@ -396,6 +397,7 @@
   "2": {
     "backend": "mlx",
     "skip_gate": false,
+    "moods": true,
     "training": {
       "precision": "bf16",
       "grad_accumulation": 4,
@@ -592,6 +594,7 @@
   "3": {
     "backend": "mlx",
     "skip_gate": false,
+    "moods": true,
     "training": {
       "precision": "bf16",
       "grad_accumulation": 6,
@@ -789,6 +792,7 @@
   "4": {
     "backend": "torch",
     "skip_gate": false,
+    "moods": true,
     "training": {
       "precision": "bf16",
       "grad_accumulation": 8,
@@ -993,6 +997,7 @@
   "5": {
     "backend": "torch",
     "skip_gate": false,
+    "moods": true,
     "training": {
       "precision": "bf16",
       "grad_accumulation": 16,

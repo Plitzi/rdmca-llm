@@ -22,8 +22,8 @@ from src.core.memory.recall import (
     MEM_OPEN,  # noqa: F401  (re-exported for callers)
     memory_block,
 )
-from src.core.modalities.moods import mood_system_phrase
 from src.core.modalities.vocab import REASONING_SPECIALS
+from src.models.cognition.mood import mood_system_phrase
 
 OUTPUT_FORMATS = ("text", "json")
 

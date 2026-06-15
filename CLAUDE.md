@@ -94,6 +94,22 @@ se comporta idéntico que antes. Un modelo sobreescribe cualquier pieza exponien
 `evaluate`, **menor score es mejor** (una métrica higher-is-better devuelve p. ej.
 `1-accuracy`), para que el ratchet del trainer siga siendo agnóstico a la métrica.
 
+**Código específico del modelo vive CON el modelo.** El core solo contiene lo
+REUSABLE/general del framework; nada atado a un modelo concreto. Si una faculty solo
+tiene sentido para un modelo (p. ej. los **moods/emociones** son de cognition — no
+sirven a un detector de manos), va en `src/models/<modelo>/` (ver
+[src/models/cognition/mood/](src/models/cognition/mood/)), NO en `src/core` ni en el SDK.
+- El core NUNCA importa el modelo. Para efectos secundarios específicos del modelo al
+  terminar un stage (p. ej. entrenar el mood head de cognition), el trainer invoca un
+  **hook opcional** `post_stage(model, stage, cfg, ckpt_dir, precision)` que el paquete
+  del modelo expone — descubierto por nombre vía `model_hook(...)` (mismo patrón que
+  `SPEC`). Así el core agnóstico dispara trabajo del modelo sin importarlo.
+- Un **stage** importa helpers GENERALES del framework solo desde el SDK; los helpers
+  ESPECÍFICOS de su modelo los importa intra-modelo (de `src/models/<modelo>/…`), nunca
+  de otro modelo ni de `src/core`. Borrar el modelo se lleva su faculty y sus stages.
+- `uses/` (consumidores) importa la faculty del modelo directamente (p. ej.
+  `from src.models.cognition.mood import MoodTracker`). El SDK permanece libre de mood.
+
 ## Estructura: stages como plugins
 
 Cada stage del currículo es un **plugin autónomo** bajo

@@ -202,6 +202,13 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg_path = resolve_config_path(None, args.level)
+    # Moods are a cognition feature; honor the config switch (a model with `moods: false`
+    # runs neutral). An explicit --no-mood still wins.
+    from src.core.config import load_config
+    from src.models.cognition.mood import moods_enabled
+
+    if not args.no_mood and not moods_enabled(load_config(cfg_path)):
+        args.no_mood = True
     load_args = SimpleNamespace(
         config=cfg_path,
         dummy=args.dummy,
@@ -243,8 +250,7 @@ def main() -> None:
 
     # Mood applies to EVERY surface, not just the chat: read the query's mood from
     # the shared mood head (neutral by default) and fold it into the system line.
-    from src.core.modalities.moods import MOODS, mood_system_phrase
-    from src.core.model.mood import classify_mood, load_mood_head
+    from src.models.cognition.mood import MOODS, classify_mood, load_mood_head, mood_system_phrase
 
     mood = "neutral"
     if not args.no_mood:

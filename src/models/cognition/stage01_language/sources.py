@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 
+from src.models.cognition.mood import emotion_to_mood, mood_system_phrase
 from src.models.cognition.stage01_language.offline import (
     gen_basic_chat,
     gen_definitions,
@@ -18,7 +19,6 @@ from src.models.cognition.stage01_language.offline import (
 )
 from src.models.sdk import (
     STORY_PROMPTS,
-    emotion_to_mood,
     hash01,
     interleave,
     persona_for,
@@ -179,7 +179,7 @@ def _stream_empathetic_balanced(per_emotion_cap: int = 250) -> Iterator[dict]:
             counts[emotion] += 1
             mood = emotion_to_mood(emotion)
             yield {
-                "text": prepend_system(text, persona_for(text), mood),
+                "text": prepend_system(text, persona_for(text), mood_system_phrase(mood)),
                 "mood": mood,
                 "lang": "en",
             }
