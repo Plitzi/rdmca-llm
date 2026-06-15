@@ -1,15 +1,18 @@
 """hands_recognition — hand-pose regressors + their ModelSpec.
 
 A compact vision model that proves the framework is task-agnostic: NOT a transformer and
-NOT text. It regresses the 21 standard hand landmarks (wrist + four joints per finger,
-x/y in [0, 1]); with `HAND_CONNECTIONS` (the bones/phalanges) those form an articulated
-hand SKELETON the camera overlay draws. Two interchangeable architectures, same ModelSpec:
+NOT text. It regresses the 21 standard hand landmarks (wrist + four joints per finger);
+with `HAND_CONNECTIONS` (the bones/phalanges) those form an articulated hand SKELETON the
+camera overlay draws. Two interchangeable architectures, same ModelSpec:
 
   • HandPoseNet — a tiny MLP on a downscaled grayscale frame, trained on SYNTHETIC data
     (a blob + a fixed landmark constellation). No download; proves the pipeline but does
-    not track a REAL hand.
-  • HandPoseCNN — a small CNN on an RGB image, trained on the real FreiHAND dataset (see
-    data_freihand.py) to detect a real hand. Opt-in via configs/hands2d.yaml.
+    not track a REAL hand. Predicts 21×2 (x,y in [0,1]) of a hand that fills the frame.
+  • HandHeatmapNet — a fully-convolutional encoder-decoder that emits 21 spatial HEATMAPS
+    plus a per-keypoint DEPTH (z relative to the wrist) → 21×3. Soft-argmax turns each
+    heatmap into an (x,y) anywhere in the frame, so it LOCALIZES a real hand wherever it
+    is (not just filling the frame). Trained on the real FreiHAND dataset (see
+    data_freihand.py) with location augmentation. Opt-in via configs/hands2d.yaml.
 
 `build_spec` picks the arch + loader from the config (`model.arch`, `dataset.root`). Built
 on the shared backend (`src.backend`) → trains/infers on MLX or torch. The camera use case
@@ -120,63 +123,104 @@ def build_pose_net(hidden: int = 256) -> HandPoseNet:
     return net
 
 
-class HandPoseCNN(nn.Module):
-    """Small CNN for REAL 2D hand pose: an RGB (or gray) image [N, C, H, W] in [0,1] →
-    21×2 keypoints in [0,1]. Four stride-2 conv blocks (so H,W shrink 16×) + global average
-    pool + a small MLP head. Unlike the synthetic MLP this keeps spatial structure, so it
-    can learn a real hand from real images (FreiHAND). Trained via the real-data loader."""
+class HandHeatmapNet(nn.Module):
+    """Fully-convolutional hand pose for REAL, LOCALIZED hands: an RGB (or gray) image
+    [N, C, H, W] in [0,1] → 21 spatial heatmaps [N, 21, hs, hs] + a per-keypoint depth
+    [N, 21] (z relative to the wrist). Unlike a flat regressor it keeps spatial structure
+    end-to-end, so soft-argmax over each heatmap recovers an (x,y) ANYWHERE in the frame —
+    it localizes the hand wherever it is, instead of assuming it fills the frame.
 
-    def __init__(self, img_size: int = 128, in_channels: int = 3, width: int = 128):
+    Encoder: four stride-2 conv blocks (H,W shrink 16× → bottleneck img_size/16). Decoder:
+    two ConvTranspose2d up-samples (→ img_size/4 = heatmap_size) then a 1×1 conv to 21
+    channels. Depth branch: global-average-pooled bottleneck → MLP → 21. Requires
+    `heatmap_size == img_size // 4` (the two up-samples from the /16 bottleneck)."""
+
+    def __init__(
+        self, img_size: int = 128, in_channels: int = 3, width: int = 128, heatmap_size: int = 32
+    ):
         super().__init__()
+        if heatmap_size != img_size // 4:
+            raise ValueError(
+                f"heatmap_size must be img_size//4 ({img_size // 4}), got {heatmap_size} "
+                f"(the decoder up-samples the /16 bottleneck twice)."
+            )
         self.c1 = nn.Conv2d(in_channels, width // 8, 3, stride=2, padding=1)  # H/2
         self.c2 = nn.Conv2d(width // 8, width // 4, 3, stride=2, padding=1)  # H/4
         self.c3 = nn.Conv2d(width // 4, width // 2, 3, stride=2, padding=1)  # H/8
-        self.c4 = nn.Conv2d(width // 2, width, 3, stride=2, padding=1)  # H/16
-        self.head1 = nn.Linear(width, width)
-        self.head2 = nn.Linear(width, _OUT)
-        # Record the input geometry so the trainer's audit captures it and the camera can
-        # rebuild the EXACT net from the checkpoint (no silent shape-mismatch).
+        self.c4 = nn.Conv2d(width // 2, width, 3, stride=2, padding=1)  # H/16 (bottleneck)
+        self.d1 = nn.ConvTranspose2d(width, width // 2, 4, stride=2, padding=1)  # H/8
+        self.d2 = nn.ConvTranspose2d(width // 2, width // 4, 4, stride=2, padding=1)  # H/4
+        self.heatmap = nn.Conv2d(width // 4, N_KEYPOINTS, 1)  # → 21 heatmaps at H/4
+        self.depth1 = nn.Linear(width, width)
+        self.depth2 = nn.Linear(width, N_KEYPOINTS)  # 21 root-relative depths
+        # Record geometry so the audit captures it and the camera rebuilds the EXACT net.
         self.cfg = SimpleNamespace(
-            arch="cnn",
+            arch="heatmap",
             img_size=img_size,
             in_channels=in_channels,
             d_model=width,
-            n_layers=4,
+            heatmap_size=heatmap_size,
+            dims=3,
+            n_layers=6,
             context_len=img_size,
         )
 
-    def __call__(self, x):  # x: [N, C, H, W] in [0,1]
+    def __call__(self, x):  # x: [N, C, H, W] in [0,1] → (heatmaps [N,21,hs,hs], z [N,21])
         h = ops.relu(self.c1(x))
         h = ops.relu(self.c2(h))
         h = ops.relu(self.c3(h))
-        h = ops.relu(self.c4(h))
-        h = ops.mean(h, axis=(2, 3))  # global average pool → [N, width]
-        h = ops.relu(self.head1(h))
-        return ops.sigmoid(self.head2(h))  # [N, _OUT] in [0,1]
+        bottleneck = ops.relu(self.c4(h))  # [N, width, H/16, W/16]
+        u = ops.relu(self.d1(bottleneck))
+        u = ops.relu(self.d2(u))
+        heatmaps = self.heatmap(u)  # [N, 21, hs, hs] (raw — softmax happens in soft-argmax)
+        pooled = ops.mean(bottleneck, axis=(2, 3))  # global average pool → [N, width]
+        z = self.depth2(ops.relu(self.depth1(pooled)))  # [N, 21] root-relative depth
+        return heatmaps, z
 
     def count_params(self, include_sectors: bool = True) -> int:
-        w, cin = self.cfg.d_model, self.cfg.in_channels
+        w, cin, k = self.cfg.d_model, self.cfg.in_channels, N_KEYPOINTS
 
-        def conv(i, o):
-            return i * o * 9 + o  # 3×3 kernel + bias
+        def conv(i, o, ksz):
+            return i * o * ksz * ksz + o
 
         return (
-            conv(cin, w // 8)
-            + conv(w // 8, w // 4)
-            + conv(w // 4, w // 2)
-            + conv(w // 2, w)
+            conv(cin, w // 8, 3)
+            + conv(w // 8, w // 4, 3)
+            + conv(w // 4, w // 2, 3)
+            + conv(w // 2, w, 3)
+            + conv(w, w // 2, 4)  # ConvTranspose2d (same weight count)
+            + conv(w // 2, w // 4, 4)
+            + conv(w // 4, k, 1)
             + (w * w + w)
-            + (w * _OUT + _OUT)
+            + (w * k + k)
         )
 
 
-def build_pose_cnn(model_cfg: dict) -> HandPoseCNN:
-    """Construct the real-hand CNN from a config's `model` block (img_size / in_channels /
-    conv_width), with weights allocated by a dummy forward pass."""
+def soft_argmax(heatmaps_np: np.ndarray) -> np.ndarray:
+    """[N,21,hs,hs] raw heatmaps → [N,21,2] (x,y) in [0,1] via 2D spatial soft-argmax.
+    Inference/eval only (no gradient), so it runs in numpy: a spatial softmax over each
+    heatmap then the expected grid coordinate. Localizes the peak anywhere in the frame."""
+    n, k, hh, ww = heatmaps_np.shape
+    flat = heatmaps_np.reshape(n, k, hh * ww).astype(np.float64)
+    flat = flat - flat.max(axis=-1, keepdims=True)  # stabilize the exp
+    p = np.exp(flat)
+    p /= p.sum(axis=-1, keepdims=True)
+    p = p.reshape(n, k, hh, ww)
+    xs = np.arange(ww) / max(ww - 1, 1)
+    ys = np.arange(hh) / max(hh - 1, 1)
+    ex = (p.sum(axis=2) * xs).sum(axis=-1)  # marginalize rows → E[x]
+    ey = (p.sum(axis=3) * ys).sum(axis=-1)  # marginalize cols → E[y]
+    return np.stack([ex, ey], axis=-1).astype(np.float32)  # [N,21,2]
+
+
+def build_heatmap_net(model_cfg: dict) -> HandHeatmapNet:
+    """Construct the heatmap FCN from a config's `model` block (img_size / in_channels /
+    conv_width / heatmap_size), with weights allocated by a dummy forward pass."""
     img_size = int(model_cfg.get("img_size", 128))
     in_channels = int(model_cfg.get("in_channels", 3))
     width = int(model_cfg.get("conv_width", model_cfg.get("d_model", 128)))
-    net = HandPoseCNN(img_size, in_channels, width)
+    heatmap_size = int(model_cfg.get("heatmap_size", img_size // 4))
+    net = HandHeatmapNet(img_size, in_channels, width, heatmap_size)
     _ = net(ops.array(np.zeros((1, in_channels, img_size, img_size), dtype=np.float32)))
     B.engine.eval(net.parameters())
     return net
@@ -238,13 +282,25 @@ class _SynthLoader:
         return False
 
 
+def _mpjpe(pred: np.ndarray, target: np.ndarray) -> float:
+    """Mean per-joint position error: mean over keypoints (and samples) of the Euclidean
+    distance between predicted and target coordinates. [N,21,D] → scalar (lower = better)."""
+    d = pred - target
+    return float(np.mean(np.sqrt((d**2).sum(axis=-1) + 1e-9)))
+
+
 def build_spec(cfg: dict):
     """The hands_recognition ModelSpec — how the framework builds/trains/evaluates it.
-    Lower `mpjpe` (mean keypoint error) is better, matching the trainer's ratchet."""
+    Lower `mpjpe` (mean keypoint error) is better, matching the trainer's ratchet.
+
+    Two arches behind one spec: `model.arch == "heatmap"` → the FCN trained on real
+    FreiHAND (localized, 3D); anything else → the synthetic MLP (no download, CI demo)."""
     from src.plugins import ModelSpec
 
-    def _real_dataset_root(cfg: dict) -> str | None:
-        return (cfg.get("dataset", {}) or {}).get("root")
+    mcfg = cfg.get("model", {}) or {}
+    is_heatmap = mcfg.get("arch") == "heatmap"
+    dims = int(mcfg.get("dims", 3))  # 3 = include root-relative depth in the metric
+    depth_weight = float(mcfg.get("depth_weight", 0.1))  # balances depth MSE vs heatmap MSE
 
     def _make_real_loader(cfg: dict, split: str):
         from models.hands_recognition.data_freihand import FreiHandLoader
@@ -252,14 +308,17 @@ def build_spec(cfg: dict):
         mcfg = cfg.get("model", {}) or {}
         dcfg = cfg.get("dataset", {}) or {}
         tcfg = cfg.get("training", {}) or {}
+        img_size = int(mcfg.get("img_size", 128))
         return FreiHandLoader(
             root=dcfg["root"],
             batch_size=int(tcfg.get("batch_size", 32)),
-            img_size=int(mcfg.get("img_size", 128)),
+            img_size=img_size,
             in_channels=int(mcfg.get("in_channels", 3)),
             split=split,
             seed=int(tcfg.get("seed", 0)),
             augment=bool(dcfg.get("augment", False)) and split == "train",
+            heatmap_size=int(mcfg.get("heatmap_size", img_size // 4)),
+            localize=bool(dcfg.get("localize", True)),
         )
 
     def build_model(stage: int, cfg: dict, root):
@@ -267,40 +326,58 @@ def build_spec(cfg: dict):
         seed = int((cfg.get("training", {}) or {}).get("seed", 0))
         B.engine.set_seed(seed)
         precision = (cfg.get("training", {}) or {}).get("precision", "fp32")
-        # arch="cnn" → real-hand CNN; otherwise the synthetic MLP (default, retro-compatible).
+        # arch="heatmap" → real-hand FCN; otherwise the synthetic MLP (default, no download).
         net = (
-            build_pose_cnn(mcfg)
-            if mcfg.get("arch") == "cnn"
-            else build_pose_net(int(mcfg.get("d_model", 256)))
+            build_heatmap_net(mcfg) if is_heatmap else build_pose_net(int(mcfg.get("d_model", 256)))
         )
         return net, net.cfg, None, precision, seed
 
     def build_loader(stage: int, cfg: dict):
-        # Real dataset present → train on real hands; else fall back to the synthetic stream.
-        if _real_dataset_root(cfg):
+        # Heatmap arch trains on the real FreiHAND loader; else the synthetic stream.
+        if is_heatmap:
             return _make_real_loader(cfg, "train")
         bs = int((cfg.get("training", {}) or {}).get("batch_size", 32))
         return _SynthLoader(bs, seed=int((cfg.get("training", {}) or {}).get("seed", 0)))
 
     def objective(model, batch):
-        frames, keypts = batch  # (images, targets)
+        if is_heatmap:
+            imgs, heatmaps_t, z_t, _kpts = batch
+            pred_hm, pred_z = model(ops.array(imgs))
+            loss = _mse(pred_hm, ops.array(heatmaps_t))
+            return loss + depth_weight * _mse(pred_z, ops.array(z_t))
+        frames, keypts = batch
         return _mse(model(frames), keypts)
+
+    def _eval_heatmap(model, cfg):
+        # Honest gate: a HELD-OUT, localized val split (re-read each eval; infrequent + cheap).
+        vloader = _make_real_loader(cfg, "val")
+        errs = []
+        for _ in range(min(8, max(1, vloader.num_batches()))):
+            imgs, _hm, z_t, kpts = vloader.next_batch()
+            pred_hm, pred_z = model(ops.array(imgs))
+            coords = soft_argmax(np.asarray(ops.to_numpy(pred_hm)))  # [N,21,2] in [0,1]
+            if dims == 3:
+                z_pred = np.asarray(ops.to_numpy(pred_z))[..., None]  # [N,21,1]
+                pred = np.concatenate([coords, z_pred], axis=-1)
+                tgt = np.concatenate([kpts, z_t[..., None]], axis=-1)
+            else:
+                pred, tgt = coords, kpts
+            errs.append(_mpjpe(pred, tgt))
+        return float(np.mean(errs)) if errs else float("inf")
 
     def evaluate(model, stage, val_batches=None, cfg=None, log=print, step=None):
         B.engine.set_eval(model)
         cfg = cfg or {}
-        if _real_dataset_root(cfg):
-            # Honest gate: a HELD-OUT val split, not the training crops make_val_batches
-            # hands us at stage 1. Re-read each eval (infrequent; cheap JSON).
-            vloader = _make_real_loader(cfg, "val")
-            n = min(8, max(1, vloader.num_batches()))
-            batches = [vloader.next_batch() for _ in range(n)]
+        if is_heatmap:
+            score = _eval_heatmap(model, cfg)
         else:
             # The trainer hands raw numpy val batches (synthetic path) — wrap for the metric.
-            batches = val_batches or []
-        errs = [mean_keypoint_error(model(ops.array(f)), ops.array(k)) for f, k in batches]
+            errs = [
+                mean_keypoint_error(model(ops.array(f)), ops.array(k))
+                for f, k in (val_batches or [])
+            ]
+            score = float(np.mean(errs)) if errs else float("inf")
         B.engine.set_train(model)
-        score = float(np.mean(errs)) if errs else float("inf")
         threshold = float((cfg.get("gate", {}) or {}).get("max_mpjpe", 0.05))
         passed = score <= threshold
         tag = f"step={step:,} | " if step is not None else ""

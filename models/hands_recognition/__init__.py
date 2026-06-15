@@ -20,4 +20,19 @@ from __future__ import annotations
 
 from models.hands_recognition.pose import build_spec
 
-__all__ = ["build_spec"]
+__all__ = ["build_spec", "prepare_stage"]
+
+
+def prepare_stage(stage: int, cfg: dict, langs: list[str], limit_mb: int | None = None) -> None:
+    """Data-preparation hook for hands_recognition (discovered via `model_hook` — the
+    same pattern as `post_stage`). `rdmca prepare` delegates here instead of the text
+    corpus flow: it downloads + extracts the real FreiHAND dataset into the config's
+    `dataset.root`. With no `dataset.root` the model trains on the synthetic stream, so
+    there is nothing to prepare. `langs`/`limit_mb` don't apply to image data."""
+    root = (cfg.get("dataset", {}) or {}).get("root")
+    if not root:
+        print(f"  Stage {stage}: synthetic data (no dataset.root) — nothing to download.")
+        return
+    from models.hands_recognition.data_freihand import download_freihand
+
+    download_freihand(root)

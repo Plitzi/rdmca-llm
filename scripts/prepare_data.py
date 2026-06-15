@@ -212,9 +212,20 @@ def main():
         "TimeoutError",
     )
 
+    # A model can own its data step (e.g. hands_recognition downloads FreiHAND) by
+    # exposing a `prepare_stage` hook — the agnostic prepare flow delegates to it instead
+    # of the text-corpus path. Discovered by name (same pattern as the `post_stage` hook);
+    # cognition doesn't expose one, so it keeps the graded-corpus flow below.
+    from src.plugins import model_hook
+
+    model_prepare = model_hook("prepare_stage")
+
     try:
         for s in stages:
-            prepare_stage_for_level(level, s, cfg, langs=langs, limit_mb=args.limit)
+            if model_prepare is not None:
+                model_prepare(s, cfg, langs, args.limit)
+            else:
+                prepare_stage_for_level(level, s, cfg, langs=langs, limit_mb=args.limit)
     except KeyboardInterrupt:
         print("\n\nInterrupted. Run the same command again to resume.")
         sys.exit(0)
@@ -225,7 +236,12 @@ def main():
             sys.exit(1)
         raise  # anything else: show full traceback
 
-    print(f"\nDone. Next: rdmca tokenizer --level {level}")
+    # A model that owns its data step (prepare hook) doesn't tokenize text — point it
+    # straight at training; the text models go through the tokenizer first.
+    if model_prepare is not None:
+        print(f"\nDone. Next: rdmca train --config {cfg_path}")
+    else:
+        print(f"\nDone. Next: rdmca tokenizer --level {level}")
     sys.stdout.flush()
     sys.stderr.flush()
     # The HuggingFace datasets streaming iterators leave multiprocessing

@@ -1,20 +1,22 @@
 # hands_recognition — guide
 
 A compact, **non-text, non-transformer** model that proves the RDMCA framework is
-task-agnostic: it regresses the **21 standard hand landmarks** (wrist + four joints per
-finger) from a downscaled grayscale frame, and — via `HAND_CONNECTIONS` — reconstructs
-the **articulated hand skeleton** (every phalanx) for a live camera overlay.
+task-agnostic: it recovers the **21 standard hand landmarks** (wrist + four joints per
+finger) and — via `HAND_CONNECTIONS` — reconstructs the **articulated hand skeleton**
+(every phalanx) for a live camera overlay.
 
 It trains and evaluates through the *same* `ModelSpec` seam as `cognition`
-([../pose.py](../pose.py)): only the metric changes — **lower `mpjpe`** (mean keypoint
-error) is better.
+([../pose.py](../pose.py)): only the metric changes — **lower `mpjpe`** (mean per-joint
+position error) is better.
 
 **Two modes, same model:**
 - **Synthetic demo (default)** — a tiny MLP on a Gaussian blob + a fixed landmark
   constellation. Nothing is downloaded; it proves the pipeline but does **not** track a real
-  hand (it only learned the synthetic distribution).
-- **Real hands (opt-in)** — a small **CNN** trained on the **FreiHAND** dataset to detect a
-  real hand from the webcam. Enabled by a config + the dataset on disk (see
+  hand (it only learned the synthetic distribution). Predicts 21×2 of a hand that fills the
+  frame.
+- **Real hands (opt-in)** — a **heatmap FCN** trained on the **FreiHAND** dataset that
+  **localizes a real hand anywhere in the frame** and recovers **3D** keypoints (x, y +
+  root-relative depth). Enabled by a config + the dataset on disk (see
   [Detect real hands](#detect-real-hands-freihand)). The camera auto-selects whichever
   checkpoint you trained and rebuilds the matching architecture.
 
@@ -22,11 +24,13 @@ error) is better.
 
 ```
 models/hands_recognition/
-  pose.py             HandPoseNet (synthetic MLP) + HandPoseCNN (real) + build_spec (ModelSpec)
-  data_freihand.py    FreiHandLoader — real RGB hands → projected 21×2 keypoints
-  configs/hands2d.yaml real-hand training config (CNN + FreiHAND)
-  stages/stage01_keypoints/   the single curriculum stage (keypoint regression)
-  uses/camera/run_camera.py   live-camera use case (skeleton overlay + FPS HUD)
+  pose.py             HandPoseNet (synthetic MLP) + HandHeatmapNet (real FCN) + soft_argmax + build_spec
+  data_freihand.py    FreiHandLoader (heatmaps + 3D + localization) + download_freihand
+  __init__.py         build_spec + prepare_stage hook (rdmca prepare downloads FreiHAND)
+  configs/hands2d.yaml real-hand training config (heatmap FCN + FreiHAND; tier: vision-edge)
+  configs/levels/     this model's per-model level configs (the level constructor lives in src/levels.py)
+  stages/stage01_keypoints/   the single curriculum stage (keypoint heatmaps)
+  uses/camera/run_camera.py   live-camera use case (skeleton + depth overlay + FPS HUD)
   data/freihand/      the downloaded FreiHAND dataset (gitignored; only for real mode)
   docs/GUIDE.md       this file
 ```
@@ -40,22 +44,23 @@ rdmca uses camera --selftest
 # Live webcam overlay (needs opencv: .venv/bin/python -m pip install opencv-python):
 rdmca uses camera                 # 30 FPS (default)
 rdmca uses camera --fps 60        # 60 FPS
-rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level0/stage1/best.npz
+rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level1/stage1/best.npz
 ```
 
 The window overlays the **hand skeleton** (a line per bone/phalanx, a dot per joint) and a
-**HUD showing the measured FPS** against the selected target. `--fps {30,60}` both asks the
-device for that rate and paces the loop to it. Press `q` to quit. With random weights the
-points won't track a real hand — train the model first for meaningful keypoints.
+**HUD showing the measured FPS** against the selected target. With a real (heatmap) model the
+joints are **coloured + sized by depth** (near = red/large, far = blue/small). `--fps {30,60}`
+both asks the device for that rate and paces the loop to it. Press `q` or `ESC` to quit. With
+random weights the points won't track a real hand — train the model first.
 
-## Train it (you run the training)
+## Train the synthetic demo (no data, no tokenizer)
 
-The hand-pose model needs **no data prep and no tokenizer** — its `ModelSpec` loader
-generates synthetic frames. Steps:
+The default model needs **no data prep and no tokenizer** — its `ModelSpec` loader generates
+synthetic frames:
 
 ```bash
 rdmca info  --model hands_recognition            # confirm the stage is discovered
-rdmca train --model hands_recognition --level 0  # train stage 1 (keypoint regression)
+rdmca train --model hands_recognition --level 0  # train stage 1 on synthetic data
 rdmca uses camera --checkpoint dist/hands_recognition/checkpoints/level0/stage1/best.npz
 ```
 
@@ -64,34 +69,35 @@ The gate metric is `mpjpe` (set the bar with `gate.max_mpjpe` in the level confi
 
 ## Detect real hands (FreiHAND)
 
-The synthetic model above can't track a real hand. To detect **your** hand, train the CNN
-on real data — the **FreiHAND** dataset (real RGB hands + 21 keypoints):
+The synthetic model can't track a real hand. To detect **your** hand — anywhere in the frame,
+in 3D — train the **heatmap FCN** on real data. The download is part of the **prepare**
+pipeline (just like cognition prepares its corpus), via this model's `prepare_stage` hook:
 
-1. **Download** FreiHAND (FreiHAND_pub_v2) and **unzip into** `models/hands_recognition/data/freihand/`
-   — the folder must contain `training_xyz.json`, `training_K.json`, and `training/rgb/*.jpg`.
-   (Dataset page: https://lmb.informatik.uni-freiburg.de/projects/freihand/ — gitignored.)
-2. **Train** with the real-hand config (it selects the CNN + the real loader). Do **not**
-   pass `--level` (it would override `--config`):
+```bash
+# 1. Download + extract FreiHAND into models/hands_recognition/data/freihand/ (~4 GB,
+#    idempotent + resumable — re-run to resume; skips if already prepared):
+rdmca prepare --config models/hands_recognition/configs/hands2d.yaml
 
-   ```bash
-   rdmca train --config models/hands_recognition/configs/hands2d.yaml
-   ```
+# 2. Train the heatmap FCN on real, localized, 3D hands. Do NOT pass --level (it would
+#    override --config):
+rdmca train --config models/hands_recognition/configs/hands2d.yaml
 
-   Checkpoints land in `dist/hands_recognition/checkpoints/level1/stage1/`. The 2D keypoints
-   come from projecting the 3D labels with the camera intrinsics (`uv = K · xyz`, normalized).
-3. **Run the camera** — no flags needed: it auto-discovers the newest checkpoint, reads its
-   `audit.json` to rebuild the exact CNN (img_size / channels), and preprocesses each frame
-   to match training:
+# 3. Run the camera — no flags: it auto-discovers the newest checkpoint, reads its audit.json
+#    to rebuild the exact FCN (img_size / channels / heatmap_size), and localizes the hand:
+rdmca uses camera
+```
 
-   ```bash
-   rdmca uses camera
-   ```
+Checkpoints land in `dist/hands_recognition/checkpoints/level1/stage1/`. Targets come from
+the 3D labels: 2D via the camera intrinsics (`uv = K · xyz`, normalized), depth as each
+keypoint's camera-z minus the wrist's, divided by the wrist→middle-MCP bone length (so it is
+scale-invariant). **Location augmentation** pastes the hand at a random position/scale on a
+random background, so the FCN learns to find it anywhere — not just filling the frame.
 
-**v1 limitation:** this is a single-hand **regressor** — hold ONE hand so it roughly **fills
-the frame** (there is no detect-then-crop stage yet). It is **2D** (the overlay is a 2D
-skeleton); depth/3D would be a future `21×3` head. Tune size/speed in
-[../configs/hands2d.yaml](../configs/hands2d.yaml) (`model.img_size`, `model.in_channels`,
-`training.*`, `gate.max_mpjpe`).
+Tune in [../configs/hands2d.yaml](../configs/hands2d.yaml): `model.img_size`,
+`model.heatmap_size` (= img_size/4), `model.in_channels`, `model.dims` (3 = with depth, 2 =
+planar), `model.depth_weight`, `dataset.localize`, `training.*`, `gate.max_mpjpe`. The shared
+training cadence + resource block come from `tier: vision-edge` (see [the level
+constructor](../../../src/levels.py)).
 
 ## How it works
 
@@ -100,9 +106,11 @@ skeleton); depth/3D would be a future `21×3` head. Tune size/speed in
 - **Skeleton** (`HAND_CONNECTIONS`, 21 bones): 6 palm edges (wrist→finger bases + across the
   knuckles) plus 3 phalanges per finger. Recognizing the 21 points reconstructs the whole
   articulated hand, which is what the overlay draws.
-- **Model**: synthetic mode = a small MLP (frame → 21×2); real mode = `HandPoseCNN` (RGB
-  image → 21×2, strided convs + global pool + MLP head). Both train with mean-squared error;
-  `mean_keypoint_error` is the gate/eval metric. The camera rebuilds whichever one the
+- **Models**: synthetic = a small MLP (frame → 21×2, MSE). Real = `HandHeatmapNet`, an
+  encoder-decoder that emits 21 spatial **heatmaps** (trained with MSE against Gaussian
+  targets) plus a **depth** branch (21 root-relative z). At inference **soft-argmax** turns
+  each heatmap into an (x,y) anywhere in the frame; the depth branch gives z → 21×3. The
+  metric is `mpjpe` (3D when `model.dims == 3`). The camera rebuilds whichever arch the
   checkpoint was trained as (from its `audit.json` via the framework's `trained_arch`).
 
 See the framework docs ([../../../docs/README.md](../../../docs/README.md)) for how models,

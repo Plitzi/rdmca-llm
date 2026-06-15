@@ -47,9 +47,10 @@ from models.hands_recognition.pose import (
     HAND_CONNECTIONS,
     IMG_SIZE,
     N_KEYPOINTS,
-    build_pose_cnn,
+    build_heatmap_net,
     build_pose_net,
     mean_keypoint_error,
+    soft_argmax,
     synth_batch,
 )
 
@@ -58,14 +59,16 @@ _DEFAULT_HIDDEN = 256  # synthetic MLP's default width (used when nothing was tr
 
 def _build_from_arch(arch: dict):
     """Construct the net that MATCHES a checkpoint, from its `trained_arch` metadata. A real
-    CNN checkpoint (`arch="cnn"`) → HandPoseCNN at the trained img_size/channels/width; any-
-    thing else → the synthetic MLP. Building the wrong shape would silently load nothing."""
-    if (arch or {}).get("arch") == "cnn":
-        return build_pose_cnn(
+    heatmap checkpoint (`arch="heatmap"`) → HandHeatmapNet at the trained geometry; anything
+    else → the synthetic MLP. Building the wrong shape would silently load nothing."""
+    if (arch or {}).get("arch") == "heatmap":
+        img_size = int(arch.get("img_size") or 128)
+        return build_heatmap_net(
             {
-                "img_size": int(arch.get("img_size") or 128),
+                "img_size": img_size,
                 "in_channels": int(arch.get("in_channels") or 3),
                 "d_model": int(arch.get("d_model") or 128),
+                "heatmap_size": int(arch.get("heatmap_size") or img_size // 4),
             }
         )
     return build_pose_net(int((arch or {}).get("d_model") or _DEFAULT_HIDDEN))
@@ -93,19 +96,20 @@ def _load_net(checkpoint: str | None, arch: dict | None = None):
 
 
 def _zero_input(net) -> np.ndarray:
-    """A correctly-shaped zero input for the net (CNN image [C,H,W] or MLP flat [_IN]) —
+    """A correctly-shaped zero input for the net (heatmap image [C,H,W] or MLP flat [_IN]) —
     used to warm up the backend before the live loop."""
     cfg = net.cfg
-    if getattr(cfg, "arch", None) == "cnn":
+    if getattr(cfg, "arch", None) == "heatmap":
         return np.zeros((cfg.in_channels, cfg.img_size, cfg.img_size), dtype=np.float32)
     return np.zeros(IMG_SIZE * IMG_SIZE, dtype=np.float32)
 
 
 def _preprocess(net, frame_bgr: np.ndarray, cv2) -> np.ndarray:
-    """A BGR webcam frame → the net's input, matching how it was TRAINED. CNN: resize to
-    img_size, RGB (or gray) in [0,1] as [C,H,W]. MLP: grayscale IMG_SIZE flattened [_IN]."""
+    """A BGR webcam frame → the net's input, matching how it was TRAINED. Heatmap FCN: the
+    FULL frame resized to img_size, RGB (or gray) in [0,1] as [C,H,W] — the net localizes the
+    hand within it. MLP: grayscale IMG_SIZE flattened [_IN]."""
     cfg = net.cfg
-    if getattr(cfg, "arch", None) == "cnn":
+    if getattr(cfg, "arch", None) == "heatmap":
         if cfg.in_channels == 1:
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             small = cv2.resize(gray, (cfg.img_size, cfg.img_size)).astype(np.float32) / 255.0
@@ -117,48 +121,70 @@ def _preprocess(net, frame_bgr: np.ndarray, cv2) -> np.ndarray:
     return (cv2.resize(gray, (IMG_SIZE, IMG_SIZE)).astype(np.float32) / 255.0).reshape(-1)
 
 
-def _predict(net, model_input: np.ndarray) -> np.ndarray:
-    """Model input (flat [_IN], image [C,H,W], or already-batched) → keypoints [N,2] in [0,1].
+def _predict(net, model_input: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+    """Model input (flat [_IN], image [C,H,W], or already-batched) → (keypoints [21,2] in
+    [0,1], depth [21] | None). The heatmap FCN emits spatial heatmaps + depth → soft-argmax
+    gives the (x,y) anywhere in the frame and the depth branch the z; the MLP gives only xy.
     Adds the batch dim so callers can pass a single unbatched sample."""
-    ops = backend.current().ops
+    eng, ops = backend.current().engine, backend.current().ops
     x = np.asarray(model_input, dtype=np.float32)
     if x.ndim in (1, 3):  # [_IN] or [C,H,W] → add batch
         x = x[None]
     out = net(ops.array(x))
-    backend.current().engine.eval(out)
-    return np.array(ops.to_numpy(out)).reshape(N_KEYPOINTS, 2)
+    if getattr(net.cfg, "arch", None) == "heatmap":
+        heatmaps, z = out
+        eng.eval(heatmaps)
+        eng.eval(z)
+        pts = soft_argmax(np.asarray(ops.to_numpy(heatmaps)))[0]  # [21,2] localized anywhere
+        return pts, np.asarray(ops.to_numpy(z))[0]  # [21] root-relative depth
+    eng.eval(out)
+    return np.array(ops.to_numpy(out)).reshape(N_KEYPOINTS, 2), None
 
 
-def _draw_skeleton(cv2, frame, pts: np.ndarray) -> None:
-    """Overlay the articulated hand: a line per bone/phalanx (HAND_CONNECTIONS) and a
-    dot per joint, so the 21 landmarks read as a hand skeleton, not a scatter of points."""
+def _depth_color(z_i: float) -> tuple[int, int, int]:
+    """Map a root-relative depth (≈[-1,1]; <0 = nearer than the wrist) to a BGR colour:
+    near = red, far = blue. So the overlay reads the hand's 3D shape, not just its 2D outline."""
+    t = max(0.0, min(1.0, (z_i + 1.0) / 2.0))  # → [0,1]
+    return (int(255 * t), 0, int(255 * (1.0 - t)))  # BGR: far→blue, near→red
+
+
+def _draw_skeleton(cv2, frame, pts: np.ndarray, z: np.ndarray | None = None) -> None:
+    """Overlay the articulated hand: a line per bone/phalanx (HAND_CONNECTIONS) and a dot per
+    joint, so the 21 landmarks read as a hand skeleton. When depth `z` is available the joints
+    are coloured + sized by it (near=red/large, far=blue/small) — a simple 3D cue."""
     h, w = frame.shape[:2]
     px = [(int(x * w), int(y * h)) for x, y in pts]
     for a, b in HAND_CONNECTIONS:
         cv2.line(frame, px[a], px[b], (0, 200, 255), 2)  # bones (orange)
-    for x, y in px:
-        cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)  # joints (green)
+    for i, (x, y) in enumerate(px):
+        if z is not None:
+            t = max(0.0, min(1.0, (float(z[i]) + 1.0) / 2.0))
+            cv2.circle(frame, (x, y), 3 + int(4 * (1.0 - t)), _depth_color(float(z[i])), -1)
+        else:
+            cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)  # joints (green)
 
 
 def selftest(net) -> int:
     """Headless check that the model + pipeline run without a camera or opencv. For the
-    synthetic MLP it reports the keypoint error on a synthetic frame; for the real CNN
-    (no synthetic frames exist) it runs a forward on a zero image and reports the shapes."""
-    if getattr(net.cfg, "arch", None) == "cnn":
-        pts = _predict(net, _zero_input(net))
+    synthetic MLP it reports the keypoint error on a synthetic frame; for the real heatmap
+    FCN (no synthetic frames exist) it runs a forward on a zero image and reports the
+    localized keypoints + the depth range."""
+    if getattr(net.cfg, "arch", None) == "heatmap":
+        pts, z = _predict(net, _zero_input(net))
         print(
-            f"  selftest: CNN ({net.cfg.in_channels}ch {net.cfg.img_size}px) "
-            f"→ {N_KEYPOINTS} keypoints"
+            f"  selftest: heatmap FCN ({net.cfg.in_channels}ch {net.cfg.img_size}px, "
+            f"hs={net.cfg.heatmap_size}) → {N_KEYPOINTS} keypoints + depth"
         )
         print(f"  skeleton: {len(HAND_CONNECTIONS)} bones/phalanges connecting the landmarks")
         print(f"  first 3 keypoints (x,y): {[tuple(round(v, 3) for v in p) for p in pts[:3]]}")
+        print(f"  depth z (root-relative): min={z.min():.3f} max={z.max():.3f}")
         print("  OK — model runs end-to-end (feed a real hand via the camera).")
         return 0
     frames, targets = synth_batch(1, seed=1)
     ops = backend.current().ops
     pred = net(ops.array(frames))
     err = mean_keypoint_error(pred, ops.array(targets))
-    pts = _predict(net, frames[0])
+    pts, _z = _predict(net, frames[0])
     print(f"  selftest: predicted {N_KEYPOINTS} keypoints | mean error vs target = {err:.4f}")
     print(f"  skeleton: {len(HAND_CONNECTIONS)} bones/phalanges connecting the landmarks")
     print(f"  first 3 keypoints (x,y): {[tuple(round(v, 3) for v in p) for p in pts[:3]]}")
@@ -209,8 +235,8 @@ def run_camera(net, camera_index: int, target_fps: int = 30) -> int:
         ok, frame = cap.read()
         if not ok:
             break
-        pts = _predict(net, _preprocess(net, frame, cv2))  # preprocess matches training
-        _draw_skeleton(cv2, frame, pts)
+        pts, z = _predict(net, _preprocess(net, frame, cv2))  # preprocess matches training
+        _draw_skeleton(cv2, frame, pts, z)
         # Measured FPS from the real frame interval, exponentially smoothed.
         now = time.perf_counter()
         dt = now - last
@@ -250,8 +276,8 @@ def main() -> int:
     print("Loading hand-pose model…")
     # Standard framework resolution: an explicit --checkpoint wins, else auto-discover this
     # model's best/final checkpoint. trained_arch recovers the EXACT architecture it was
-    # trained at (CNN vs MLP, img_size, channels) so the net is rebuilt to match (no silent
-    # shape-mismatch → random).
+    # trained at (heatmap FCN vs MLP, img_size, channels, heatmap_size) so the net is rebuilt
+    # to match (no silent shape-mismatch → random).
     from src.training.checkpoint import discover_checkpoint, trained_arch
 
     checkpoint = args.checkpoint

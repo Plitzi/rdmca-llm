@@ -117,13 +117,25 @@ def test_trained_arch_reads_audit(tmp_path):
 
 
 def test_trained_arch_reads_vision_geometry(tmp_path):
-    # A vision model's audit carries arch/img_size/in_channels so a consumer (the camera)
-    # can rebuild the exact net (see write_stage_audit).
+    # A vision model's audit carries arch/img_size/in_channels/heatmap_size/dims so a consumer
+    # (the camera) can rebuild the exact net (see write_stage_audit).
     (tmp_path / "audit.json").write_text(
-        json.dumps({"model": {"arch": "cnn", "img_size": 128, "in_channels": 3, "d_model": 128}})
+        json.dumps(
+            {
+                "model": {
+                    "arch": "heatmap",
+                    "img_size": 128,
+                    "in_channels": 3,
+                    "d_model": 128,
+                    "heatmap_size": 32,
+                    "dims": 3,
+                }
+            }
+        )
     )
     arch = trained_arch(tmp_path / "best.npz")
-    assert arch["arch"] == "cnn" and arch["img_size"] == 128 and arch["in_channels"] == 3
+    assert arch["arch"] == "heatmap" and arch["img_size"] == 128 and arch["in_channels"] == 3
+    assert arch["heatmap_size"] == 32 and arch["dims"] == 3
 
 
 def test_trained_arch_empty_without_audit(tmp_path):

@@ -119,11 +119,13 @@ def write_stage_audit(
             "context_len": getattr(model_cfg, "context_len", None),
             "mrl_dims": list(getattr(model_cfg, "mrl_dims", []) or []),
             # Vision-model geometry (None for the text LM): lets a consumer rebuild the
-            # EXACT net from the checkpoint — e.g. the camera reconstructs the hand CNN at
+            # EXACT net from the checkpoint — e.g. the camera reconstructs the hand FCN at
             # the trained arch/size instead of guessing (which silently shape-mismatched).
             "arch": getattr(model_cfg, "arch", None),
             "img_size": getattr(model_cfg, "img_size", None),
             "in_channels": getattr(model_cfg, "in_channels", None),
+            "heatmap_size": getattr(model_cfg, "heatmap_size", None),
+            "dims": getattr(model_cfg, "dims", None),
         },
         "hparams": {
             "lr": tcfg.get("lr"),

@@ -1,10 +1,11 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  hands_recognition · REAL 2D hand pose (FreiHAND + CNN)                     ║
+# ║  hands_recognition · REAL, LOCALIZED 3D hand pose (FreiHAND + heatmap FCN)  ║
 # ╠══════════════════════════════════════════════════════════════════════════╣
-# ║  Opt-in config that trains the model to detect a REAL hand from the webcam ║
-# ║  (vs. the default synthetic MLP demo). Needs the FreiHAND dataset on disk   ║
-# ║  (see models/hands_recognition/docs/GUIDE.md). Train with:                  ║
-# ║    rdmca train --config models/hands_recognition/configs/hands2d.yaml       ║
+# ║  Opt-in config that trains the model to find a REAL hand ANYWHERE in the   ║
+# ║  webcam frame and recover 21 keypoints in 3D (x,y + root-relative depth),   ║
+# ║  vs. the default synthetic MLP demo. Download the data + train with:        ║
+# ║    rdmca prepare --config models/hands_recognition/configs/hands2d.yaml      ║
+# ║    rdmca train   --config models/hands_recognition/configs/hands2d.yaml      ║
 # ║  (do NOT pass --level — it would override --config). Checkpoints land in     ║
 # ║  dist/hands_recognition/checkpoints/level1/stage1/; the camera auto-loads.  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
@@ -13,53 +14,43 @@ model_name: hands_recognition
 level: 1
 inherit_base: false            # self-contained (this is not a text-LM level)
 backend: mlx                   # mlx | torch
-tier: edge
+tier: vision-edge              # pulls the shared training cadence + resource block (src/levels.py)
 
 information:
-  summary: "Detección de pose de mano 2D real (FreiHAND) con una CNN pequeña entrenada desde cero."
+  summary: "Pose de mano 3D real (FreiHAND), localizada en cualquier parte del encuadre, con un FCN de heatmaps."
   areas:
-    1: "Visión: 21 keypoints 2D de una mano real que llena el encuadre."
+    1: "Visión: 21 keypoints 3D (x,y + profundidad relativa) de una mano real, en cualquier posición/escala."
 
-# The hand-pose CNN. These are the ONLY model keys the hand-pose ModelSpec reads
-# (arch/img_size/in_channels/d_model=conv width). It is NOT a transformer, so it has no
-# vocab/heads — the resource estimator detects that and uses the `resources` block below.
+# The heatmap FCN. These are the ONLY model keys the hand-pose ModelSpec reads. It is NOT a
+# transformer (no vocab/heads), so the resource estimator falls back to the `tier` resources.
 model:
-  arch: cnn
-  img_size: 128                # frames resized to 128×128 before the CNN
+  arch: heatmap                # encoder-decoder → 21 spatial heatmaps + a depth branch
+  img_size: 128                # frames resized to 128×128 before the FCN
   in_channels: 3               # RGB (skin colour helps); set 1 for grayscale
-  d_model: 128                 # conv width (channels at the deepest block + head width)
+  d_model: 128                 # conv width (channels at the bottleneck)
+  heatmap_size: 32             # heatmap resolution = img_size // 4 (the decoder up-samples ×4)
+  dims: 3                      # 3 = predict + score depth (x,y,z); 2 = planar only
+  depth_weight: 0.1            # weight of the depth-MSE term relative to the heatmap MSE
 
 dataset:
-  root: models/hands_recognition/data/freihand   # where you unzipped FreiHAND
+  root: models/hands_recognition/data/freihand   # where `rdmca prepare` unzips FreiHAND
+  localize: true               # paste the hand at a random position/scale (detect anywhere)
   augment: true                # horizontal-flip + brightness jitter (webcam robustness)
 
-training:
-  precision: fp32              # regression target; fp32 is stable and the model is tiny
+training:                      # batch_size / warmup / save_every / eval_every come from the tier
   lr: 1.0e-3
   lr_min: 1.0e-4
   weight_decay: 0.0
-  batch_size: 32
-  grad_accumulation: 1
-  warmup_steps: 200
-  save_every: 500
-  eval_every: 500
-  clip_grad_norm: 1.0
-  # Run length is n_tokens // (batch_size · img_size · grad_acc) steps. With the defaults
-  # 20M ⇒ ~4 880 steps (~5 passes over FreiHAND). Lower it for a quick smoke train.
-
-resources:
-  est_params_m: 0.12           # the real CNN param count (used by the announce/guard)
-  est_train_mem_gb: 0.8
-  est_infer_mem_gb: 0.3
-  min_ram_gb: 2
+  # Run length is n_tokens // (batch_size · img_size · grad_acc) steps. With the tier's
+  # batch_size=32, 20M ⇒ ~4 880 steps (~5 passes over FreiHAND). Lower it for a quick smoke.
 
 gate:
-  max_mpjpe: 0.07              # graduate when mean keypoint error ≤ 0.07 (normalized coords)
+  max_mpjpe: 0.10             # graduate when mean 3D keypoint error ≤ 0.10 (mixed xy[0,1]+z units)
 
 skip_gate: false
 
 curriculum:
   stage1:
-    name: "Hand keypoint regression (real)"
+    name: "Hand keypoint heatmaps (real, localized, 3D)"
     entry_level: 1
-    n_tokens: 20_000_000       # ⇒ ~4 880 steps at the defaults above
+    n_tokens: 20_000_000       # ⇒ ~4 880 steps at the tier's batch_size

@@ -21,8 +21,17 @@ def test_load_net_random_and_missing_checkpoint(capsys, tmp_path):
 def test_predict_returns_keypoints():
     net = RC._load_net(None)
     frame = np.zeros(RC.IMG_SIZE * RC.IMG_SIZE, dtype=np.float32)
-    pts = RC._predict(net, frame)
+    pts, z = RC._predict(net, frame)
     assert pts.shape == (RC.N_KEYPOINTS, 2)
+    assert z is None  # the synthetic MLP predicts only 2D (no depth branch)
+
+
+def test_predict_heatmap_returns_keypoints_and_depth():
+    net = RC._load_net(None, {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32})
+    img = np.zeros((3, 64, 64), dtype=np.float32)
+    pts, z = RC._predict(net, img)
+    assert pts.shape == (RC.N_KEYPOINTS, 2) and z.shape == (RC.N_KEYPOINTS,)
+    assert pts.min() >= 0.0 and pts.max() <= 1.0  # soft-argmax localizes within the frame
 
 
 def test_selftest_runs(capsys):
@@ -163,7 +172,7 @@ def test_main_passes_fps_choice(monkeypatch):
 # random. `arch` is the dict the camera gets from `trained_arch`.
 def test_load_net_defaults_to_synthetic_mlp():
     net = RC._load_net(None)  # no arch → synthetic MLP at the default width
-    assert getattr(net.cfg, "arch", None) != "cnn" and net.cfg.d_model == RC._DEFAULT_HIDDEN
+    assert getattr(net.cfg, "arch", None) != "heatmap" and net.cfg.d_model == RC._DEFAULT_HIDDEN
 
 
 def test_load_net_builds_mlp_at_trained_width():
@@ -171,25 +180,36 @@ def test_load_net_builds_mlp_at_trained_width():
     assert net.cfg.d_model == 64
 
 
-def test_load_net_builds_cnn_from_arch():
-    arch = {"arch": "cnn", "img_size": 64, "in_channels": 3, "d_model": 32}
+def test_load_net_builds_heatmap_from_arch():
+    arch = {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32, "heatmap_size": 16}
     net = RC._load_net(None, arch)
-    assert net.cfg.arch == "cnn" and net.cfg.img_size == 64 and net.cfg.in_channels == 3
+    assert net.cfg.arch == "heatmap" and net.cfg.img_size == 64 and net.cfg.heatmap_size == 16
 
 
 def test_preprocess_shapes_match_arch():
-    # CNN → [C,H,W] at img_size; MLP → flat [_IN] grayscale. Driven entirely by net.cfg.
+    # Heatmap → [C,H,W] at img_size; MLP → flat [_IN] grayscale. Driven entirely by net.cfg.
     import numpy as _np
 
     fake = _FakeCv2()
     frame = _np.zeros((48, 64, 3), dtype=_np.uint8)
-    cnn = RC._load_net(None, {"arch": "cnn", "img_size": 64, "in_channels": 3, "d_model": 32})
-    assert RC._preprocess(cnn, frame, fake).shape == (3, 64, 64)
+    fcn = RC._load_net(None, {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32})
+    assert RC._preprocess(fcn, frame, fake).shape == (3, 64, 64)
     mlp = RC._load_net(None)
     assert RC._preprocess(mlp, frame, fake).shape == (RC.IMG_SIZE * RC.IMG_SIZE,)
 
 
-def test_selftest_cnn_path(capsys):
-    net = RC._load_net(None, {"arch": "cnn", "img_size": 64, "in_channels": 3, "d_model": 32})
+def test_selftest_heatmap_path(capsys):
+    net = RC._load_net(None, {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32})
     assert RC.selftest(net) == 0
-    assert "CNN" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "heatmap FCN" in out and "depth" in out
+
+
+def test_draw_skeleton_with_depth_colors_joints():
+    # With a depth vector the overlay draws a dot per joint (coloured/sized by z).
+    fake = _FakeCv2()
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    pts = np.full((RC.N_KEYPOINTS, 2), 0.5, dtype=np.float32)
+    z = np.linspace(-1.0, 1.0, RC.N_KEYPOINTS).astype(np.float32)
+    RC._draw_skeleton(fake, frame, pts, z)
+    assert fake.circles == RC.N_KEYPOINTS and fake.lines == len(RC.HAND_CONNECTIONS)
