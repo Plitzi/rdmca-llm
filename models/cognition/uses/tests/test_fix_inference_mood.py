@@ -3,7 +3,10 @@ conversational system-prompt + mood layer, tokenizer control symbols, and contex
 token accounting. (Split from the old test_fixes.py.)"""
 
 import numpy as np
-from fixes_common import B
+
+import src.backend as backend
+
+B = backend.current()
 
 # ─────────────────────────── agent: turn-boundary cleanup (chat) ─────────────
 

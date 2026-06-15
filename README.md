@@ -67,6 +67,9 @@ sizes, active stages and **exactly what each level adds** over the previous one.
 
 ## Tests
 
+Framework tests live under `src/`; each model's tests live with the model
+(`models/<model>/.../tests/`). `pytest.ini` collects both — just run:
+
 ```bash
-python -m pytest tests/ -v
+python -m pytest -q
 ```

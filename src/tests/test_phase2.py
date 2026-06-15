@@ -3,17 +3,12 @@ Phase 2 Acceptance Tests — Memory & Safety Systems
 Run after Phase 2 implementation is complete.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import numpy as np
 import pytest
 
-from src.memory.episodic_buffer import EpisodicBuffer, Experience
+from src.memory.episodic_buffer import Experience
 from src.memory.ltss import LTSS, LTSSNode
-from src.memory.mrf import THETA_RETAIN, mrf
+from src.memory.mrf import mrf
 
 
 @pytest.fixture

@@ -148,8 +148,12 @@ def _available_models() -> list[str]:
     return models
 
 
-def _stage_prepared(model: str, stage_pkg: str, level: int) -> bool:
-    data_dir = REPO / "models" / model / stage_pkg / "data" / f"level{level}"
+def _stage_prepared(number: int, level: int) -> bool:
+    # Single source of truth for the corpus location is the registry (active model set
+    # by the caller), so this tracks any data-layout change automatically.
+    from src.plugins import stage_data_dir
+
+    data_dir = REPO / stage_data_dir(number, {"level": level})
     return data_dir.is_dir() and any(data_dir.glob("*.jsonl"))
 
 
@@ -201,7 +205,7 @@ def _cmd_info(rest: list[str]) -> int:
         freeze_mark = "  ⟵ freeze point" if p.number == freeze else ""
         row = f"  {p.number:>2}  {p.name:<38}  {kind:<10}  {gate:<18}"
         if args.level is not None:
-            prepared = "✓" if _stage_prepared(model, p.package, args.level) else "·"
+            prepared = "✓" if _stage_prepared(p.number, args.level) else "·"
             trained = "✓" if _stage_trained(model, args.level, p.number) else "·"
             row += f"  {prepared:<9}  {trained}"
         print(row + freeze_mark)

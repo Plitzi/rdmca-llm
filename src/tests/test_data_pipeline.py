@@ -14,7 +14,8 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_REPO = Path(__file__).resolve().parents[2]  # src/tests/<file> → repo root
+sys.path.insert(0, str(_REPO))
 
 import numpy as np
 
@@ -25,7 +26,7 @@ from src.model.transformer import RDMCAFoundational
 
 def _load_prepare_data():
     spec = importlib.util.spec_from_file_location(
-        "prepare_data", str(Path(__file__).parent.parent / "scripts" / "prepare_data.py")
+        "prepare_data", str(_REPO / "scripts" / "prepare_data.py")
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

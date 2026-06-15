@@ -18,11 +18,8 @@ run — so they guard the guarantee on every commit.
 """
 
 import json
-import sys
 from pathlib import Path
 from typing import ClassVar
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 

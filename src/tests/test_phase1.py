@@ -4,11 +4,6 @@ Run after all 5 curriculum stages complete and the foundational core is frozen.
 All tests must pass before beginning Phase 2.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import mlx.core as mx
 import numpy as np
 import pytest

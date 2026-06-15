@@ -1,13 +1,16 @@
 """hands_recognition — a small hand-pose regressor + its ModelSpec.
 
 A deliberately compact, self-contained vision model that proves the framework is
-task-agnostic: NOT a transformer and NOT text. It regresses 21 hand keypoints (x, y in
-[0, 1]) from a downscaled grayscale frame. The data is SYNTHETIC (a bright blob at a
-random spot → a fixed hand-shaped keypoint constellation around it), so the whole
-pipeline runs with no dataset download — a real, learnable toy task.
+task-agnostic: NOT a transformer and NOT text. It regresses the 21 standard hand
+landmarks (wrist + four joints per finger, x/y in [0, 1]) from a downscaled grayscale
+frame; together with `HAND_CONNECTIONS` (the bones/phalanges) those landmarks form an
+articulated hand SKELETON the camera overlay draws. The data is SYNTHETIC (a bright blob
+at a random spot → a fixed, anatomically-plausible landmark constellation around it), so
+the whole pipeline runs with no dataset download — a real, learnable toy task.
 
 Built on the shared backend (`src.backend`), so it trains/infers on MLX or torch like
-the rest of the framework. The camera use case (uses/camera) consumes this net live.
+the rest of the framework. The camera use case (uses/camera) consumes this net live and
+overlays the skeleton (every phalanx) on the webcam feed.
 """
 
 from __future__ import annotations
@@ -23,18 +26,66 @@ nn = B.nn
 ops = B.ops
 
 IMG_SIZE = 32  # frames are downscaled to IMG_SIZE×IMG_SIZE grayscale
-N_KEYPOINTS = 21  # standard hand-landmark count
+N_KEYPOINTS = 21  # standard hand-landmark count (MediaPipe topology)
 _IN = IMG_SIZE * IMG_SIZE
 _OUT = N_KEYPOINTS * 2
 
-# A fixed, hand-like constellation (offsets from the palm centre, in [-1,1] units) the
-# synthetic target places around the blob — so the net learns a consistent shape.
-_HAND_SHAPE = np.array(
-    [(0.0, 0.4)]  # wrist
-    + [(-0.3 + 0.15 * i, 0.1 - 0.05 * i) for i in range(4)]  # thumb
-    + [(-0.2 + 0.1 * i, -0.1 - 0.1 * j) for i in range(4) for j in range(4)],  # 4 fingers
+# Landmark index map (the standard 21-point hand model): a wrist plus four joints per
+# finger — the metacarpophalangeal (MCP), proximal (PIP) and distal (DIP) joints and the
+# fingertip (TIP). Naming each landmark lets the overlay label fingers/phalanges.
+LANDMARK_NAMES = (
+    "wrist",
+    "thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip",
+    "index_mcp", "index_pip", "index_dip", "index_tip",
+    "middle_mcp", "middle_pip", "middle_dip", "middle_tip",
+    "ring_mcp", "ring_pip", "ring_dip", "ring_tip",
+    "pinky_mcp", "pinky_pip", "pinky_dip", "pinky_tip",
+)  # fmt: skip
+assert len(LANDMARK_NAMES) == N_KEYPOINTS
+
+# The hand SKELETON: each pair is a bone (a phalanx along a finger, or a palm edge). The
+# camera overlay draws a line per connection, so recognizing the 21 landmarks reconstructs
+# the articulated hand (every phalanx), not just a scatter of points.
+HAND_CONNECTIONS = (
+    # palm (wrist → each finger base, and across the knuckles)
+    (0, 1), (0, 5), (0, 17), (5, 9), (9, 13), (13, 17),
+    (1, 2), (2, 3), (3, 4),            # thumb phalanges
+    (5, 6), (6, 7), (7, 8),            # index phalanges
+    (9, 10), (10, 11), (11, 12),       # middle phalanges
+    (13, 14), (14, 15), (15, 16),      # ring phalanges
+    (17, 18), (18, 19), (19, 20),      # pinky phalanges
+)  # fmt: skip
+
+# A fixed, anatomically-plausible hand constellation (offsets from the palm centre, in
+# image coords: +x right, +y DOWN). The synthetic target places this around the blob so
+# the net learns a consistent, hand-shaped layout it can articulate.
+_HAND_LANDMARKS = np.array(
+    [
+        (0.00, 0.90),  # 0  wrist (below the palm)
+        (-0.25, 0.65),
+        (-0.45, 0.45),
+        (-0.60, 0.30),
+        (-0.72, 0.18),  # thumb (fans left)
+        (-0.22, 0.35),
+        (-0.26, 0.05),
+        (-0.28, -0.15),
+        (-0.30, -0.32),  # index
+        (0.00, 0.32),
+        (0.00, -0.02),
+        (0.00, -0.24),
+        (0.00, -0.42),  # middle (longest)
+        (0.20, 0.35),
+        (0.22, 0.02),
+        (0.24, -0.18),
+        (0.26, -0.34),  # ring
+        (0.38, 0.40),
+        (0.42, 0.18),
+        (0.45, 0.02),
+        (0.48, -0.12),  # pinky
+    ],
     dtype=np.float32,
-)[:N_KEYPOINTS]
+)
+assert _HAND_LANDMARKS.shape == (N_KEYPOINTS, 2)
 
 
 class HandPoseNet(nn.Module):
@@ -77,7 +128,7 @@ def synth_batch(n: int, seed: int | None = None) -> tuple[np.ndarray, np.ndarray
         cx, cy = rng.uniform(0.25, 0.75, size=2)  # blob centre in [0,1]
         px, py = cx * IMG_SIZE, cy * IMG_SIZE
         frames[i] = np.exp(-(((xs - px) ** 2 + (ys - py) ** 2) / (2 * 4.0**2)))
-        pts = np.stack([cx, cy]) + 0.18 * _HAND_SHAPE  # constellation around the centre
+        pts = np.stack([cx, cy]) + 0.18 * _HAND_LANDMARKS  # constellation around the centre
         keypts[i] = np.clip(pts, 0.0, 1.0)
     return frames.reshape(n, _IN), keypts.reshape(n, _OUT)
 

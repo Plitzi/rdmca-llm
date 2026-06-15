@@ -10,11 +10,7 @@ Per-stage source guards (arithmetic / causal / CoT / ethics / language) live wit
 stage under models/cognition/stageNN_*/tests/, so deleting a stage takes its tests.
 """
 
-import sys
-from pathlib import Path
 from typing import ClassVar
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 

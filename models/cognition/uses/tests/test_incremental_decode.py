@@ -5,11 +5,6 @@ tricky cases (multi-char pieces, SentencePiece leading-space, byte-fallback spli
 and must actually re-decode less than the naive whole-sequence approach.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pytest
 
 from models.cognition.uses.chat.run_chat import IncrementalDecoder

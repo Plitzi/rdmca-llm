@@ -14,11 +14,6 @@ uses (scripts/train_tokenizer.train_spm), so a regression in those params is cau
 Skipped automatically if sentencepiece is unavailable.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pytest
 
 spm = pytest.importorskip("sentencepiece")

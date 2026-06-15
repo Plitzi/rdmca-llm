@@ -125,8 +125,9 @@ python scripts/prepare_data.py --level 3 --stage all
 python scripts/prepare_data.py --level 1 --stage 1
 ```
 
-Output: `data/level{N}/stage{1..5}/` as `.jsonl` (`{"text": "...", "lang": "<code>"}`),
-one file per source. Level 5 reuses the full unfiltered `data/stage{1..5}_*/` dirs.
+Output: `models/<model>/data/<stage_package>/level{N}/` as `.jsonl`
+(`{"text": "...", "lang": "<code>"}`), one file per source. Each model keeps ALL its
+stages' corpora under its single `data/` folder (resolved by `src.plugins.stage_data_dir`).
 A real high-level bilingual run is roughly ~18 GB downloaded, ~36 GB on disk.
 
 ## 6. Tokenizers
@@ -336,7 +337,7 @@ the freeze point), see **[levels.md](levels.md)**. Train the stages **in order**
 starts from the previous one's weights):
 
 ```bash
-# 1) Graded data → data/level1/stage*/   (ALL 10 stages, at small budgets)
+# 1) Graded data → models/cognition/data/<stage>/level1/   (ALL 10 stages, small budgets)
 python scripts/prepare_data.py    --level 1 --stage all
 
 # 2) Child-sized tokenizer (vocab auto-caps to the corpus size)
@@ -360,7 +361,8 @@ python models/cognition/uses/chat/run_chat.py --level 1 --stage 10
 
 On start each command prints the **announce** (what the model is learning + estimated
 memory) and runs the **resource guard** (aborts a level that won't fit; `--force` to
-override). Data lands in `data/level1/...`, checkpoints in `dist/checkpoints/level1/...`.
+override). Data lands in `models/cognition/data/<stage>/level1/...`, checkpoints in
+`dist/checkpoints/cognition/level1/...` (both namespaced by the active model).
 
 **Faster first pass:** the `n_tokens` budgets in `level1.yaml` control run length — lower
 them (e.g. 8–10M per stage) for a few-minute end-to-end run, then raise for a fuller model.
@@ -387,7 +389,7 @@ python scripts/purge.py --tokenizer --checkpoints  # keep prepared data, retrain
 ```
 
 Targets: `--checkpoints` (`dist/checkpoints/` + `dist/snapshots/`), `--tokenizer`
-(`dist/tokenizer/` + VQ-VAE + `*.bak`), `--data` (`data/level*/` corpora),
+(`dist/tokenizer/` + VQ-VAE + `*.bak`), `--data` (`models/<model>/data/` corpora),
 `--runtime` (`data/runtime/` — `experiences.jsonl`, `ltss.db`), `--logs`. Scope
 checkpoints/data to one level with `--level N`.
 

@@ -4,11 +4,6 @@ src/modalities/vq.py. Default (ema=False) must be unchanged; ema=True must move 
 codebook toward the data and recycle dead entries instead of letting them die.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import mlx.core as mx
 import numpy as np
 

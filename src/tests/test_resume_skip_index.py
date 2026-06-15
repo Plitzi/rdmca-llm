@@ -12,13 +12,9 @@ point carries placeholder tokens (the partial carry-over), by design.
 """
 
 import json
-import sys
+import random
 from pathlib import Path
 from typing import ClassVar
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import random
 
 import numpy as np
 

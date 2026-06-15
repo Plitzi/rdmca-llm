@@ -122,28 +122,31 @@ sirven a un detector de manos), va en `models/<modelo>/` (ver
 ## Estructura: stages como plugins
 
 Cada stage del currículo es un **plugin autónomo** bajo
-`models/<modelo>/stageNN_<slug>/`:
+`models/<modelo>/stages/stageNN_<slug>/` (todos los stages de un modelo se agrupan en
+`models/<modelo>/stages/` para no saturar la carpeta base del modelo):
 - `plugin.py` — metadata del stage (número, nombre, gate, rehearsal, lr_scale,
   `trains_mood`, freeze-point, `enabled`) en un `StagePlugin`.
 - `sources.py` — los generadores de datos PROPIOS del stage (un dict `SOURCES`:
   clave → builder).
-- `data/level{L}/` — el corpus generado del stage vive DENTRO de su paquete
-  (gitignored). Lo resuelve `src.plugins.stage_data_dir`.
+- El corpus generado de TODOS los stages de un modelo vive en UNA carpeta por modelo,
+  `models/<modelo>/data/<package>/level{L}/` (gitignored) — un solo sitio para verla y
+  limpiarla, no un `data/` dentro de cada stage. Lo resuelve `src.plugins.stage_data_dir`
+  (única fuente de verdad de la ruta; un `curriculum.stageN.data_dir` la sobreescribe).
 
 El **registry** ([src/plugins/registry.py](src/plugins/registry.py)) los descubre solos
-(escanea `stageNN_*` del modelo activo), valida y responde todo lo de stages (`get_stage`,
-`active_stages`, `bcf_stage`, `is_behavioral`, `mood_stages`, `stream_source`,
+(escanea `models/<modelo>/stages/stageNN_*` del modelo activo), valida y responde todo lo de stages (`get_stage`,
+`active_stages`, `bcf_stage`, `is_behavioral`, `stream_source`,
 `stage_data_dir`). `bcf_stage()` devuelve `int | None` (un modelo puede NO tener punto de
 congelado → freeze opcional). Un stage es autónomo: su ÚNICO acoplamiento al framework es
 `from src.plugins.sdk import ...` (contrato + helpers: `StagePlugin`, `StageGate`,
 `blend`, `interleave`, `cycle_records`, `stable_hash`, `passes_filter`, `persona_for`,
 `prepend_system`, `hermes_events`, `emotion_to_mood`, …). Helpers usados solo por UN
 stage viven dentro de su propio paquete (p. ej.
-`models/cognition/stage01_language/dictionary.py`). El SDK es el puente al core; el
+`models/cognition/stages/stage01_language/dictionary.py`). El SDK es el puente al core; el
 plugin nunca pasa de él.
 
 **Para añadir/quitar un stage:** suelta (o borra) un paquete
-`models/<modelo>/stage11_*/`; nada más se edita. Para desactivar uno: `enabled=False`
+`models/<modelo>/stages/stage11_*/`; nada más se edita. Para desactivar uno: `enabled=False`
 en su plugin **o** `curriculum.stageN.enabled: false` en el YAML del nivel (lo respetan
 train y prepare).
 
@@ -152,12 +155,14 @@ cognitiva que se congela, con `frozen_base: bool` en su `plugin.py` (True = cogn
 dentro de la base; False = behavioral / entrena un sector LoRA sobre el core ya
 congelado). NO se decide por número de stage ni umbral — lo dice el propio stage.
 
-**Tests por plugin:** cada stage mantiene SUS tests en
-`models/<modelo>/stageNN_<slug>/tests/` (borrar el stage se lleva sus tests). Los
-tests transversales (registry, pipeline, entrenamiento, y los del framework/SDK como
-loader y `blend`) viven en `tests/` y NO importan ningún stage concreto. `pytest.ini`
-colecciona ambos (`testpaths = tests models`); el `conftest.py` de la raíz pone el
-repo en `sys.path`.
+**Tests: framework con el framework, modelo con el modelo.** NO hay carpeta `tests/` en
+la raíz (se eliminó: mezclaba tests de framework y de modelos). Los tests del **framework**
+viven bajo `src/` (en [src/tests/](src/tests/)) y NO importan NINGÚN modelo/stage concreto
+(`grep "from models\." src/` debe quedar vacío). Los tests de un **modelo** viven CON el
+modelo: los de un stage en `models/<modelo>/stages/stageNN_<slug>/tests/` (borrar el stage
+se lleva sus tests), y los de sus consumidores en `models/<modelo>/uses/tests/`. `pytest.ini`
+colecciona ambos árboles (`testpaths = src models`); el `conftest.py` de la raíz pone el
+repo en `sys.path` y el de `src/tests/` añade su propio dir para `import fixes_common`.
 
 Otros puntos clave del refactor:
 - Entrenador descompuesto en [src/training/](src/training/) (`trainer`,

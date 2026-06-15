@@ -4,11 +4,6 @@ used to hardcode in scattered dicts and level configs, so the plugin migration c
 silently change curriculum behavior.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src import plugins as stages
 from src.plugins import StageKind
 

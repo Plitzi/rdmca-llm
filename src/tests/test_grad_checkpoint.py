@@ -4,15 +4,9 @@ normal forward — it only changes WHEN activations are computed, not the math. 
 with dropout=0 so the forward and the recompute are identical on both backends.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-import pytest
 
 from src.model.transformer import ModelConfig, RDMCAFoundational
 

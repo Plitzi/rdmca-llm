@@ -6,8 +6,8 @@ pipeline ask.
 A **model** is one training scenario living under `models/<name>/` (e.g.
 `cognition` = the conversational/agentic LLM curriculum; `hands_recognition` = a VR
 hand-pose model). Discovery is automatic within the active model: every sub-package
-named `stageNN_<slug>` exposing a `PLUGIN` is loaded. Drop a new
-`models/<name>/stage11_*/` and it joins that model's curriculum with no other
+named `stageNN_<slug>` under `models/<name>/stages/` exposing a `PLUGIN` is loaded. Drop a
+new `models/<name>/stages/stage11_*/` and it joins that model's curriculum with no other
 edits. `set_active_model(name)` (driven by `cfg["model_name"]`) switches the active model.
 """
 
@@ -47,15 +47,16 @@ def model_hook(name: str):
 
 
 def _discover(model: str) -> dict[int, StagePlugin]:
-    """Import every stageNN_* sub-package of `models/<model>/` and collect its
-    PLUGIN, keyed by number. Validates unique numbers and ≤1 freeze point."""
-    pkg = importlib.import_module(f"models.{model}")
+    """Import every stageNN_* sub-package of `models/<model>/stages/` and collect its
+    PLUGIN, keyed by number. Stages are grouped under `stages/` so the model's base
+    folder stays tidy. Validates unique numbers and ≤1 freeze point."""
+    pkg = importlib.import_module(f"models.{model}.stages")
 
     found: dict[int, StagePlugin] = {}
     for mod in pkgutil.iter_modules(pkg.__path__):
         if not _PACKAGE_RE.match(mod.name):
             continue
-        plugin = importlib.import_module(f"models.{model}.{mod.name}").PLUGIN
+        plugin = importlib.import_module(f"models.{model}.stages.{mod.name}").PLUGIN
         if plugin.number in found:
             raise ValueError(
                 f"duplicate stage number {plugin.number}: "
@@ -156,13 +157,14 @@ def owns_source(key: str) -> StagePlugin | None:
 
 # ── data location ───────────────────────────────────────────────────────────
 def stage_data_dir(number: int, cfg: dict | None = None) -> str:
-    """Where a stage's prepared corpus lives. Each stage OWNS its data folder inside
-    its own package (`models/<model>/stageNN_<slug>/data/level{L}/`), so a stage
-    is fully self-contained. A per-level `curriculum.stageN.data_dir` override wins."""
+    """Where a stage's prepared corpus lives. A model keeps ALL its stages' corpora under
+    a single per-model folder (`models/<model>/data/<package>/level{L}/`) — one place to
+    find/clean the data instead of hunting a `data/` inside every stage package. A
+    per-level `curriculum.stageN.data_dir` override wins."""
     stage_cfg = ((cfg or {}).get("curriculum", {}) or {}).get(f"stage{number}", {}) or {}
     if stage_cfg.get("data_dir"):
         return stage_cfg["data_dir"]
     package = get_stage(number).package if has_stage(number) else f"stage{number:02d}"
-    base = f"models/{_ACTIVE_MODEL}/{package}/data"
+    base = f"models/{_ACTIVE_MODEL}/data/{package}"
     level = (cfg or {}).get("level")
     return f"{base}/level{level}" if level is not None else f"{base}/default"

@@ -7,11 +7,6 @@ method def once truncated __init__ so `.params` was never set and `with dash:` c
 Also checks the metrics.csv schema/rows that scripts/plot_metrics.py consumes.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src.training.dashboard import TrainingDashboard
 
 

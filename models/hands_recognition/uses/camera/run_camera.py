@@ -43,6 +43,7 @@ import numpy as np
 
 import src.backend as backend
 from models.hands_recognition.pose import (
+    HAND_CONNECTIONS,
     IMG_SIZE,
     N_KEYPOINTS,
     build_pose_net,
@@ -73,15 +74,28 @@ def _predict(net, frame_flat: np.ndarray) -> np.ndarray:
     return np.array(ops.to_numpy(out)).reshape(N_KEYPOINTS, 2)
 
 
+def _draw_skeleton(cv2, frame, pts: np.ndarray) -> None:
+    """Overlay the articulated hand: a line per bone/phalanx (HAND_CONNECTIONS) and a
+    dot per joint, so the 21 landmarks read as a hand skeleton, not a scatter of points."""
+    h, w = frame.shape[:2]
+    px = [(int(x * w), int(y * h)) for x, y in pts]
+    for a, b in HAND_CONNECTIONS:
+        cv2.line(frame, px[a], px[b], (0, 200, 255), 2)  # bones (orange)
+    for x, y in px:
+        cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)  # joints (green)
+
+
 def selftest(net) -> int:
-    """Headless check: run the net on a synthetic frame and report the keypoint error —
-    proves the model + pipeline work without a camera or opencv."""
+    """Headless check: run the net on a synthetic frame and report the keypoint error +
+    that the full skeleton (every phalanx) is reconstructed — proves the model + pipeline
+    work without a camera or opencv."""
     frames, targets = synth_batch(1, seed=1)
     ops = backend.current().ops
     pred = net(ops.array(frames))
     err = mean_keypoint_error(pred, ops.array(targets))
     pts = _predict(net, frames[0])
     print(f"  selftest: predicted {N_KEYPOINTS} keypoints | mean error vs target = {err:.4f}")
+    print(f"  skeleton: {len(HAND_CONNECTIONS)} bones/phalanges connecting the landmarks")
     print(f"  first 3 keypoints (x,y): {[tuple(round(v, 3) for v in p) for p in pts[:3]]}")
     print("  OK — model runs end-to-end.")
     return 0
@@ -108,10 +122,8 @@ def run_camera(net, camera_index: int) -> int:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (IMG_SIZE, IMG_SIZE)).astype(np.float32) / 255.0
         pts = _predict(net, small.reshape(-1))
-        h, w = frame.shape[:2]
-        for x, y in pts:
-            cv2.circle(frame, (int(x * w), int(y * h)), 4, (0, 255, 0), -1)
-        cv2.imshow("hands_recognition", frame)
+        _draw_skeleton(cv2, frame, pts)
+        cv2.imshow("hands_recognition — hand skeleton (press q)", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
     cap.release()

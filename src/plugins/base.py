@@ -3,9 +3,9 @@ Stage plugin contract — the SINGLE shape every curriculum stage follows.
 
 Each stage is a self-contained plugin: one `StagePlugin` instance that carries its
 metadata (gates, name, rehearsal, lr_scale, mood set, freeze point) AND its data
-sources, lives in its own package under models/<model>/stageNN_<slug>/, and is
-discovered automatically (see registry.py). Adding a stage = drop a new package;
-nothing else needs editing.
+sources, lives in its own package under models/<model>/stages/stageNN_<slug>/, and is
+discovered automatically (see registry.py). Adding a stage = drop a new package under
+that model's stages/; nothing else needs editing.
 """
 
 from __future__ import annotations

@@ -52,47 +52,6 @@ def test_relevance_feedback_overrides_utility():
     assert re.score(corrected) > re.score(neutral)
 
 
-def test_dialogue_interleave_and_emotion_balance():
-    """Dialogue mixing: _interleave round-robins all sources (no front-loaded block),
-    and empathetic streaming caps per emotion so moods stay balanced."""
-    from models.cognition.stage01_language.sources import _stream_empathetic_balanced
-    from src.plugins.sdk import interleave
-
-    # round-robin: drains every source, no loss, interleaved order
-    def gen(tag, n):
-        for i in range(n):
-            yield {"text": f"{tag}{i}"}
-
-    out = [r["text"] for r in interleave(gen("A", 3), gen("B", 1), gen("C", 2))]
-    assert out[:3] == ["A0", "B0", "C0"]  # round-robin, not blocks
-    assert sorted(out) == ["A0", "A1", "A2", "B0", "C0", "C1"]  # nothing dropped
-
-    # emotion cap balances a skewed source (sad×50, joyful×3 → 5 + 3 = 8 at cap 5)
-    import datasets as _d
-
-    orig = _d.load_dataset
-
-    class _Fake:
-        def __iter__(self):
-            for _ in range(50):
-                yield {
-                    "emotion": "sad",
-                    "conversations": [{"role": "u", "content": "x"}, {"role": "a", "content": "y"}],
-                }
-            for _ in range(3):
-                yield {
-                    "emotion": "joyful",
-                    "conversations": [{"role": "u", "content": "x"}, {"role": "a", "content": "y"}],
-                }
-
-    _d.load_dataset = lambda *a, **k: _Fake()
-    try:
-        n = sum(1 for _ in _stream_empathetic_balanced(per_emotion_cap=5))
-    finally:
-        _d.load_dataset = orig
-    assert n == 8, f"emotion cap not balancing: got {n}, expected 8 (5 sad + 3 joyful)"
-
-
 # ─────────────────────────── confidence validator ────────────────────────────
 
 

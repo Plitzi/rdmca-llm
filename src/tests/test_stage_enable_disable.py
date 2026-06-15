@@ -4,11 +4,6 @@ per-level `curriculum.stageN.enabled: false` override), and both must drop it fr
 the curriculum the trainer and data pipeline iterate.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src import plugins as stages
 from src.training.curriculum import stage_enabled
 

@@ -1,0 +1,3 @@
+from models.cognition.stages.stage08_tools.plugin import PLUGIN
+
+__all__ = ["PLUGIN"]

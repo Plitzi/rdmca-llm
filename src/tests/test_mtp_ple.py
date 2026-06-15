@@ -5,16 +5,10 @@ disabled, well-formed when enabled, and (for PLE) consistent between the trainin
 forward and the cached generation forward.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
-import pytest
 
 from src.model.transformer import ModelConfig, RDMCAFoundational
 

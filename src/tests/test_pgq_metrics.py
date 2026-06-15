@@ -5,11 +5,6 @@ PGQ permanently "stable" so it never grew capacity). We test the metric computat
 (`_growth_metrics`) directly with a light stub pipeline, plus the PGQ decision logic.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import numpy as np
 import pytest
 

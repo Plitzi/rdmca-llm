@@ -15,14 +15,10 @@ else builds on. Covers the failure modes behind the Level-1 stages 3–7 collaps
 Self-contained: a fake tokenizer + temp dirs, no trained tokenizer/checkpoints.
 """
 
+import itertools
 import json
-import sys
 from pathlib import Path
 from typing import ClassVar
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import itertools
 
 import numpy as np
 import pytest

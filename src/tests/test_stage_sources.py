@@ -5,11 +5,6 @@ yield {'text','lang'} records. Only offline (synthetic) keys are exercised so th
 test never touches the network; the real-corpus keys are checked for ownership only.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src.plugins import owns_source, stream_source
 
 # key -> owning stage number (mirrors the old dispatcher's routing).

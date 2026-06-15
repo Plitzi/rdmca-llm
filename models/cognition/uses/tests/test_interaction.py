@@ -12,9 +12,6 @@ agent's interrupt / mid-run steering hooks (src/agent.run_agent):
 import io
 import sys
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.cognition.uses.common.agent import Tool, run_agent
 from models.cognition.uses.common.interaction import InterruptGuard, SessionInput

@@ -7,10 +7,7 @@ Priority: best.npz (running best) > final.npz (graduated) > latest.json (in-prog
 """
 
 import json
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.cognition.uses.chat.run_chat import (
     describe_checkpoint_meta,

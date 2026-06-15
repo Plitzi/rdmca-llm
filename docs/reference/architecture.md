@@ -169,13 +169,15 @@ rdmca-llm/
 ├── configs/
 │   └── levels/                 level1..5 (preescolar..universidad) — size + data + resources
 ├── src/resources.py            Memory estimate + OOM guard + level announce
-├── src/data/graded.py          Graded sources, readability filter, synthetic generators
-├── tests/                      test_phase1..4 (model, consolidation, multimodal, PGQ)
+├── src/tests/                  FRAMEWORK tests (never import a model/stage)
+├── models/<model>/stages/stageNN_*/  Stage plugins (metadata + sources + own tests/)
+├── models/<model>/data/        That model's prepared corpora (all stages, gitignored)
 ├── models/cognition/experiments/continual_learning.py   Hypothesis validation (no-forgetting)
 ├── scripts/train.py              Stage training + freeze + BCF
-├── uses/                       Ways to consume a trained model
-│   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)
-│   └── agent/run_agent.py      Agentic tool loop (Action/Observation)
+├── models/<model>/uses/        Ways to consume THAT model (with their own tests/)
+│   ├── chat/run_chat.py        Interactive chat (text / --image / --audio)  [cognition]
+│   ├── agent/run_agent.py      Agentic tool loop (Action/Observation)       [cognition]
+│   └── camera/run_camera.py    Live hand-skeleton overlay        [hands_recognition]
 ├── src/consolidation/daemon.py     Daily consolidation daemon (wired)
 └── docs/
     ├── GUIDE.md                Single step-by-step guide

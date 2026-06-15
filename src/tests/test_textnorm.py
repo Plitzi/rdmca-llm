@@ -10,11 +10,6 @@ Tests for the ingestion normalization + garbage gate (src/data/textnorm.py):
     but keeps legitimate diverse/multilingual/code/short text.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src.data.loader import _split_turns
 from src.data.textnorm import (
     clean_record_text,

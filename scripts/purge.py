@@ -8,7 +8,7 @@ inputs: configs, `.env`, source code, `data/benchmarks/` (BCF probes you
 provide), or the shared HuggingFace download cache.
 
 Data pipeline (two distinct artifacts — don't confuse them):
-  HF cache (raw downloads)  →  prepare_data  →  models/<model>/*/data/level* (prepared
+  HF cache (raw downloads)  →  prepare_data  →  models/<model>/data/*/level* (prepared
   corpora)  →  train
   • --data / --keep-data act on the PREPARED corpora (prepare_data's output).
   • --hf-cache acts on the RAW DOWNLOADS (prepare_data's input). Dropping it forces
@@ -17,7 +17,7 @@ Data pipeline (two distinct artifacts — don't confuse them):
 Targets (pick any combination, or --all):
   --checkpoints   dist/checkpoints/<model>/  + dist/snapshots/  (trained weights, frozen core, sectors)
   --tokenizer     dist/tokenizer/    + dist/tokenizer*.bak (SentencePiece + image/audio VQ-VAE)
-  --data          models/<model>/*/data/level*/  (PREPARED corpora — output of prepare_data)
+  --data          models/<model>/data/*/level*/  (PREPARED corpora — output of prepare_data)
   --runtime       data/runtime/       (experiences.jsonl, ltss.db — consolidation memory)
   --logs          logs/               (daemon.log, cycle_*.json, human_queue.jsonl)
   --hf-cache      ~/.cache/huggingface/{datasets,hub}  (RAW HF downloads — prepare_data's
@@ -88,8 +88,8 @@ def _paths_for(target: str, level: int | None, model: str | None) -> list[Path]:
         return [REPO / "dist/checkpoints", REPO / "dist/snapshots"]
     if target == "tokenizer":  # global (trained per level into one dir)
         return [REPO / "dist/tokenizer", *sorted((REPO / "dist").glob("tokenizer*.bak"))]
-    if target == "data":  # prepared corpora, inside each stage package (gitignored)
-        glob = f"models/{mdl}/*/data/{lvl}" if lvl else f"models/{mdl}/*/data"
+    if target == "data":  # prepared corpora, under each model's single data/ (gitignored)
+        glob = f"models/{mdl}/data/*/{lvl}" if lvl else f"models/{mdl}/data"
         return sorted(REPO.glob(glob))
     if target == "runtime":
         return [REPO / "data/runtime"]
