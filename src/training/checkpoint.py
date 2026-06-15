@@ -174,6 +174,75 @@ def load_checkpoint(model, ckpt_dir: Path, optimizer=None):
     return state["step"], state["tokens_seen"]
 
 
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text()) if path.exists() else None
+    except (OSError, ValueError):
+        return None
+
+
+def resolve_stage_checkpoint(stage_dir: Path):
+    """Pick the checkpoint inference should use for ONE stage dir, ALWAYS preferring the
+    BEST (ratcheted, lowest val-score) over the latest training step. This is the STANDARD
+    resolution for every model — the same best→final→latest layout the trainer writes, so
+    any consumer (chat, agent, camera, …) resolves a trained model the same way. Returns
+    (path|None, label, meta); meta is the tracked JSON so the caller can report quality:
+
+      1. best.npz   — the running/ratcheted best (the gate's moving bar), meta=best.json;
+      2. final.npz  — the graduated model (= the best at graduation);
+      3. latest.json — only when no eval-best exists yet (training just started).
+    """
+    best_npz, final_npz = stage_dir / "best.npz", stage_dir / "final.npz"
+    if best_npz.exists():
+        return best_npz, "best", _read_json(stage_dir / "best.json")
+    if final_npz.exists():
+        return (
+            final_npz,
+            "final (graduated)",
+            _read_json(stage_dir / "best.json") or _read_json(stage_dir / "stage_complete.json"),
+        )
+    state = _read_json(stage_dir / "latest.json")
+    if state and state.get("checkpoint") and Path(state["checkpoint"]).exists():
+        return Path(state["checkpoint"]), "latest (in-progress)", state
+    return None, "none", None
+
+
+def discover_checkpoint(model: str, level: int | None = None, stage: int | None = None):
+    """Auto-discover the trained checkpoint to load when the caller does NOT know the exact
+    stage dir — scans dist/<model>/checkpoints/level*/stage*/ and returns the best one from
+    the MOST RECENTLY TRAINED stage (optionally restricted to a level/stage). Returns the
+    same (path|None, label, meta) as `resolve_stage_checkpoint`. This is what a use case runs
+    with no --checkpoint: "just load whatever I last trained for this model"."""
+    from src.config import model_dist_root
+
+    root = model_dist_root(model) / "checkpoints"
+    if not root.is_dir():
+        return None, "none", None
+    stage_dirs = [
+        stage_dir
+        for lvl_dir in root.glob("level*")
+        if level is None or lvl_dir.name == f"level{level}"
+        for stage_dir in lvl_dir.glob("stage*")
+        if stage is None or stage_dir.name == f"stage{stage}"
+    ]
+    # Newest first, so a fresh retrain wins; resolve_stage_checkpoint then picks best/final.
+    for stage_dir in sorted(stage_dirs, key=lambda d: d.stat().st_mtime, reverse=True):
+        path, label, meta = resolve_stage_checkpoint(stage_dir)
+        if path is not None:
+            return path, label, meta
+    return None, "none", None
+
+
+def trained_arch(checkpoint: str | Path) -> dict:
+    """The architecture the checkpoint was trained at, from its sibling audit.json (the
+    `model` block: d_model, n_layers, …). The net MUST be rebuilt at these dims or the
+    weights are shape-mismatched and silently stay random. Empty dict if no audit."""
+    audit = Path(checkpoint).parent / "audit.json"
+    rec = _read_json(audit) or {}
+    arch = rec.get("model")
+    return arch if isinstance(arch, dict) else {}
+
+
 def freeze_model(model, ckpt_dir: Path):
     """Permanently freeze the foundational core after the ethics/BCF stage."""
     print("\n" + "=" * 60)

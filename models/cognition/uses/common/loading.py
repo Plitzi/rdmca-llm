@@ -65,39 +65,6 @@ def _apply_quant(model, quant) -> None:
     B.engine.quantize(model, bits=bits)
 
 
-def resolve_stage_checkpoint(stage_dir: Path):
-    """Pick the checkpoint inference should use for a stage, ALWAYS preferring the BEST
-    (lowest val-perplexity) over the latest training step. Returns (path|None, label,
-    meta) — meta is the tracked JSON (best.json / stage_complete.json / latest.json) so
-    the caller can report the model's quality. Priority:
-
-      1. best.npz   — the running/ratcheted best (the gate's moving bar), meta=best.json;
-      2. final.npz  — the graduated model (= the best at graduation);
-      3. latest.json — only when no eval-best exists yet (training just started).
-    """
-    import json
-
-    def _read(p: Path):
-        try:
-            return json.loads(p.read_text()) if p.exists() else None
-        except (OSError, ValueError):
-            return None
-
-    best_npz, final_npz = stage_dir / "best.npz", stage_dir / "final.npz"
-    if best_npz.exists():
-        return best_npz, "best", _read(stage_dir / "best.json")
-    if final_npz.exists():
-        return (
-            final_npz,
-            "final (graduated)",
-            (_read(stage_dir / "best.json") or _read(stage_dir / "stage_complete.json")),
-        )
-    state = _read(stage_dir / "latest.json")
-    if state and state.get("checkpoint") and Path(state["checkpoint"]).exists():
-        return Path(state["checkpoint"]), "latest (in-progress)", state
-    return None, "none", None
-
-
 def describe_checkpoint_meta(meta: dict | None) -> str:
     """One-line quality summary of a checkpoint's tracked metadata (best val ppl, step,
     tokens, graduation status) for the load banner — "" when nothing is known."""
@@ -171,6 +138,7 @@ def load_model(args):
     # behaviour is added on top. Falls through to a plain checkpoint for cognitive
     # stages (or before any freeze).
     from src.model import sector_io
+    from src.training.checkpoint import resolve_stage_checkpoint
     from src.training.curriculum import ckpt_root
 
     root = ckpt_root(cfg)

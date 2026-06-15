@@ -2,7 +2,6 @@
 driven with a FAKE cv2 (no hardware), so we cover predict → skeleton overlay → display
 headlessly, plus the selftest and the missing-opencv path."""
 
-import json
 import sys
 import types
 
@@ -106,7 +105,9 @@ def test_run_camera_loop_with_fake_cv2(monkeypatch):
     assert fake.shown >= 1 and fake.lines >= 1 and fake.circles >= 1
     assert any("FPS" in t and "target 30" in t for t in fake.hud_texts)  # HUD shows FPS
     assert fake.set_props.get(fake.CAP_PROP_FPS) == 30  # requested rate from the device
-    assert fake.wait_delays and fake.wait_delays[0] == int(1000 / 30)  # paced to target
+    # Paced to the target by waiting only the budget LEFT after processing — so 1 ≤ wait ≤
+    # the per-frame budget (never the full budget added on top, which halved the rate).
+    assert fake.wait_delays and 1 <= fake.wait_delays[0] <= int(1000 / 30)
 
 
 def test_run_camera_60fps_paces_loop(monkeypatch):
@@ -115,7 +116,7 @@ def test_run_camera_60fps_paces_loop(monkeypatch):
     net = RC._load_net(None)
     assert RC.run_camera(net, camera_index=0, target_fps=60) == 0
     assert fake.set_props.get(fake.CAP_PROP_FPS) == 60
-    assert fake.wait_delays[0] == int(1000 / 60)
+    assert fake.wait_delays and 1 <= fake.wait_delays[0] <= int(1000 / 60)
     assert any("target 60" in t for t in fake.hud_texts)
 
 
@@ -150,40 +151,15 @@ def test_main_passes_fps_choice(monkeypatch):
     assert fake.set_props.get(fake.CAP_PROP_FPS) == 60
 
 
-# ── checkpoint auto-discovery + width matching (the "trained but acts untrained" bug) ──
-def test_resolve_checkpoint_explicit_wins():
-    assert RC._resolve_checkpoint("given.npz", None, None) == "given.npz"
+# ── width plumbing (the "trained but acts untrained" trap) ──────────────────────
+# The standard checkpoint discovery + trained_arch live in the framework and are covered by
+# src/tests/test_checkpoint_resolution.py. Here we only check the camera rebuilds the net at
+# the width it is told — if that's wrong the loaded weights shape-mismatch and stay random.
+def test_load_net_builds_at_given_width():
+    net = RC._load_net(None, hidden=64)
+    assert net.cfg.d_model == 64
 
 
-def _fake_dist(monkeypatch, tmp_path):
-    """Point model_dist_root at a temp tree (resolved lazily inside _resolve_checkpoint)."""
-    import src.config as C
-
-    root = tmp_path / "hands_recognition"
-    monkeypatch.setattr(C, "model_dist_root", lambda model=None: root)
-    return root / "checkpoints"
-
-
-def test_resolve_checkpoint_autodiscovers_and_prefers_best(monkeypatch, tmp_path):
-    ckpts = _fake_dist(monkeypatch, tmp_path)
-    stage = ckpts / "level0" / "stage1"
-    stage.mkdir(parents=True)
-    (stage / "final.npz").write_bytes(b"x")
-    (stage / "best.npz").write_bytes(b"x")  # best preferred over final
-    got = RC._resolve_checkpoint(None, None, None)
-    assert got is not None and got.endswith("best.npz")
-
-
-def test_resolve_checkpoint_none_when_nothing_trained(monkeypatch, tmp_path):
-    _fake_dist(monkeypatch, tmp_path)  # dir doesn't exist → None (→ random weights)
-    assert RC._resolve_checkpoint(None, None, None) is None
-
-
-def test_hidden_for_checkpoint_reads_audit(tmp_path):
-    (tmp_path / "audit.json").write_text(json.dumps({"model": {"d_model": 64}}))
-    assert RC._hidden_for_checkpoint(str(tmp_path / "final.npz")) == 64
-
-
-def test_hidden_for_checkpoint_defaults_without_audit(tmp_path):
-    assert RC._hidden_for_checkpoint(None) == RC._DEFAULT_HIDDEN
-    assert RC._hidden_for_checkpoint(str(tmp_path / "x.npz")) == RC._DEFAULT_HIDDEN
+def test_load_net_defaults_to_build_width():
+    net = RC._load_net(None)
+    assert net.cfg.d_model == RC._DEFAULT_HIDDEN

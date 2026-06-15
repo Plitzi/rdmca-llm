@@ -73,15 +73,13 @@ from models.cognition.uses.common.generate import (  # noqa: F401  (shared impor
 )
 from models.cognition.uses.common.interaction import InterruptGuard, SessionInput
 
-# Model + checkpoint loading lives in models/cognition/uses/common/loading.py so chat and agent
-# load models identically. Re-exported here as the shared import surface for them.
-from models.cognition.uses.common.loading import (  # noqa: F401  (shared import surface: tests + run_agent)
+# Model + checkpoint loading lives in models/cognition/uses/common/loading.py so chat and
+# agent load models identically.
+from models.cognition.uses.common.loading import (
     _QUANT_MAX,
     _QUANT_MIN,
-    describe_checkpoint_meta,
     load_model,
     parse_quant,
-    resolve_stage_checkpoint,
 )
 from models.cognition.uses.common.loading import load_mood_head as _load_mood_head
 from src.memory.experience_log import detect_correction, load_experiences, log_experience

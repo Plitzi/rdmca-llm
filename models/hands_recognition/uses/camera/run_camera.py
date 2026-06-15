@@ -35,7 +35,6 @@ Usage:
   rdmca uses camera --selftest     # model inferred (only hands_recognition has `camera`)
 """
 import argparse
-import json
 import time
 from pathlib import Path
 
@@ -53,60 +52,14 @@ from models.hands_recognition.pose import (
     synth_batch,
 )
 
-
-def _resolve_checkpoint(explicit: str | None, level: int | None, stage: int | None) -> str | None:
-    """Find the trained weights to load. An explicit --checkpoint wins; otherwise AUTO-
-    DISCOVER under this model's dist root (dist/hands_recognition/checkpoints/levelL/stageS/),
-    preferring best.npz then final.npz and the most recently trained one. So `rdmca uses
-    camera` just works after training, with no --checkpoint needed. None ⇒ nothing trained
-    yet (the caller falls back to random weights)."""
-    if explicit:
-        return explicit
-    from src.config import model_dist_root
-
-    root = model_dist_root("hands_recognition") / "checkpoints"
-    if not root.is_dir():
-        return None
-    candidates: list[Path] = []
-    for lvl_dir in sorted(root.glob("level*")):
-        if level is not None and lvl_dir.name != f"level{level}":
-            continue
-        for stage_dir in sorted(lvl_dir.glob("stage*")):
-            if stage is not None and stage_dir.name != f"stage{stage}":
-                continue
-            for fname in ("best.npz", "final.npz"):  # best (ratcheted) over final (graduated)
-                if (stage_dir / fname).exists():
-                    candidates.append(stage_dir / fname)
-                    break
-    if not candidates:
-        return None
-    return str(max(candidates, key=lambda p: p.stat().st_mtime))
-
-
 _DEFAULT_HIDDEN = 256  # build_pose_net's default width (used when nothing was trained)
-
-
-def _hidden_for_checkpoint(checkpoint: str | None) -> int:
-    """The hidden width the checkpoint was trained at, read from its sibling audit.json
-    (model.d_model). The net MUST be built at this width or the weights are shape-mismatched
-    and silently stay random — which is exactly the "trained but acts untrained" trap. Falls
-    back to the build default when there's no checkpoint or audit."""
-    if not checkpoint:
-        return _DEFAULT_HIDDEN
-    audit = Path(checkpoint).parent / "audit.json"
-    if audit.exists():
-        try:
-            d_model = json.loads(audit.read_text()).get("model", {}).get("d_model")
-        except (OSError, ValueError):
-            d_model = None
-        if isinstance(d_model, int) and d_model > 0:
-            return d_model
-    return _DEFAULT_HIDDEN
 
 
 def _load_net(checkpoint: str | None, hidden: int = _DEFAULT_HIDDEN):
     """Build the net AT THE CHECKPOINT'S WIDTH and load its weights; else random (a plumbing
-    demo). `hidden` must match how the checkpoint was trained (see _hidden_for_checkpoint)."""
+    demo). `hidden` MUST match how the checkpoint was trained, or the weights are shape-
+    mismatched and silently stay random — the "trained but acts untrained" trap. The caller
+    gets `hidden` from the framework's `trained_arch` (the checkpoint's audit.json)."""
     net = build_pose_net(hidden)
     if checkpoint and Path(checkpoint).exists():
         backend.current().engine.load_weights(net, checkpoint)
@@ -202,7 +155,12 @@ def run_camera(net, camera_index: int, target_fps: int = 30) -> int:
             fps = 0.9 * fps + 0.1 * (1.0 / dt)
         _draw_hud(cv2, frame, fps, target_fps)
         cv2.imshow("hands_recognition — hand skeleton (press q)", frame)
-        if cv2.waitKey(frame_budget_ms) & 0xFF == ord("q"):
+        # Pace to the target by waiting only the time LEFT in the frame budget — never the
+        # full budget on top of the capture+infer+draw work (that double-counts and roughly
+        # halved the rate, e.g. 30→15). waitKey also pumps the GUI loop and catches 'q'.
+        spent_ms = (time.perf_counter() - now) * 1000.0
+        wait_ms = max(1, int(frame_budget_ms - spent_ms))
+        if cv2.waitKey(wait_ms) & 0xFF == ord("q"):
             break
     cap.release()
     cv2.destroyAllWindows()
@@ -226,8 +184,22 @@ def main() -> int:
     args = ap.parse_args()
 
     print("Loading hand-pose model…")
-    checkpoint = _resolve_checkpoint(args.checkpoint, args.level, args.stage)
-    net = _load_net(checkpoint, _hidden_for_checkpoint(checkpoint))
+    # Standard framework resolution: an explicit --checkpoint wins, else auto-discover this
+    # model's best/final checkpoint. trained_arch recovers the width it was trained at so the
+    # net is rebuilt to match (no silent shape-mismatch → random).
+    from src.training.checkpoint import discover_checkpoint, trained_arch
+
+    checkpoint = args.checkpoint
+    if not checkpoint:
+        checkpoint, label, _meta = discover_checkpoint("hands_recognition", args.level, args.stage)
+        if checkpoint:
+            print(f"  Auto-discovered checkpoint [{label}]")
+    hidden = (
+        int(trained_arch(checkpoint).get("d_model", _DEFAULT_HIDDEN))
+        if checkpoint
+        else _DEFAULT_HIDDEN
+    )
+    net = _load_net(str(checkpoint) if checkpoint else None, hidden)
     if args.selftest:
         return selftest(net)
     return run_camera(net, args.camera_index, target_fps=args.fps)
