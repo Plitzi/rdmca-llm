@@ -80,7 +80,7 @@ def test_train_val_split_is_disjoint_and_reproducible(fake_freihand):
     tr = FreiHandLoader(fake_freihand, batch_size=2, split="train")
     va = FreiHandLoader(fake_freihand, batch_size=2, split="val")
     assert set(tr._indices).isdisjoint(set(va._indices))
-    assert len(va._indices) >= 1 and tr.epoch_tokens == len(tr._indices)
+    assert len(va._indices) >= 1 and tr.epoch_tokens == len(tr._indices) * tr.img_size
     assert set(va._indices) == set(
         FreiHandLoader(fake_freihand, batch_size=2, split="val")._indices
     )
