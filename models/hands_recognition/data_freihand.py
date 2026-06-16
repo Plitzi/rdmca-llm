@@ -282,12 +282,16 @@ class FreiHandLoader:
         return kpts, z, (1 if mirror else 0), finger, float(kpts[:, 0].mean())
 
     def _n_present(self) -> int:
-        """How many hands to composite this sample. Favors 1–n_hands, with a small chance of 0
-        (an empty scene → teaches presence=0). Without localization, always a single hand."""
+        """How many hands to composite this sample. A substantial share of EMPTY scenes
+        (no hand) so the presence head learns to say "absent" — otherwise, with a hand in
+        almost every frame, slot 0 collapses to always-present and the overlay never clears
+        when you take your hands out. Without localization, always a single hand."""
         if not self.localize:
             return 1
         if self.n_hands == 2:
-            return int(self._rng.choice([0, 1, 2], p=[0.05, 0.35, 0.60]))
+            return int(self._rng.choice([0, 1, 2], p=[0.25, 0.35, 0.40]))
+        if self._rng.random() < 0.25:  # empty scene
+            return 0
         return int(self._rng.integers(1, self.n_hands + 1))
 
     def _compose_sample(self):

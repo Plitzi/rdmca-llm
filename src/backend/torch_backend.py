@@ -80,6 +80,7 @@ _ops = SimpleNamespace(
     cos=torch.cos,
     sin=torch.sin,
     sqrt=torch.sqrt,
+    log=torch.log,
     sigmoid=torch.sigmoid,
     mean=_mean,
     sum=_sum,

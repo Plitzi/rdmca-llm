@@ -102,6 +102,7 @@ _ops = SimpleNamespace(
     cos=mx.cos,
     sin=mx.sin,
     sqrt=mx.sqrt,
+    log=mx.log,
     sigmoid=mx.sigmoid,
     mean=lambda x, axis=None, keepdims=False: mx.mean(x, axis=axis, keepdims=keepdims),
     sum=lambda x, axis=None, keepdims=False: mx.sum(x, axis=axis, keepdims=keepdims),

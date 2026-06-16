@@ -1,0 +1,24 @@
+# hands_recognition · level 2 — HIGH-RES tier. Same task + data as levels 0/1, a LARGER FCN
+# (256px input, heatmap 64) so the hand skeleton overlays the real hand more precisely — the
+# finer heatmap grid sharpens soft-argmax localization. FreiHAND is 224px native, so 256 keeps
+# real detail. Heavier per step → smaller batch + a bigger token budget to keep the step count.
+# Inherits everything else from _base.yaml.
+level: 2
+tier: vision-edge              # shared training cadence + resource block (src/levels.py)
+
+information:
+  summary: "Pose de mano 3D real (FreiHAND), localizada — FCN alta resolución (256px, solape preciso)."
+  areas:
+    1: "Visión: 21 keypoints 3D de una mano real, en cualquier posición/escala (alta resolución)."
+
+model:
+  img_size: 256                # 2× level 1 → more hand detail + a finer heatmap grid
+  heatmap_size: 64             # = img_size // 4 (finer soft-argmax → tighter overlap)
+  d_model: 160                 # wider conv stack than level 1 (128) for the extra detail
+
+training:
+  batch_size: 16               # halve the batch (256px activations are ~4× level 1's memory)
+
+curriculum:
+  stage1:
+    n_tokens: 30_000_000       # scaled up with img_size to keep a comparable #optimizer steps

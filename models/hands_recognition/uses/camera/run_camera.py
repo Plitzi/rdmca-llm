@@ -123,7 +123,10 @@ def _zero_input(net) -> np.ndarray:
 def _preprocess(net, frame_bgr: np.ndarray, cv2) -> np.ndarray:
     """A BGR webcam frame → the net's input, matching how it was TRAINED. Heatmap FCN: the
     FULL frame resized to img_size, RGB (or gray) in [0,1] as [C,H,W] — the net localizes the
-    hand within it. MLP: grayscale IMG_SIZE flattened [_IN]."""
+    hand within it. MLP: grayscale IMG_SIZE flattened [_IN]. NOTE: resizing is coordinate-
+    PRESERVING — a landmark at normalized (x,y) stays at (x,y) after the resize, so mapping the
+    model's [0,1] output back with (x·w, y·h) lands on the right pixel REGARDLESS of the capture
+    aspect ratio (no letterbox needed; the only inaccuracy is the model's own keypoint error)."""
     cfg = net.cfg
     if getattr(cfg, "arch", None) == "heatmap":
         if cfg.in_channels == 1:
@@ -150,16 +153,21 @@ def _predict(net, model_input: np.ndarray, presence_thresh: float = 0.5) -> list
     if getattr(net.cfg, "arch", None) != "heatmap":
         out = net(ops.array(x))
         backend.current().engine.eval(out)
-        return [{"pts": np.array(ops.to_numpy(out)).reshape(N_KEYPOINTS, 2), "z": None, "slot": 0}]
+        return [
+            {"pts": np.array(ops.to_numpy(out)).reshape(N_KEYPOINTS, 2), "z": None, "slot": 0,
+             "conf": 1.0}
+        ]  # fmt: skip
 
     kpts, z, presence = predict_hands(net, x)  # [1,nh,21,2], [1,nh,21], [1,nh]
     state = getattr(net, "state_head", None)
     gesture = getattr(net, "gesture_head", None)
     hands = []
     for s in range(net.cfg.n_hands):
-        if presence[0, s] <= presence_thresh:
+        if (
+            presence[0, s] <= presence_thresh
+        ):  # below confidence → not a hand, skip (overlay clears)
             continue
-        hand = {"pts": kpts[0, s], "z": z[0, s], "slot": s}
+        hand = {"pts": kpts[0, s], "z": z[0, s], "slot": s, "conf": float(presence[0, s])}
         feat = (
             np.concatenate([kpts[0, s], z[0, s][:, None]], axis=-1)
             .reshape(1, -1)
@@ -185,8 +193,9 @@ def _depth_color(z_i: float) -> tuple[int, int, int]:
 
 def _draw_skeleton(cv2, frame, pts: np.ndarray, z: np.ndarray | None = None) -> None:
     """Overlay the articulated hand: a line per bone/phalanx (HAND_CONNECTIONS) and a dot per
-    joint, so the 21 landmarks read as a hand skeleton. When depth `z` is available the joints
-    are coloured + sized by it (near=red/large, far=blue/small) — a simple 3D cue."""
+    joint, so the 21 landmarks read as a hand skeleton. `pts` are normalized [0,1] coords scaled
+    to the frame (resize is coordinate-preserving, so this lands on the hand at any aspect). When
+    depth `z` is available the joints are coloured + sized by it (near=red/large, far=blue)."""
     h, w = frame.shape[:2]
     px = [(int(x * w), int(y * h)) for x, y in pts]
     for a, b in HAND_CONNECTIONS:
@@ -200,17 +209,16 @@ def _draw_skeleton(cv2, frame, pts: np.ndarray, z: np.ndarray | None = None) -> 
 
 
 def _draw_hand_label(cv2, frame, hand: dict) -> None:
-    """Label a detected hand near its wrist: handedness (L/R) + extended-finger count (stage 2),
-    and the recognized gesture name (stage 3) — each shown only when its head provided it."""
-    parts = []
+    """Label a detected hand near its wrist: the tracking confidence (the presence probability —
+    how sure the model is this is a hand), then handedness (L/R) + extended-finger count
+    (stage 2) and the recognized gesture (stage 3) when their heads provided them."""
+    parts = [f"{round(hand['conf'] * 100)}%"]  # confidence it's a hand
     if "handed" in hand:
         parts.append(f"{'L' if hand['handed'] == 1 else 'R'} {int(hand['fingers'].sum())}f")
     if "gesture" in hand:
         from models.hands_recognition.data_gestures import GESTURES
 
         parts.append(GESTURES[hand["gesture"]] if hand["gesture"] < len(GESTURES) else "?")
-    if not parts:
-        return
     h, w = frame.shape[:2]
     wx, wy = int(hand["pts"][0][0] * w), int(hand["pts"][0][1] * h)
     cv2.putText(
@@ -282,7 +290,11 @@ def _draw_hud(cv2, frame, fps: float, target_fps: int, cap_wh: tuple[int, int]) 
 
 
 def run_camera(
-    net, camera_index: int, target_fps: int = 30, resolution: tuple[int, int] = (1280, 720)
+    net,
+    camera_index: int,
+    target_fps: int = 30,
+    resolution: tuple[int, int] = (1280, 720),
+    min_confidence: float = 0.5,
 ) -> int:
     try:
         import cv2
@@ -311,7 +323,7 @@ def run_camera(
         int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or resolution[0]),
         int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or resolution[1]),
     )
-    _predict(net, _zero_input(net))  # warm up the backend (cold compile) before the loop
+    _predict(net, _zero_input(net), min_confidence)  # warm up the backend (cold compile)
     frame_budget_ms = max(1, int(1000 / target_fps))  # pace the loop to the target
     print(
         f"  Camera open — {cap_wh[0]}x{cap_wh[1]} — target {target_fps} FPS — "
@@ -323,10 +335,10 @@ def run_camera(
         ok, frame = cap.read()
         if not ok:
             break
-        hands = _predict(net, _preprocess(net, frame, cv2))  # preprocess matches training
+        hands = _predict(net, _preprocess(net, frame, cv2), min_confidence)  # gated by confidence
         for hand in hands:  # draw every detected hand (up to n_hands)
             _draw_skeleton(cv2, frame, hand["pts"], hand["z"])
-            _draw_hand_label(cv2, frame, hand)  # L/R + extended-finger count (stage 2)
+            _draw_hand_label(cv2, frame, hand)  # confidence% + L/R + fingers + gesture
         # Measured FPS from the real frame interval, exponentially smoothed.
         now = time.perf_counter()
         dt = now - last
@@ -365,6 +377,13 @@ def main() -> int:
         "resizes internally, so higher res doesn't slow inference.",
     )
     ap.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.5,
+        help="Min presence probability to draw a hand (0-1). Raise it if the skeleton appears "
+        "on an empty scene; lower it if real hands are missed. Default 0.5.",
+    )
+    ap.add_argument(
         "--selftest", action="store_true", help="Headless synthetic-frame check (no camera)"
     )
     args = ap.parse_args()
@@ -390,7 +409,11 @@ def main() -> int:
     if args.selftest:
         return selftest(net)
     return run_camera(
-        net, args.camera_index, target_fps=args.fps, resolution=_parse_resolution(args.resolution)
+        net,
+        args.camera_index,
+        target_fps=args.fps,
+        resolution=_parse_resolution(args.resolution),
+        min_confidence=args.min_confidence,
     )
 
 

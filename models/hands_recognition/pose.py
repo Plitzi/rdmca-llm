@@ -402,8 +402,9 @@ def build_spec(cfg: dict):
 
     mcfg = cfg.get("model", {}) or {}
     is_heatmap = mcfg.get("arch") == "heatmap"
-    depth_weight = float(mcfg.get("depth_weight", 0.1))  # balances depth MSE vs heatmap MSE
-    presence_weight = float(mcfg.get("presence_weight", 0.5))  # per-slot presence BCE weight
+    depth_weight = float(mcfg.get("depth_weight", 0.1))
+    presence_weight = float(mcfg.get("presence_weight", 0.5))
+    kp_weight = float(mcfg.get("kp_weight", 0.5))  # keypoint MSE (differentiable soft-argmax)
 
     def _make_real_loader(cfg: dict, split: str):
         from models.hands_recognition.data_freihand import FreiHandLoader
@@ -501,11 +502,52 @@ def build_spec(cfg: dict):
             return _make_gesture_loader(cfg, "train")
         return _make_real_loader(cfg, "train")  # stages 1-2 train on FreiHAND
 
+    def _soft_argmax_kpts(heatmaps):
+        """Differentiable soft-argmax: [N, n_hands·21, h, w] → [N, n_hands, 21, 2] in [0,1]."""
+        n, c, h, w = heatmaps.shape
+        nh = c // N_KEYPOINTS
+        flat = heatmaps.reshape(n, nh, N_KEYPOINTS, h * w)
+        p = ops.softmax(flat, axis=-1)  # numerically stable spatial softmax
+        p = p.reshape(n, nh, N_KEYPOINTS, h, w)
+        xs = ops.arange(w, dtype=ops.float32) / max(w - 1, 1)
+        ys = ops.arange(h, dtype=ops.float32) / max(h - 1, 1)
+        p_x = ops.sum(p, axis=3)  # [N, nh, 21, w]  marginalise over rows
+        ex = ops.sum(p_x * xs, axis=-1)  # [N, nh, 21]
+        p_y = ops.sum(p, axis=4)  # [N, nh, 21, h]  marginalise over cols
+        ey = ops.sum(p_y * ys, axis=-1)  # [N, nh, 21]
+        return ops.concatenate([ex[..., None], ey[..., None]], axis=-1)  # [N, nh, 21, 2]
+
+    def _heatmap_ce(pred_hm, heatmaps_t):
+        """Spatial softmax cross-entropy per keypoint heatmap → per-slot mean CE [N, nh]. Each
+        predicted heatmap becomes a spatial softmax (a distribution over the hs×hs grid); the
+        target is the GT Gaussian NORMALISED to a distribution. This is the localisation driver:
+        MSE against the mostly-zero Gaussian is minimised by a FLAT (≈0) map — whose soft-argmax
+        is the frame CENTRE — so the peak never forms; CE on a flat map is HIGH, forcing the
+        heatmap to concentrate at the hand."""
+        n, c, h, w = pred_hm.shape
+        nh = c // N_KEYPOINTS
+        logits = pred_hm.reshape(n, nh, N_KEYPOINTS, h * w)
+        logp = ops.log(ops.softmax(logits, axis=-1) + 1e-9)
+        tgt = ops.array(heatmaps_t).reshape(n, nh, N_KEYPOINTS, h * w)
+        tgt = tgt / (ops.sum(tgt, axis=-1, keepdims=True) + 1e-9)  # → distribution per keypoint
+        return ops.mean(-ops.sum(tgt * logp, axis=-1), axis=-1)  # [N, nh]
+
     def _objective_detector(model, batch):
-        """Stage 1: multi-hand detector — heatmap MSE + depth MSE + per-slot presence BCE."""
-        imgs, heatmaps_t, z_t, presence_t, *_ = batch
+        """Stage 1: multi-hand detector — spatial heatmap CE (localisation) + depth MSE +
+        per-slot presence BCE + differentiable soft-argmax keypoint MSE (directly optimises the
+        gate metric). The heatmap CE (not MSE) is what makes each slot's landmarks LOCALISE the
+        hand instead of collapsing to the frame centre. Localisation terms are masked to the
+        PRESENT slots; presence BCE spans all slots (the only signal for absent ones)."""
+        imgs, heatmaps_t, z_t, presence_t, kpts_t, *_ = batch
         pred_hm, pred_z, pred_pres = model(ops.array(imgs))
-        loss = _mse(pred_hm, ops.array(heatmaps_t)) + depth_weight * _mse(pred_z, ops.array(z_t))
+        mask_f32 = ops.astype(ops.array(presence_t > 0.5), ops.float32)  # [N, nh]
+        denom = ops.sum(mask_f32) + 1e-9
+        hm_loss = ops.sum(_heatmap_ce(pred_hm, heatmaps_t) * mask_f32) / denom
+        # Sub-pixel refinement: differentiable soft-argmax keypoint MSE (the gate metric).
+        diff = _soft_argmax_kpts(pred_hm) - ops.array(kpts_t)
+        per_slot = ops.mean(ops.sqrt(ops.mean(diff * diff, axis=-1) + 1e-9), axis=-1)  # [N, nh]
+        kp_loss = ops.sum(per_slot * mask_f32) / denom
+        loss = hm_loss + kp_weight * kp_loss + depth_weight * _mse(pred_z, ops.array(z_t))
         return loss + presence_weight * ops.bce_with_logits(pred_pres, ops.array(presence_t))
 
     def _objective_handstate(model, batch):

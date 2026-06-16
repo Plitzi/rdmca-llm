@@ -1,0 +1,23 @@
+# hands_recognition · level 3 — MAX-RES tier. The largest FCN (384px input, heatmap 96) for
+# the tightest skeleton overlap. Past FreiHAND's 224px native there is no NEW image detail, but
+# the finer heatmap grid keeps sharpening soft-argmax localization. Heaviest per step → the
+# smallest batch + the largest token budget. Inherits everything else from _base.yaml.
+level: 3
+tier: vision-edge              # shared training cadence + resource block (src/levels.py)
+
+information:
+  summary: "Pose de mano 3D real (FreiHAND), localizada — FCN máxima resolución (384px, solape muy preciso)."
+  areas:
+    1: "Visión: 21 keypoints 3D de una mano real, en cualquier posición/escala (máxima resolución)."
+
+model:
+  img_size: 384                # 3× level 1 → the finest heatmap grid
+  heatmap_size: 96             # = img_size // 4
+  d_model: 192                 # widest conv stack of the ladder
+
+training:
+  batch_size: 8                # 384px activations are ~9× level 1's memory → small batch
+
+curriculum:
+  stage1:
+    n_tokens: 40_000_000       # scaled up with img_size to keep a comparable #optimizer steps

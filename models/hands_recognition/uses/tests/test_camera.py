@@ -234,13 +234,14 @@ def test_predict_heatmap_with_state_head_reports_handedness_and_fingers():
         assert hand["handed"] in (0, 1) and hand["fingers"].shape == (5,)
 
 
-def test_draw_hand_label_uses_handedness():
+def test_draw_hand_label_shows_confidence_and_handedness():
     fake = _FakeCv2()
     frame = np.zeros((48, 64, 3), dtype=np.uint8)
-    hand = {"pts": np.full((RC.N_KEYPOINTS, 2), 0.5, np.float32), "handed": 1,
+    hand = {"pts": np.full((RC.N_KEYPOINTS, 2), 0.5, np.float32), "conf": 0.92, "handed": 1,
             "fingers": np.array([1, 1, 0, 0, 1])}  # fmt: skip
     RC._draw_hand_label(fake, frame, hand)
-    assert any("L" in t and "3f" in t for t in fake.hud_texts)  # left hand, 3 fingers extended
+    # confidence% it's a hand, then left hand with 3 fingers extended
+    assert any("92%" in t and "L" in t and "3f" in t for t in fake.hud_texts)
 
 
 def test_selftest_heatmap_path(capsys):

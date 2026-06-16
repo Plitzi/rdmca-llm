@@ -172,6 +172,41 @@ def test_spec_selects_heatmap_and_real_loader(fake_freihand):
     assert np.isfinite(score)
 
 
+def test_detector_objective_escapes_center_collapse(fake_freihand):
+    # Regression: heatmap MSE alone is minimised by a FLAT (≈0) map whose soft-argmax sits at
+    # the frame CENTRE (0.5, 0.5) — the model then "predicts" the centre for every hand and the
+    # camera overlay never tracks. The detector objective (spatial heatmap CE + soft-argmax
+    # keypoint MSE) must LOCALISE: overfitting a fixed batch drives predicted keypoints toward
+    # the (off-centre) ground truth, well below the always-centre baseline.
+    engine = backend.current().engine
+    cfg = {
+        "model": {"arch": "heatmap", "img_size": 64, "in_channels": 3, "d_model": 32,
+                  "heatmap_size": 16},
+        "dataset": {"root": fake_freihand, "localize": True},
+        "training": {"batch_size": 6, "seed": 0, "weight_decay": 0.0},
+    }  # fmt: skip
+    spec = build_spec(cfg)
+    net, _mcfg, _adapter, _prec, _seed = spec.build_model(1, cfg, None)
+    batch = spec.build_loader(1, cfg).next_batch()  # FIXED batch — overfit it
+    _imgs, _hm, _z, presence_t, kpts_t, *_ = batch
+    mask = presence_t.astype(bool)
+    assert mask.any()  # at least one present slot to localise
+
+    loss_and_grad = engine.value_and_grad(net, spec.objective)
+    optimizer = engine.make_optimizer(net, lr=5e-3, weight_decay=0.0)
+    for _ in range(80):
+        _loss, grads = loss_and_grad(net, batch)
+        engine.optimizer_step(optimizer, net, grads)
+    engine.set_eval(net)
+
+    pred_kpts, _z, _p = predict_hands(net, _imgs)  # [N, nh, 21, 2]
+    err_gt = float(np.abs(pred_kpts[mask] - kpts_t[mask]).mean())
+    err_center = float(np.abs(0.5 - kpts_t[mask]).mean())  # always-centre baseline
+    # Collapse predicts the centre → err_gt ≈ err_center; localising drops it clearly below.
+    # (The CI fixture images are pure noise, so this guards against collapse, not pose accuracy.)
+    assert err_gt < 0.8 * err_center
+
+
 def test_spec_defaults_to_synthetic_without_arch():
     cfg = {"model": {}, "training": {"batch_size": 4, "seed": 0}}
     spec = build_spec(cfg)

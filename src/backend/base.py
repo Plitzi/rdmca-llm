@@ -64,6 +64,7 @@ OPS_SURFACE = (
     "cos",
     "sin",
     "sqrt",
+    "log",
     "mean",
     "sum",
     "concatenate",
