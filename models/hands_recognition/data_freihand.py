@@ -165,7 +165,7 @@ class FreiHandLoader:
         heatmap_size: int = 32,
         localize: bool = True,
         sigma: float = 1.5,
-        localize_scale: tuple[float, float] = (0.35, 0.6),
+        localize_scale: tuple[float, float] = (0.2, 0.85),
         n_hands: int = 2,
     ):
         self.root = Path(root)
